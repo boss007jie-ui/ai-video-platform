@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import re
 from typing import Any
 
 from .errors import PlanningError, PlanningErrorCode
@@ -108,12 +109,31 @@ class VideoPlanningInterface:
         master_digest = master.pop("master_digest", None)
         if not isinstance(master_digest, str) or content_digest(master) != master_digest:
             raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "StoryboardMaster digest mismatch")
-        if candidate["asset_mapping"] != master.get("asset_mapping") or candidate["motion_plan"] != master.get("motion_plan"):
+        if master.get("planning_provider_submission_performed") is not False:
+            raise PlanningError(
+                PlanningErrorCode.PROVIDER_SUBMISSION_FORBIDDEN,
+                "Nested Planning artifact cannot record Provider submission",
+            )
+        expected_package_id = "vep-" + content_digest(candidate["source"]).removeprefix("sha256:")[:20]
+        if candidate["package_id"] != expected_package_id:
+            raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "VideoExecutionPackage identifier does not match its source")
+        if candidate["task_id"] != master.get("task_id") or candidate["source"] != master.get("source"):
+            raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "Execution package source disagrees with StoryboardMaster")
+        if (
+            candidate["asset_mapping"] != master.get("asset_mapping")
+            or candidate["visual_anchors"] != master.get("visual_anchors")
+            or candidate["motion_plan"] != master.get("motion_plan")
+        ):
             raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "Execution package disagrees with StoryboardMaster")
         supplied = candidate.pop("package_digest")
         if not isinstance(supplied, str) or content_digest(candidate) != supplied:
             raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "VideoExecutionPackage digest mismatch")
-        return {"status": "valid", "package_digest": supplied}
+        return {
+            "status": "valid",
+            "schema_version": SCHEMA_VERSION,
+            "contract_status": CONTRACT_STATUS,
+            "package_digest": supplied,
+        }
 
     def _validate_request(self, request: Mapping[str, object]) -> dict[str, Any]:
         value = _mapping(request, "request")
@@ -168,8 +188,8 @@ class VideoPlanningInterface:
             shot_ids.add(shot_id)
             sequences.add(sequence)
             roles = _list(shot.get("required_asset_roles"), f"storyboard.shots[{index}].required_asset_roles")
-            if any(not isinstance(role, str) or not role for role in roles) or len(set(roles)) != len(roles):
-                raise PlanningError(PlanningErrorCode.INVALID_INPUT, "required_asset_roles must contain unique strings")
+            if not roles or any(not isinstance(role, str) or not role for role in roles) or len(set(roles)) != len(roles):
+                raise PlanningError(PlanningErrorCode.INVALID_INPUT, "required_asset_roles must contain one or more unique strings")
             group = _nonempty_string(shot, "continuity_group", f"storyboard.shots[{index}]")
             anchor = _mapping(shot.get("visual_anchor"), f"storyboard.shots[{index}].visual_anchor")
             motion = _mapping(shot.get("motion"), f"storyboard.shots[{index}].motion")
@@ -203,7 +223,7 @@ class VideoPlanningInterface:
                     raise PlanningError(PlanningErrorCode.ASSET_NOT_APPROVED, "Mapped asset is not approved")
                 uri = _nonempty_string(asset, "uri", "asset_manifest.assets")
                 sha256 = _nonempty_string(asset, "sha256", "asset_manifest.assets")
-                if not sha256.startswith("sha256:") or len(sha256) != 71:
+                if re.fullmatch(r"sha256:[0-9a-f]{64}", sha256) is None:
                     raise PlanningError(PlanningErrorCode.INVALID_INPUT, "Mapped asset sha256 is invalid")
                 mapping.append({"shot_id": shot["shot_id"], "role": role, "asset_id": asset_id, "uri": uri, "sha256": sha256})
         anchors = [

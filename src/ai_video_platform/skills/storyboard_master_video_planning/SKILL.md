@@ -29,6 +29,8 @@ Inputs are JSON-compatible mappings. Revisions and source digests are locked int
 each output. Same logical input produces the same canonical digest regardless of
 mapping key order. Outputs are isolated snapshots; no caller object is retained.
 The interface reads only supplied task data and returns in-memory planning output.
+The CLI additionally reads exactly the explicitly named local JSON file (or stdin)
+and writes only its JSON response to stdout.
 
 Stable errors cover invalid input, stale versions, missing/unapproved/ambiguous
 assets, continuity conflict, invalid shot ordering, malformed/tampered packages,
@@ -37,6 +39,11 @@ non-retryable until inputs change. Successful calls are naturally idempotent.
 
 There is no fake Provider success mode because Provider work is outside Planning;
 the execution package records `planning_provider_submission_performed: false`.
+
+Hermes example: call `build-video-plan` with an existing Storyboard revision and
+approved AssetManifest revision, retain the returned package digest, and route the
+draft package reference to Video Generation only after the Business Artifact
+Registry gate. Hermes must treat exit `2` as a blocked task, not fill missing data.
 
 ## Tests, release, and rollback
 

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import redirect_stdout
+import hashlib
+from io import StringIO
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -15,7 +19,7 @@ from ai_video_platform.skills.storyboard_master_video_planning import (
     PlanningErrorCode,
     VideoPlanningInterface,
 )
-from ai_video_platform.skills.storyboard_master_video_planning.cli import run_cli
+from ai_video_platform.skills.storyboard_master_video_planning.cli import main, run_cli
 from tests.skills.storyboard_master_video_planning.test_video_planning_interface import planning_request
 
 
@@ -81,6 +85,41 @@ class VideoPlanningFailureTests(unittest.TestCase):
             self.interface.validate_video_plan(package)
         self.assertEqual(captured.exception.code, PlanningErrorCode.PROVIDER_SUBMISSION_FORBIDDEN)
 
+    @staticmethod
+    def recompute_digest(value: dict[str, object], digest_field: str) -> None:
+        body = {key: item for key, item in value.items() if key != digest_field}
+        encoded = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        value[digest_field] = "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    def test_recomputed_digest_cannot_hide_internal_package_contradictions(self) -> None:
+        mutations = (
+            lambda package: package["source"].__setitem__("storyboard_id", "other-storyboard"),
+            lambda package: package.__setitem__("package_id", "vep-forged"),
+            lambda package: package["visual_anchors"][0]["anchor"].__setitem__("product_angle", "rear"),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                package = self.interface.build_video_plan(planning_request())
+                mutate(package)
+                self.recompute_digest(package, "package_digest")
+                with self.assertRaises(PlanningError) as captured:
+                    self.interface.validate_video_plan(package)
+                self.assertEqual(captured.exception.code, PlanningErrorCode.PACKAGE_TAMPERED)
+
+    def test_nested_provider_marker_is_rejected_even_with_recomputed_digests(self) -> None:
+        package = self.interface.build_video_plan(planning_request())
+        package["storyboard_master"]["planning_provider_submission_performed"] = True
+        self.recompute_digest(package["storyboard_master"], "master_digest")
+        self.recompute_digest(package, "package_digest")
+        with self.assertRaises(PlanningError) as captured:
+            self.interface.validate_video_plan(package)
+        self.assertEqual(captured.exception.code, PlanningErrorCode.PROVIDER_SUBMISSION_FORBIDDEN)
+
+    def test_shot_without_required_assets_is_rejected_before_build(self) -> None:
+        request = planning_request()
+        request["storyboard"]["shots"][0]["required_asset_roles"] = []
+        self.assert_code(request, PlanningErrorCode.INVALID_INPUT)
+
     def test_cli_returns_stable_error(self) -> None:
         request = planning_request()
         request["asset_manifest"]["assets"] = []
@@ -88,6 +127,15 @@ class VideoPlanningFailureTests(unittest.TestCase):
         self.assertEqual(result["exit_code"], 2)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "ASSET_MAPPING_MISSING")
+
+    def test_module_cli_argument_error_is_machine_readable(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = main([])
+        result = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "INVALID_INPUT")
 
 
 if __name__ == "__main__":

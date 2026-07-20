@@ -95,7 +95,10 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
 
         result = interface.validate_video_plan(package)
 
-        self.assertEqual(result, {"status": "valid", "package_digest": package["package_digest"]})
+        self.assertEqual(result["status"], "valid")
+        self.assertEqual(result["package_digest"], package["package_digest"])
+        self.assertEqual(result["schema_version"], "0.1.0")
+        self.assertEqual(result["contract_status"], "DRAFT_UNREGISTERED")
 
     def test_cli_returns_machine_readable_success(self) -> None:
         result = run_cli("build-video-plan", planning_request())

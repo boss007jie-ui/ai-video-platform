@@ -8,9 +8,15 @@ from pathlib import Path
 import sys
 from typing import Mapping, Sequence
 
-from .errors import PlanningError
+from .errors import PlanningError, PlanningErrorCode
 from .interface import VideoPlanningInterface
 from .models import canonical_json
+
+
+class _JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        del message
+        raise PlanningError(PlanningErrorCode.INVALID_INPUT, "Invalid CLI arguments", field_paths=("arguments",))
 
 
 def run_cli(command: str, document: Mapping[str, object]) -> dict[str, object]:
@@ -29,16 +35,18 @@ def run_cli(command: str, document: Mapping[str, object]) -> dict[str, object]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="storyboard-master-video-planning")
+    parser = _JsonArgumentParser(prog="storyboard-master-video-planning")
     parser.add_argument("command", choices=("compose-storyboard-master", "build-video-plan", "validate-video-plan"))
     parser.add_argument("input", help="UTF-8 JSON request file or '-' for stdin")
-    args = parser.parse_args(argv)
     try:
+        args = parser.parse_args(argv)
         raw = sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
         document = json.loads(raw)
         if not isinstance(document, dict):
             raise ValueError
         result = run_cli(args.command, document)
+    except PlanningError as error:
+        result = {"ok": False, "exit_code": 2, "error": error.to_dict()}
     except (OSError, ValueError, json.JSONDecodeError):
         result = {"ok": False, "exit_code": 2, "error": {"code": "INVALID_INPUT", "category": "validation", "retryable": False, "message": "Input must be a readable UTF-8 JSON object", "field_paths": ["input"], "details": {}}}
     print(canonical_json(result))
