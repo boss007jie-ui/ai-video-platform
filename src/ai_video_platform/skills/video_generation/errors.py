@@ -20,6 +20,15 @@ class GenerationErrorCode(str, Enum):
     PROVIDER_BINDING_INVALID = "PROVIDER_BINDING_INVALID"
     CREDENTIAL_REFERENCE_INVALID = "CREDENTIAL_REFERENCE_INVALID"
     IDEMPOTENCY_KEY_REQUIRED = "IDEMPOTENCY_KEY_REQUIRED"
+    IDEMPOTENCY_MISMATCH = "IDEMPOTENCY_MISMATCH"
+    CONCURRENCY_LIMIT = "CONCURRENCY_LIMIT"
+    REQUEST_LIMIT = "REQUEST_LIMIT"
+    PROVIDER_REJECTED = "PROVIDER_REJECTED"
+    NETWORK_BLOCKED = "NETWORK_BLOCKED"
+    PROVIDER_RETRY_EXHAUSTED = "PROVIDER_RETRY_EXHAUSTED"
+    JOB_NOT_FOUND = "JOB_NOT_FOUND"
+    INVALID_TRANSITION = "INVALID_TRANSITION"
+    DOWNLOAD_INTEGRITY_FAILED = "DOWNLOAD_INTEGRITY_FAILED"
 
 
 _SENSITIVE_KEY = re.compile(r"(?i)(authorization|credential|api[_-]?key|token|secret|password|private[_-]?key|traceback|stack)")
@@ -67,10 +76,10 @@ class GenerationError(ValueError):
         details: Mapping[str, Any] | None = None,
         retryable: bool = False,
     ) -> None:
-        super().__init__(message)
         self.code = code
         safe_message = _sanitize(message)
         self.message = safe_message if isinstance(safe_message, str) else "Rejected unsafe input"
+        super().__init__(self.message)
         self.field_paths = tuple(str(_sanitize(path)) for path in field_paths)
         self.details = _sanitize(details or {})
         self.retryable = retryable

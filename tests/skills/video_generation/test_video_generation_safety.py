@@ -72,6 +72,9 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         request = generation_request()
         request["provider_binding"].pop("credential_ref")
         self.assert_code(request, GenerationErrorCode.CREDENTIAL_REFERENCE_INVALID)
+        request = generation_request()
+        request["provider_binding"]["api_key"] = "Bearer " + "synthetic" + "F" * 24
+        self.assert_code(request, GenerationErrorCode.PROVIDER_BINDING_INVALID)
 
     def test_package_version_digest_and_provider_marker_fail_closed(self) -> None:
         request = generation_request()
@@ -129,6 +132,15 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
         self.assert_code(request, GenerationErrorCode.PACKAGE_TAMPERED)
 
+        request = generation_request()
+        package = request["execution_package"]
+        master = package["storyboard_master"]
+        master["shots"][0]["motion"] = {"kind": "different-shot-motion"}
+        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
+        self.assert_code(request, GenerationErrorCode.PACKAGE_INVALID)
+
     def test_sensitive_output_configuration_is_rejected_without_echo(self) -> None:
         raw_value = "sk" + "-" + "synthetic" + "C" * 24
         request = generation_request()
@@ -151,6 +163,8 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         bearer = "Bearer " + "synthetic" + "E" * 24
         error = GenerationError(GenerationErrorCode.PACKAGE_INVALID, bearer, field_paths=(bearer,))
         self.assertNotIn(bearer, str(error.to_dict()))
+        self.assertNotIn(bearer, str(error))
+        self.assertNotIn(bearer, str(error.args))
 
     def test_missing_idempotency_key_is_rejected(self) -> None:
         request = generation_request()

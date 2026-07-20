@@ -160,6 +160,8 @@ class GenerationPreflight:
         shot_ids: set[str] = set()
         sequences: set[int] = set()
         shot_sequences: dict[str, int] = {}
+        shot_motions: dict[str, object] = {}
+        shot_anchors: dict[str, object] = {}
         continuity_groups: set[str] = set()
         for index, raw_shot in enumerate(shots):
             shot = require_mapping(raw_shot, f"shots[{index}]")
@@ -173,9 +175,13 @@ class GenerationPreflight:
                 raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Each shot requires non-empty asset roles")
             if len(set(roles)) != len(roles) or not isinstance(shot.get("visual_anchor"), Mapping) or not isinstance(shot.get("motion"), Mapping):
                 raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Shot planning fields are invalid")
+            if continuity in shot_anchors and shot_anchors[continuity] != shot["visual_anchor"]:
+                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Shots in one continuity group disagree on their visual anchor")
             shot_ids.add(shot_id)
             sequences.add(sequence)
             shot_sequences[shot_id] = sequence
+            shot_motions[shot_id] = shot["motion"]
+            shot_anchors[continuity] = shot["visual_anchor"]
             continuity_groups.add(continuity)
             required_pairs.update((shot_id, role) for role in roles)
 
@@ -199,7 +205,7 @@ class GenerationPreflight:
         for index, raw_anchor in enumerate(anchors):
             anchor = require_mapping(raw_anchor, f"visual_anchors[{index}]")
             group = require_string(anchor, "continuity_group", GenerationErrorCode.PACKAGE_INVALID)
-            if group in anchor_groups or not isinstance(anchor.get("anchor"), Mapping):
+            if group in anchor_groups or not isinstance(anchor.get("anchor"), Mapping) or anchor.get("anchor") != shot_anchors.get(group):
                 raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Visual anchor is duplicated or invalid")
             anchor_groups.add(group)
         if anchor_groups != continuity_groups:
@@ -210,7 +216,7 @@ class GenerationPreflight:
             motion = require_mapping(raw_motion, f"motion_plan[{index}]")
             shot_id = require_string(motion, "shot_id", GenerationErrorCode.PACKAGE_INVALID)
             sequence = motion.get("sequence")
-            if shot_id in motion_ids or shot_id not in shot_ids or sequence != shot_sequences.get(shot_id) or not isinstance(motion.get("motion"), Mapping):
+            if shot_id in motion_ids or shot_id not in shot_ids or sequence != shot_sequences.get(shot_id) or not isinstance(motion.get("motion"), Mapping) or motion.get("motion") != shot_motions.get(shot_id):
                 raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Motion plan is duplicated or invalid")
             motion_ids.add(shot_id)
         if motion_ids != shot_ids:
@@ -264,6 +270,7 @@ class GenerationPreflight:
 
     def _binding(self, raw: object) -> dict[str, str]:
         binding = require_mapping(raw, "provider_binding")
+        allowed = {"binding_ref", "provider_id", "model_id", "credential_ref"}
         safe = {
             field: require_string(binding, field, GenerationErrorCode.PROVIDER_BINDING_INVALID)
             for field in ("binding_ref", "provider_id", "model_id")
@@ -275,4 +282,6 @@ class GenerationPreflight:
                 "An approved opaque credential reference is required",
                 field_paths=("provider_binding.credential_ref",),
             )
+        if set(binding) != allowed or contains_sensitive_material({key: value for key, value in binding.items() if key != "credential_ref"}):
+            raise GenerationError(GenerationErrorCode.PROVIDER_BINDING_INVALID, "Provider binding contains missing, unknown, or sensitive fields")
         return safe
