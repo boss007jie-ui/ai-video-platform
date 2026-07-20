@@ -9,6 +9,13 @@ opaque Provider binding reference, deterministic request hash, and idempotency k
 It returns a safe provider summary without a credential reference and records
 `provider_execution_performed: false`.
 
+The injected Python interface also exposes `submit_video`, `poll_video`,
+`cancel_video`, `download_video`, and `recover_video`. These operations require an
+explicit adapter and ledger. The shipped Fake adapter is deterministic and
+in-memory; Rejecting and NetworkBlocked adapters fail closed. No production adapter
+or credential resolver is shipped, and every public execution result records
+`provider_network_performed: false`.
+
 Preflight order is fixed and fail-closed: validate the execution package and its
 nested master first, then ApprovalRecord, budget, Provider binding plus opaque
 credential reference, output controls, and idempotency key; only then derive the
@@ -28,14 +35,21 @@ python -m ai_video_platform.skills.video_generation.cli inspect-video-request <f
 
 The CLI reads exactly the named local JSON file or stdin and writes one JSON result
 to stdout. Exit `0` is ready; exit `2` is a fail-closed rejection. Preflight has no
-Provider or filesystem write side effect. Submit/poll/cancel/download are added only
-behind fake/rejecting/network-blocked adapters in the next offline task.
+Provider or filesystem write side effect. Submit/poll/cancel/download/recovery are
+available only through an explicitly injected fake/rejecting/network-blocked Python
+adapter plus snapshotting execution ledger; the CLI cannot silently select one.
 
 Stable errors cover package identity/version/digest, ApprovalRecord effectiveness
 and subject binding, budgets, Provider binding, opaque credential reference, and
 idempotency input. Errors recursively redact credential/token-like fields and values.
 Corrected inputs may be retried; deterministic request hashing supplies the basis
 for exact replay and mismatch handling in the execution ledger.
+
+The ledger atomically reserves request and concurrency budget, snapshots every
+read/write, and records deterministic states: `submitting`, `submitted`, `running`,
+`succeeded`, `failed`, `cancelled`, `timed_out`, and `downloaded`. Download verifies
+the in-memory artifact digest and emits only a `DRAFT_UNREGISTERED`
+AssetManifestRequest; it never writes Product Library.
 
 Hermes example: call `inspect-video-request` with package, approval, budget,
 provider-binding reference, output controls, and idempotency key. Route `ready` to
@@ -46,6 +60,7 @@ otherwise keep the task blocked. Hermes never resolves the credential reference.
 
 ```text
 python -m unittest -v tests.skills.video_generation.test_video_generation_interface
+python -m unittest -v tests.skills.video_generation.test_video_generation_adapters
 python -m unittest -v tests.skills.video_generation.test_video_generation_safety
 ```
 
