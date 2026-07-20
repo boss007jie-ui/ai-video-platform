@@ -88,6 +88,12 @@ class VideoGenerationInterfaceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["result"]["status"], "ready")
 
+    def test_constructor_reserves_injected_adapter_and_ledger_seams(self) -> None:
+        interface = VideoGenerationInterface(adapter=object(), ledger=object())
+        result = interface.inspect_video_request(generation_request(), now=NOW)
+        self.assertEqual(result["status"], "ready")
+        self.assertFalse(result["provider_execution_performed"])
+
 
 if __name__ == "__main__":
     unittest.main()

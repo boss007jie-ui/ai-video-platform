@@ -23,7 +23,24 @@ class GenerationErrorCode(str, Enum):
 
 
 _SENSITIVE_KEY = re.compile(r"(?i)(authorization|credential|api[_-]?key|token|secret|password|private[_-]?key|traceback|stack)")
-_SENSITIVE_VALUE = re.compile(r"(?:\bsk-[A-Za-z0-9_-]{20,}\b|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)")
+_SENSITIVE_VALUE = re.compile(
+    r"(?:"
+    r"\bsk-[A-Za-z0-9_-]{20,}\b|"
+    r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}|"
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b|"
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}\b|"
+    r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b|"
+    r"\bAKIA[0-9A-Z]{16}\b|"
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def contains_sensitive_text(value: str) -> bool:
+    """Return whether text resembles credential material without exposing it."""
+
+    return _SENSITIVE_VALUE.search(value) is not None
 
 
 def _sanitize(value: Any, *, key: str = "") -> Any:
@@ -52,8 +69,9 @@ class GenerationError(ValueError):
     ) -> None:
         super().__init__(message)
         self.code = code
-        self.message = message
-        self.field_paths = field_paths
+        safe_message = _sanitize(message)
+        self.message = safe_message if isinstance(safe_message, str) else "Rejected unsafe input"
+        self.field_paths = tuple(str(_sanitize(path)) for path in field_paths)
         self.details = _sanitize(details or {})
         self.retryable = retryable
 

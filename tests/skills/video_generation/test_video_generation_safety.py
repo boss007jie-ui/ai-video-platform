@@ -29,6 +29,9 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         return captured.exception
 
     def test_approval_must_be_effective_and_match_package(self) -> None:
+        request = generation_request()
+        request.pop("approval_record")
+        self.assert_code(request, GenerationErrorCode.APPROVAL_REQUIRED)
         for field, value in (("outcome", "revoked"), ("valid_until", "2026-07-20T11:59:59Z")):
             with self.subTest(field=field):
                 request = generation_request()
@@ -66,6 +69,9 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         request["provider_binding"]["credential_ref"] = raw_value
         error = self.assert_code(request, GenerationErrorCode.CREDENTIAL_REFERENCE_INVALID)
         self.assertNotIn(raw_value, str(error.to_dict()))
+        request = generation_request()
+        request["provider_binding"].pop("credential_ref")
+        self.assert_code(request, GenerationErrorCode.CREDENTIAL_REFERENCE_INVALID)
 
     def test_package_version_digest_and_provider_marker_fail_closed(self) -> None:
         request = generation_request()
@@ -88,12 +94,63 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
         self.assert_code(request, GenerationErrorCode.PACKAGE_TAMPERED)
 
+    def test_recomputed_hashes_cannot_hide_malformed_source_or_task(self) -> None:
+        request = generation_request()
+        package = request["execution_package"]
+        package["source"] = {}
+        package["storyboard_master"]["source"] = {}
+        package["package_id"] = "vep-" + digest({}).removeprefix("sha256:")[:20]
+        master = package["storyboard_master"]
+        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
+        self.assert_code(request, GenerationErrorCode.PACKAGE_INVALID)
+
+        request = generation_request()
+        package = request["execution_package"]
+        package["task_id"] = "different-task"
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
+        self.assert_code(request, GenerationErrorCode.PACKAGE_TAMPERED)
+
+        request = generation_request()
+        package = request["execution_package"]
+        master = package["storyboard_master"]
+        master["shots"][0]["required_asset_roles"] = []
+        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
+        self.assert_code(request, GenerationErrorCode.PACKAGE_INVALID)
+
+        request = generation_request()
+        package = request["execution_package"]
+        package["motion_plan"][0]["motion"] = {"kind": "different-copy"}
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
+        self.assert_code(request, GenerationErrorCode.PACKAGE_TAMPERED)
+
     def test_sensitive_output_configuration_is_rejected_without_echo(self) -> None:
         raw_value = "sk" + "-" + "synthetic" + "C" * 24
         request = generation_request()
         request["output"]["api_key"] = raw_value
         error = self.assert_code(request, GenerationErrorCode.INVALID_INPUT)
         self.assertNotIn(raw_value, str(error.to_dict()))
+
+        bearer = "Bearer " + "synthetic" + "D" * 24
+        request = generation_request()
+        request["output"]["note"] = bearer
+        error = self.assert_code(request, GenerationErrorCode.INVALID_INPUT)
+        self.assertNotIn(bearer, str(error.to_dict()))
+
+        request = generation_request()
+        request["budget"]["api_key"] = bearer
+        error = self.assert_code(request, GenerationErrorCode.BUDGET_INVALID)
+        self.assertNotIn(bearer, str(error.to_dict()))
+
+    def test_redaction_covers_message_and_field_paths(self) -> None:
+        bearer = "Bearer " + "synthetic" + "E" * 24
+        error = GenerationError(GenerationErrorCode.PACKAGE_INVALID, bearer, field_paths=(bearer,))
+        self.assertNotIn(bearer, str(error.to_dict()))
 
     def test_missing_idempotency_key_is_rejected(self) -> None:
         request = generation_request()

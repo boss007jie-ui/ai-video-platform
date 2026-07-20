@@ -9,6 +9,12 @@ opaque Provider binding reference, deterministic request hash, and idempotency k
 It returns a safe provider summary without a credential reference and records
 `provider_execution_performed: false`.
 
+Preflight order is fixed and fail-closed: validate the execution package and its
+nested master first, then ApprovalRecord, budget, Provider binding plus opaque
+credential reference, output controls, and idempotency key; only then derive the
+request hash. Every validation completes before an adapter, ledger, filesystem, or
+other side-effect seam may be invoked.
+
 Video Generation does not rewrite storyboards, import Planning implementation,
 write Product Library, read Legacy, inspect credential values, access a network,
 download media, or create a formal business identity. Draft business artifacts
