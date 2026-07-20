@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0.0",
+  "fixture_kind": "synthetic_rc_acceptance",
+  "evidence_defaults": {
+    "owned_tests": "pass",
+    "contract_tests": "pass",
+    "permission_tests": "pass",
+    "security_tests": "pass",
+    "coverage": "pass",
+    "performance_budget": "pass",
+    "sbom_license": "pass",
+    "rollback": "pass"
+  },
+  "candidates": [
+    {
+      "skill_id": "product-knowledge",
+      "public_interface": {
+        "version": "1.0.0",
+        "commands": ["identify-product", "build-product-context", "submit-feedback"]
+      }
+    },
+    {
+      "skill_id": "viral-research-asset-collection",
+      "public_interface": {
+        "version": "1.0.0",
+        "commands": ["inspect-research-request", "research-viral", "collect-reference-assets"]
+      }
+    },
+    {
+      "skill_id": "reference-analysis",
+      "public_interface": {
+        "version": "1.0.0",
+        "commands": ["analyze-reference", "compare-result"]
+      }
+    },
+    {
+      "skill_id": "storyboard",
+      "public_interface": {
+        "version": "1.0.0",
+        "commands": ["create-storyboard", "revise-storyboard", "validate-continuity"]
+      }
+    },
+    {
+      "skill_id": "product-image-panel-generation",
+      "public_interface": {
+        "version": "1.0.0",
+        "commands": ["generate-product-image", "generate-panel", "inspect-generation-request"]
+      }
+    },
+    {
+      "skill_id": "storyboard-master-video-planning",
+      "public_interface": {
+        "version": "1.0.0",
+        "commands": ["compose-storyboard-master", "build-video-plan", "validate-video-plan"]
+      }
+    },
+    {
+      "skill_id": "video-generation",
+      "public_interface": {
+        "version": "1.0.0",
+        "commands": ["submit-video", "poll-video", "download-video", "inspect-video-request"]
+      }
+    },
+    {
+      "skill_id": "qa-review",
+      "public_interface": {
+        "version": "1.0.0",
+        "commands": ["review-asset", "review-storyboard", "review-video-plan", "review-video-result"]
+      }
+    }
+  ]
+}
