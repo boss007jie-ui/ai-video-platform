@@ -33,6 +33,10 @@ _ANALYSIS_KEYS = {
 }
 
 
+def _key_segments(value: str) -> tuple[str, ...]:
+    return tuple(segment for segment in re.split(r"[^a-z0-9]+", value.casefold()) if segment)
+
+
 def _jsonable(value: object) -> object:
     if isinstance(value, Mapping):
         return {str(key): _jsonable(nested) for key, nested in value.items()}
@@ -61,8 +65,9 @@ def _forbidden_paths(value: object, prefix: str = "") -> list[str]:
     if isinstance(value, Mapping):
         for key, nested in value.items():
             key_text = str(key).lower()
+            key_segments = set(_key_segments(key_text))
             path = f"{prefix}.{key}" if prefix else str(key)
-            if key_text in _FORBIDDEN_SCOPE or any(token in key_text for token in _FORBIDDEN_TOKENS):
+            if key_text in _FORBIDDEN_SCOPE or key_segments.intersection(_FORBIDDEN_TOKENS):
                 findings.append(path)
             findings.extend(_forbidden_paths(nested, path))
     elif isinstance(value, (list, tuple)):
@@ -82,11 +87,26 @@ def _forbidden_values(value: object, prefix: str = "", owner_key: str = "") -> l
             findings.extend(_forbidden_values(nested, f"{prefix}[{index}]", owner_key))
     elif isinstance(value, str):
         lowered = value.casefold()
-        forbidden_identity = any(token in lowered for token in (
-            "legacy", "product-library", "product library", "research-library", "research library",
-        ))
-        path_field = any(token in owner_key for token in ("path", "uri", "root"))
+        owner_segments = set(_key_segments(owner_key))
+        path_field = bool(owner_segments.intersection(("path", "uri", "root")))
         path = Path(value)
+        location_like = (
+            path_field
+            or "://" in lowered
+            or lowered.startswith("file:")
+            or "/" in value
+            or "\\" in value
+            or path.is_absolute()
+            or ".." in path.parts
+        )
+        value_segments = _key_segments(lowered) if location_like else ()
+        forbidden_identity = (
+            "legacy" in value_segments
+            or any(
+                value_segments[index:index + 2] in (("product", "library"), ("research", "library"))
+                for index in range(max(0, len(value_segments) - 1))
+            )
+        )
         unsafe_path = path_field and (lowered.startswith("file:") or path.is_absolute() or ".." in path.parts)
         if forbidden_identity or unsafe_path:
             findings.append(prefix)

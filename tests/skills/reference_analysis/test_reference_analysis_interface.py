@@ -99,6 +99,16 @@ class ReferenceAnalysisInterfaceTests(unittest.TestCase):
             self.assertEqual(result.artifact["reference_id"], "ref-1")
             self.assertEqual(result.artifact["source_provenance"]["reference_manifest_id"], "manifest-1")
 
+    def test_benign_provenance_words_and_researcher_key_are_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            request = analyze_request()
+            request["selected_reference"] = {
+                **selected_reference(),
+                "provenance": {"selected_by": "user", "researcher_id": "researcher-1", "note": "matches a legacy editing style"},
+            }
+            result = analyze_reference(request, workspace=Path(directory), output_path="benign.json")
+            self.assertEqual(result.artifact["source_provenance"]["researcher_id"], "researcher-1")
+
     def test_reference_analysis_has_no_private_viral_import(self) -> None:
         source_root = Path(__file__).resolve().parents[3] / "src" / "ai_video_platform" / "skills" / "reference_analysis"
         source = "\n".join(path.read_text(encoding="utf-8") for path in source_root.glob("*.py"))
