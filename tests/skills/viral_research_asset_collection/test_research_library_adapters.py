@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import tempfile
+from threading import Barrier
 import unittest
 from unittest.mock import patch
 
@@ -36,6 +38,48 @@ class ResearchLibraryAdapterTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, ErrorCode.STORAGE_CONFLICT)
             self.assertEqual(target.read_bytes(), b"racing-writer")
             self.assertFalse(list(root.rglob("*.tmp")))
+
+    def test_cross_directory_race_cannot_publish_metadata_and_quarantine(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            retained_adapter = ResearchLibraryAdapter(root)
+            quarantined_adapter = ResearchLibraryAdapter(root)
+            quarantined = {**RECORD, "lifecycle_state": "quarantined", "pii_detected": True}
+            barrier = Barrier(2)
+            real_open = os.open
+            lock_attempts = 0
+
+            def synchronized_open(path, flags, mode=0o777):
+                nonlocal lock_attempts
+                if str(path).endswith(".lock") and flags & os.O_EXCL:
+                    lock_attempts += 1
+                    barrier.wait(timeout=5)
+                return real_open(path, flags, mode)
+
+            def write(adapter, record, key):
+                try:
+                    adapter.write_record(record, idempotency_key=key)
+                    return "written"
+                except SkillError as exc:
+                    return exc.code
+
+            with patch("ai_video_platform.skills.viral_research_asset_collection.storage.os.open", side_effect=synchronized_open):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    outcomes = tuple(executor.map(
+                        lambda arguments: write(*arguments),
+                        (
+                            (retained_adapter, RECORD, "retained-race"),
+                            (quarantined_adapter, quarantined, "quarantine-race"),
+                        ),
+                    ))
+            self.assertEqual(lock_attempts, 2)
+            self.assertEqual(outcomes.count("written"), 1)
+            self.assertEqual(outcomes.count(ErrorCode.STORAGE_CONFLICT), 1)
+            published = [
+                root / "metadata" / "source-1.json",
+                root / "quarantine" / "source-1.json",
+            ]
+            self.assertEqual(sum(path.exists() for path in published), 1)
 
     def test_memory_adapter_is_idempotent_and_audits_deletion(self) -> None:
         adapter = InMemoryResearchLibraryAdapter()

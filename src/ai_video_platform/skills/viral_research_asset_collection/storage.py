@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -88,6 +89,22 @@ def _atomic_create(path: Path, payload: bytes) -> None:
     finally:
         try:
             os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+
+@contextmanager
+def _exclusive_source_lock(path: Path):
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise SkillError(ErrorCode.STORAGE_CONFLICT, "A writer already owns this source identity") from exc
+    try:
+        yield
+    finally:
+        os.close(descriptor)
+        try:
+            path.unlink()
         except FileNotFoundError:
             pass
 
@@ -193,6 +210,12 @@ class ResearchLibraryAdapter:
         self._request_root.mkdir(parents=True, exist_ok=True)
         if _is_link(self._request_root):
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "Request ledger directory cannot be a symlink")
+        self._source_lock_root = self.root / "audit" / "source-locks"
+        if self._source_lock_root.exists() and _is_link(self._source_lock_root):
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Source lock directory cannot be a symlink")
+        self._source_lock_root.mkdir(parents=True, exist_ok=True)
+        if _is_link(self._source_lock_root):
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Source lock directory cannot be a symlink")
         self._memory = InMemoryResearchLibraryAdapter()
         self._ledger_path = self.root / "audit" / "idempotency.json"
         self._audit_index_path = self.root / "audit" / "lifecycle-index.json"
@@ -245,6 +268,13 @@ class ResearchLibraryAdapter:
         _assert_no_link_components(self._request_root)
         if _is_link(self._request_root) or _is_link(target) or target.parent.resolve() != self._request_root.resolve():
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "Request ledger path escaped its controlled root")
+        return target
+
+    def _source_lock_target(self, source_id: str) -> Path:
+        target = self._source_lock_root / f"{source_id}.lock"
+        _assert_no_link_components(self._source_lock_root)
+        if _is_link(self._source_lock_root) or _is_link(target) or target.parent.resolve() != self._source_lock_root.resolve():
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Source lock path escaped its controlled root")
         return target
 
     @staticmethod
@@ -328,31 +358,32 @@ class ResearchLibraryAdapter:
                 raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Idempotency key already has different content")
             self._ensure_lifecycle_event(idempotency_key, source_id, digest)
             return
-        target = self._target(source_id, quarantined=record["lifecycle_state"] == "quarantined")
-        alternate = self._target(source_id, quarantined=record["lifecycle_state"] != "quarantined")
-        for existing_target in (target, alternate):
-            if not existing_target.exists():
-                continue
-            try:
-                existing_payload = existing_target.read_bytes()
-            except OSError as exc:
-                raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record is unreadable") from exc
-            if existing_target != target or existing_payload != payload:
-                raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record has different content")
-        self._memory.write_record(record, idempotency_key=idempotency_key)
-        if not target.exists():
-            try:
-                _atomic_create(target, payload)
-            except FileExistsError:
+        with _exclusive_source_lock(self._source_lock_target(source_id)):
+            target = self._target(source_id, quarantined=record["lifecycle_state"] == "quarantined")
+            alternate = self._target(source_id, quarantined=record["lifecycle_state"] != "quarantined")
+            for existing_target in (target, alternate):
+                if not existing_target.exists():
+                    continue
                 try:
-                    winner = target.read_bytes()
+                    existing_payload = existing_target.read_bytes()
                 except OSError as exc:
-                    raise SkillError(ErrorCode.STORAGE_CONFLICT, "Racing research record is unreadable") from exc
-                if winner != payload:
-                    raise SkillError(ErrorCode.STORAGE_CONFLICT, "Concurrent writer published different content")
-        self._ensure_lifecycle_event(idempotency_key, source_id, digest)
-        self._ledger[idempotency_key] = digest
-        self._persist_ledger()
+                    raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record is unreadable") from exc
+                if existing_target != target or existing_payload != payload:
+                    raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record has different content")
+            self._memory.write_record(record, idempotency_key=idempotency_key)
+            if not target.exists():
+                try:
+                    _atomic_create(target, payload)
+                except FileExistsError:
+                    try:
+                        winner = target.read_bytes()
+                    except OSError as exc:
+                        raise SkillError(ErrorCode.STORAGE_CONFLICT, "Racing research record is unreadable") from exc
+                    if winner != payload:
+                        raise SkillError(ErrorCode.STORAGE_CONFLICT, "Concurrent writer published different content")
+            self._ensure_lifecycle_event(idempotency_key, source_id, digest)
+            self._ledger[idempotency_key] = digest
+            self._persist_ledger()
 
     def delete_record(self, source_id: str, *, reason: str) -> None:
         if not _SAFE_ID.fullmatch(source_id):
