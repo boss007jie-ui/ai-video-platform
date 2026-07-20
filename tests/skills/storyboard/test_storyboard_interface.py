@@ -230,6 +230,18 @@ class StoryboardInterfaceTests(unittest.TestCase):
             first_exit, first_revision = run_cli_document(
                 {**revise_document, "idempotency_key": "cli-state-revise-1"}
             )
+            revision_replay_exit, revision_replay = run_cli_document(
+                {**revise_document, "idempotency_key": "cli-state-revise-1"}
+            )
+            forged_prior = json.loads(json.dumps(created["artifact"]))
+            forged_prior["product_id"] = "product-forged"
+            forged_prior_exit, forged_prior_result = run_cli_document(
+                {
+                    **revise_document,
+                    "idempotency_key": "cli-state-revise-1",
+                    "prior_artifact": forged_prior,
+                }
+            )
             stale_exit, stale = run_cli_document(
                 {**revise_document, "idempotency_key": "cli-state-revise-stale", "plan": changed_plan()}
             )
@@ -242,6 +254,10 @@ class StoryboardInterfaceTests(unittest.TestCase):
         self.assertEqual(conflict["error"]["code"], "STORYBOARD_IDEMPOTENCY_CONFLICT")
         self.assertEqual(first_exit, 0)
         self.assertEqual(first_revision["artifact"]["version"], 2)
+        self.assertEqual(revision_replay_exit, 0)
+        self.assertEqual(revision_replay["replay_status"], "replayed")
+        self.assertEqual(forged_prior_exit, 2)
+        self.assertEqual(forged_prior_result["error"]["code"], "STORYBOARD_VERSION_STALE")
         self.assertEqual(stale_exit, 2)
         self.assertEqual(stale["error"]["code"], "STORYBOARD_VERSION_STALE")
 

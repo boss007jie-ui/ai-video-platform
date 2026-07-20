@@ -18,9 +18,9 @@ Current candidate state: `REVIEW`, not `PRODUCTION_READY`. Independent owner tes
 ## Test evidence
 
 - Owned Interface/Continuity/Failure suites: `36 tests, OK` using deterministic synthetic fixtures only.
-- Python stdlib trace line evidence: CLI `87.5%`, Domain `84.0%`, Interface `88.5%`, State `76.1%`; owner runtime weighted line coverage is approximately `85.0%`.
+- Python stdlib trace line evidence: CLI `87.5%`, Domain `84.0%`, Interface `89.3%`, State `76.1%`; owner runtime weighted line coverage is approximately `85.4%`.
 - Branch coverage: not available because no branch-coverage tool is present and this workline cannot add dependencies; Codex-00 release tooling or an FTG-3 waiver is still required.
-- Three-Panel local benchmark, 200 fresh-service executions: p50 `1.238 ms`, p95 `1.548 ms`, max `4.439 ms` against a `100 ms` p95 budget.
+- Three-Panel local benchmark, 200 fresh-service executions: p50 `1.351 ms`, p95 `1.660 ms`, max `4.849 ms` against a `100 ms` p95 budget.
 - Full offline discovery after implementation: `94 tests`, `93 passed`, `1 failed`; the sole failure is the Codex-00-owned baseline assertion that every business namespace must remain a placeholder. `CR-FT-03-001-001` requests its authorized activation update.
 
 ## Dependency and Gate ledger

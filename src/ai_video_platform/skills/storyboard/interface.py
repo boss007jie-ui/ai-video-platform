@@ -181,12 +181,14 @@ def _result_from_document(value: object) -> StoryboardResult:
         )
         if artifact.storyboard_id != expected_storyboard_id or artifact.version < 1:
             raise VersionStoreError("STORYBOARD_STATE_CORRUPTED", "Storyboard replay artifact identity is invalid")
+        supersedes_match = (
+            re.fullmatch(r"storyboard-[0-9a-f]{16}-v([1-9][0-9]*)", artifact.supersedes_storyboard_id)
+            if artifact.supersedes_storyboard_id
+            else None
+        )
         if (artifact.version == 1 and artifact.supersedes_storyboard_id is not None) or (
             artifact.version > 1
-            and (
-                not artifact.supersedes_storyboard_id
-                or artifact.supersedes_storyboard_id == artifact.storyboard_id
-            )
+            and (supersedes_match is None or int(supersedes_match.group(1)) != artifact.version - 1)
         ):
             raise VersionStoreError("STORYBOARD_STATE_CORRUPTED", "Storyboard replay supersession is invalid")
         datetime.fromisoformat(artifact.created_at.replace("Z", "+00:00"))
@@ -314,6 +316,11 @@ class StoryboardService:
                 "reference_manifest",
             )
         self._validate_context(task_spec, task_context, product_context, reference, request)
+        self._validate_request_identity(
+            request,
+            task_id=task_spec.payload.task_id,
+            product_id=product_context.payload.product_id,
+        )
         request_digest = self._request_digest(request)
         local = self._object_records.get(request.idempotency_key)
         if local is not None:
@@ -552,6 +559,30 @@ class StoryboardService:
                 field_paths=("expected_version",),
             )
 
+    def _validate_request_identity(self, request: StoryboardRequest, *, task_id: str, product_id: str) -> None:
+        if request.command == "create-storyboard":
+            valid = request.expected_version == 0 and request.prior_artifact is None
+        else:
+            prior = request.prior_artifact
+            valid = (
+                prior is not None
+                and request.expected_version == prior.version
+                and prior.task_id == task_id
+                and prior.product_id == product_id
+                and prior.version >= 1
+                and content_digest(prior.story) == prior.content_digest
+                and prior.storyboard_id
+                == f"storyboard-{prior.content_digest.removeprefix('sha256:')[:16]}-v{prior.version}"
+                and prior.story.get("product_id") == product_id
+            )
+        if not valid:
+            raise StoryboardError(
+                "STORYBOARD_VERSION_STALE",
+                "state",
+                "Storyboard request identity does not match its immutable prior revision",
+                field_paths=("prior_artifact", "expected_version"),
+            )
+
     def _reject_forbidden_capabilities(self, value: object, path: str = "plan") -> None:
         if isinstance(value, Mapping):
             for key, nested in value.items():
@@ -605,7 +636,7 @@ class StoryboardService:
                 "reference_manifest": getattr(request.reference_manifest, "payload_digest", None),
                 "plan": request.plan,
                 "expected_version": request.expected_version,
-                "prior_artifact": request.prior_artifact.content_digest if request.prior_artifact else None,
+                "prior_artifact": _artifact_document(request.prior_artifact),
                 "cancellation_requested": request.cancellation_requested,
             }
         )
