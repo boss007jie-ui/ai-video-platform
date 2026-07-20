@@ -62,7 +62,7 @@ class VideoGenerationInterface:
             if reserved.get("state") == "submitting":
                 reserved = ledger.wait_for_submission(job_id, min(float(budget["timeout_seconds"]), 30.0))
             error_code = reserved.get("error_code")
-            if reserved.get("state") == "failed" and isinstance(error_code, str):
+            if reserved.get("state") in {"failed", "recovery_required"} and isinstance(error_code, str):
                 try:
                     code = GenerationErrorCode(error_code)
                 except ValueError:
@@ -88,13 +88,13 @@ class VideoGenerationInterface:
                     ledger.transition(job_id, expected_states={"submitting"}, state="failed", at=self._format_time(evaluated_at), attempts=attempts, error_code=code.value, retryable=False)
                     raise GenerationError(code, str(exc), retryable=False) from None
             except GenerationError:
-                ledger.transition(job_id, expected_states={"submitting"}, state="failed", at=self._format_time(evaluated_at), attempts=attempts, error_code=GenerationErrorCode.PROVIDER_REJECTED.value, retryable=False)
+                ledger.transition(job_id, expected_states={"submitting"}, state="recovery_required", at=self._format_time(evaluated_at), attempts=attempts, error_code=GenerationErrorCode.PROVIDER_REJECTED.value, retryable=False)
                 raise
             except Exception:
                 ledger.transition(
                     job_id,
                     expected_states={"submitting"},
-                    state="failed",
+                    state="recovery_required",
                     at=self._format_time(evaluated_at),
                     attempts=attempts,
                     error_code=GenerationErrorCode.PROVIDER_REJECTED.value,
@@ -109,7 +109,7 @@ class VideoGenerationInterface:
             ledger.transition(
                 job_id,
                 expected_states={"submitting"},
-                state="failed",
+                state="recovery_required",
                 at=self._format_time(evaluated_at),
                 attempts=attempts,
                 error_code=GenerationErrorCode.PROVIDER_RETRY_EXHAUSTED.value,

@@ -11,7 +11,7 @@ from .models import snapshot
 
 ACTIVE_STATES = {"submitting", "submitted", "polling", "recovery_required"}
 ALLOWED_TRANSITIONS = {
-    "submitting": {"submitted", "failed"},
+    "submitting": {"submitted", "failed", "recovery_required"},
     "submitted": {"polling", "succeeded", "failed", "cancelled", "timed_out", "recovery_required"},
     "polling": {"polling", "succeeded", "failed", "cancelled", "timed_out", "recovery_required"},
     "recovery_required": {"polling", "succeeded", "failed", "cancelled", "timed_out", "recovery_required"},

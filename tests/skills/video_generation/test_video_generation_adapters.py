@@ -274,11 +274,14 @@ class VideoGenerationAdapterTests(unittest.TestCase):
             class BadSubmitAdapter(FakeVideoProviderAdapter):
                 def submit(self, request):
                     return value
+            ledger = InMemoryVideoExecutionLedger()
             error = self.assert_code(
                 GenerationErrorCode.PROVIDER_REJECTED,
-                lambda: self.make_interface(BadSubmitAdapter()).submit_video(generation_request(), now=NOW),
+                lambda: self.make_interface(BadSubmitAdapter(), ledger).submit_video(generation_request(), now=NOW),
             )
             self.assertNotIn(str(value), str(error))
+            self.assertEqual(ledger.active_count(), 1)
+            self.assertEqual(ledger.recoverable()[0]["state"], "recovery_required")
 
     def test_network_blocked_code_is_stable_after_submission(self) -> None:
         ledger = InMemoryVideoExecutionLedger()
