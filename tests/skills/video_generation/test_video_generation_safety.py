@@ -48,8 +48,12 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         self.assert_code(request, GenerationErrorCode.APPROVAL_NOT_EFFECTIVE)
 
         request = generation_request()
-        request["approval_record"]["authority"]["boundary_id"] = "qa-review"
+        request["approval_record"]["authority"]["authority_id"] = "qa-review"
         self.assert_code(request, GenerationErrorCode.APPROVAL_NOT_EFFECTIVE)
+
+        request = generation_request()
+        request["approval_record"].pop("valid_until")
+        self.assertEqual(self.interface.inspect_video_request(request, now=NOW)["status"], "ready")
 
         raw_value = "Bearer " + "synthetic" + "G" * 24
         request = generation_request()

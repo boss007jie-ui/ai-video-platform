@@ -55,7 +55,9 @@ for exact replay and mismatch handling in the execution ledger.
 The ledger atomically reserves request and concurrency budget, snapshots every
 read/write, retains transition history, exposes read-only recovery, and records
 deterministic states: `submitting`, `submitted`, `polling`,
-`succeeded`, `failed`, `cancelled`, `timed_out`, and `downloaded`. Download verifies
+`recovery_required`, `succeeded`, `failed`, `cancelled`, `timed_out`, and
+`downloaded`. Uncertain Provider outcomes retain active capacity as
+`recovery_required`; recovery reads ledger history without polling. Download verifies
 the in-memory artifact digest and emits only a `DRAFT_UNREGISTERED`
 AssetManifestRequest; it never writes Product Library.
 

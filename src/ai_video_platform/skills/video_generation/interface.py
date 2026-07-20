@@ -59,6 +59,8 @@ class VideoGenerationInterface:
             max_concurrency=int(budget["max_concurrency"]),
         )
         if not created:
+            if reserved.get("state") == "submitting":
+                reserved = ledger.wait_for_submission(job_id, min(float(budget["timeout_seconds"]), 30.0))
             error_code = reserved.get("error_code")
             if reserved.get("state") == "failed" and isinstance(error_code, str):
                 try:
@@ -72,7 +74,10 @@ class VideoGenerationInterface:
         while attempts < int(budget["max_attempts"]):
             attempts += 1
             try:
-                provider_job_id = adapter.submit(inspected)
+                candidate_job_id = adapter.submit(inspected)
+                if not isinstance(candidate_job_id, str) or not candidate_job_id.strip() or contains_sensitive_text(candidate_job_id):
+                    raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned an invalid job identity")
+                provider_job_id = candidate_job_id
                 break
             except AdapterFailure as exc:
                 if not exc.retryable:
@@ -82,6 +87,9 @@ class VideoGenerationInterface:
                     }.get(exc.code, GenerationErrorCode.PROVIDER_REJECTED)
                     ledger.transition(job_id, expected_states={"submitting"}, state="failed", at=self._format_time(evaluated_at), attempts=attempts, error_code=code.value, retryable=False)
                     raise GenerationError(code, str(exc), retryable=False) from None
+            except GenerationError:
+                ledger.transition(job_id, expected_states={"submitting"}, state="failed", at=self._format_time(evaluated_at), attempts=attempts, error_code=GenerationErrorCode.PROVIDER_REJECTED.value, retryable=False)
+                raise
             except Exception:
                 ledger.transition(
                     job_id,
@@ -132,8 +140,12 @@ class VideoGenerationInterface:
         if (evaluated_at - submitted_at).total_seconds() >= int(record["budget"]["timeout_seconds"]):
             try:
                 adapter.cancel(str(record["provider_job_id"]))
+            except AdapterFailure as exc:
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=self._adapter_error_code(exc).value)
+                raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
             except Exception:
-                pass
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
             return self._result(ledger.transition(job_id, expected_states=ACTIVE_STATES, state="timed_out", at=self._format_time(evaluated_at)))
         poll_attempts = 0
         provider_result: Mapping[str, object] | None = None
@@ -142,25 +154,26 @@ class VideoGenerationInterface:
             try:
                 candidate = adapter.poll(str(record["provider_job_id"]))
                 if not isinstance(candidate, Mapping):
-                    ledger.transition(job_id, expected_states=ACTIVE_STATES, state="failed", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                    ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
                     raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned malformed poll data")
                 provider_result = candidate
                 break
             except AdapterFailure as exc:
                 if not exc.retryable:
-                    ledger.transition(job_id, expected_states=ACTIVE_STATES, state="failed", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
-                    raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, str(exc), retryable=False) from None
+                    code = self._adapter_error_code(exc)
+                    ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=code.value)
+                    raise GenerationError(code, str(exc), retryable=False) from None
             except GenerationError:
                 raise
             except Exception:
-                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="failed", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
                 raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
         if provider_result is None:
-            ledger.transition(job_id, expected_states=ACTIVE_STATES, state="failed", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_RETRY_EXHAUSTED.value, poll_attempts=poll_attempts)
+            ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_RETRY_EXHAUSTED.value, poll_attempts=poll_attempts)
             raise GenerationError(GenerationErrorCode.PROVIDER_RETRY_EXHAUSTED, "Provider poll retry budget is exhausted", retryable=True)
         state = provider_result.get("state")
         if state not in {"running", "succeeded", "failed", "cancelled"}:
-            ledger.transition(job_id, expected_states=ACTIVE_STATES, state="failed", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+            ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned an unsupported state")
         ledger_state = "polling" if state == "running" else str(state)
         return self._result(ledger.transition(job_id, expected_states=ACTIVE_STATES, state=ledger_state, at=self._format_time(evaluated_at), poll_attempts=poll_attempts))
@@ -176,7 +189,7 @@ class VideoGenerationInterface:
         try:
             adapter.cancel(str(record["provider_job_id"]))
         except AdapterFailure as exc:
-            raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, str(exc), retryable=exc.retryable) from None
+            raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
         except Exception:
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
         return self._result(ledger.transition(job_id, expected_states=ACTIVE_STATES, state="cancelled", at=self._format_time(evaluated_at)))
@@ -189,7 +202,7 @@ class VideoGenerationInterface:
         try:
             artifact = adapter.download(str(record["provider_job_id"]))
         except AdapterFailure as exc:
-            raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, str(exc), retryable=exc.retryable) from None
+            raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
         except Exception:
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
         if not isinstance(artifact, Mapping):
@@ -228,10 +241,14 @@ class VideoGenerationInterface:
         adapter = self._adapter
         ledger = self._ledger
         adapter_methods = ("submit", "poll", "cancel", "download")
-        ledger_methods = ("reserve", "get", "transition", "active_count", "recoverable")
+        ledger_methods = ("reserve", "get", "transition", "active_count", "recoverable", "wait_for_submission")
         if adapter is None or ledger is None or not all(hasattr(adapter, name) for name in adapter_methods) or not all(hasattr(ledger, name) for name in ledger_methods):
             raise GenerationError(GenerationErrorCode.NETWORK_BLOCKED, "An authorized offline adapter and ledger are required")
         return adapter, ledger
+
+    @staticmethod
+    def _adapter_error_code(error: AdapterFailure) -> GenerationErrorCode:
+        return GenerationErrorCode.NETWORK_BLOCKED if error.code == "NETWORK_BLOCKED" else GenerationErrorCode.PROVIDER_REJECTED
 
     @staticmethod
     def _now(value: datetime | None) -> datetime:

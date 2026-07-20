@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-from threading import RLock
+from threading import Condition, RLock
 from typing import Mapping
 
 from .errors import GenerationError, GenerationErrorCode
 from .models import snapshot
 
 
-ACTIVE_STATES = {"submitting", "submitted", "polling"}
+ACTIVE_STATES = {"submitting", "submitted", "polling", "recovery_required"}
+ALLOWED_TRANSITIONS = {
+    "submitting": {"submitted", "failed"},
+    "submitted": {"polling", "succeeded", "failed", "cancelled", "timed_out", "recovery_required"},
+    "polling": {"polling", "succeeded", "failed", "cancelled", "timed_out", "recovery_required"},
+    "recovery_required": {"polling", "succeeded", "failed", "cancelled", "timed_out", "recovery_required"},
+    "succeeded": {"downloaded"},
+    "failed": set(), "cancelled": set(), "timed_out": set(), "downloaded": set(),
+}
 
 
 class InMemoryVideoExecutionLedger:
@@ -17,6 +25,7 @@ class InMemoryVideoExecutionLedger:
         self._records: dict[str, dict[str, object]] = {}
         self._idempotency: dict[str, str] = {}
         self._lock = RLock()
+        self._changed = Condition(self._lock)
 
     def reserve(
         self,
@@ -69,15 +78,26 @@ class InMemoryVideoExecutionLedger:
         with self._lock:
             return [snapshot(record) for record in self._records.values() if record["state"] in ACTIVE_STATES]
 
+    def wait_for_submission(self, job_id: str, timeout_seconds: float) -> dict[str, object]:
+        with self._changed:
+            if job_id not in self._records:
+                raise GenerationError(GenerationErrorCode.JOB_NOT_FOUND, "Video execution job was not found")
+            completed = self._changed.wait_for(lambda: self._records[job_id]["state"] != "submitting", timeout=timeout_seconds)
+            if not completed:
+                raise GenerationError(GenerationErrorCode.PROVIDER_RETRY_EXHAUSTED, "Concurrent submission did not complete in time", retryable=True)
+            return snapshot(self._records[job_id])
+
     def transition(self, job_id: str, *, expected_states: set[str], state: str, at: str, **changes: object) -> dict[str, object]:
         safe_changes = snapshot(changes)
         with self._lock:
             if job_id not in self._records:
                 raise GenerationError(GenerationErrorCode.JOB_NOT_FOUND, "Video execution job was not found")
             record = self._records[job_id]
-            if record["state"] not in expected_states:
+            current = str(record["state"])
+            if current not in expected_states or state not in ALLOWED_TRANSITIONS.get(current, set()):
                 raise GenerationError(GenerationErrorCode.INVALID_TRANSITION, "Video execution state transition is invalid")
             record.update(safe_changes)
             record["state"] = state
             record["history"].append({"state": state, "at": at})
+            self._changed.notify_all()
             return snapshot(record)

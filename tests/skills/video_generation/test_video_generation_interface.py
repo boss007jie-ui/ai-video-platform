@@ -51,7 +51,7 @@ def generation_request() -> dict[str, object]:
     package = execution_package()
     return {
         "execution_package": package,
-        "approval_record": {"approval_id": "approval-001", "approval_type": "video_generation", "outcome": "approved", "authority": {"boundary_id": "authorized-approval-boundary"}, "decided_at": "2026-07-20T08:00:00Z", "decision_ref": "review-decision-001", "subject_ref": {"digest": package["package_digest"]}, "valid_until": "2026-07-21T08:00:00Z"},
+        "approval_record": {"approval_id": "approval-001", "approval_type": "video_generation", "outcome": "approved", "authority": {"authority_id": "authorized-approval-boundary"}, "decided_at": "2026-07-20T08:00:00Z", "decision_ref": "review-decision-001", "subject_ref": {"digest": package["package_digest"]}, "valid_until": "2026-07-21T08:00:00Z"},
         "budget": {"estimated_cost_units": 10, "max_cost_units": 20, "max_requests": 2, "max_concurrency": 1, "max_attempts": 3, "timeout_seconds": 60},
         "provider_binding": {"binding_ref": "binding-001", "provider_id": "fake-video", "model_id": "model-001", "credential_ref": "secret://video/provider-credential"},
         "output": {"format": "mp4", "quality": "synthetic"}, "idempotency_key": "idem-video-001",

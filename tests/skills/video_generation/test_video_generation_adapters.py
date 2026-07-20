@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event
 from pathlib import Path
 import sys
 import unittest
@@ -64,6 +65,14 @@ class VideoGenerationAdapterTests(unittest.TestCase):
         changed = generation_request()
         changed["output"]["quality"] = "other"
         self.assert_code(GenerationErrorCode.IDEMPOTENCY_MISMATCH, lambda: interface.submit_video(changed, now=NOW))
+
+        changed_ref = generation_request()
+        changed_ref["provider_binding"]["credential_ref"] = "secret://video/other-credential"
+        self.assertNotEqual(
+            interface.inspect_video_request(request, now=NOW)["request_hash"],
+            interface.inspect_video_request(changed_ref, now=NOW)["request_hash"],
+        )
+        self.assert_code(GenerationErrorCode.IDEMPOTENCY_MISMATCH, lambda: interface.submit_video(changed_ref, now=NOW))
 
     def test_concurrency_and_request_limits_fail_closed(self) -> None:
         interface = self.make_interface(FakeVideoProviderAdapter(poll_states=("running",)))
@@ -159,7 +168,7 @@ class VideoGenerationAdapterTests(unittest.TestCase):
         self.assertTrue(recovered["recovered"])
         self.assertEqual(adapter.submit_count, 1)
 
-    def test_poll_retries_and_exhaustion_release_active_capacity(self) -> None:
+    def test_poll_retries_and_uncertain_exhaustion_retains_active_capacity(self) -> None:
         ledger = InMemoryVideoExecutionLedger()
         interface = self.make_interface(FakeVideoProviderAdapter(poll_failures=2), ledger)
         submitted = interface.submit_video(generation_request(), now=NOW)
@@ -173,8 +182,8 @@ class VideoGenerationAdapterTests(unittest.TestCase):
         interface = self.make_interface(FakeVideoProviderAdapter(poll_failures=3), ledger)
         submitted = interface.submit_video(request, now=NOW)
         self.assert_code(GenerationErrorCode.PROVIDER_RETRY_EXHAUSTED, lambda: interface.poll_video(submitted["job_id"], now=NOW))
-        self.assertEqual(ledger.get(submitted["job_id"])["state"], "failed")
-        self.assertEqual(ledger.active_count(), 0)
+        self.assertEqual(ledger.get(submitted["job_id"])["state"], "recovery_required")
+        self.assertEqual(ledger.active_count(), 1)
 
     def test_ledger_rejects_illegal_transition_and_lists_recoverable_jobs(self) -> None:
         ledger = InMemoryVideoExecutionLedger()
@@ -183,6 +192,10 @@ class VideoGenerationAdapterTests(unittest.TestCase):
         self.assert_code(
             GenerationErrorCode.INVALID_TRANSITION,
             lambda: ledger.transition(submitted["job_id"], expected_states={"succeeded"}, state="downloaded", at="2026-07-20T12:00:00Z"),
+        )
+        self.assert_code(
+            GenerationErrorCode.INVALID_TRANSITION,
+            lambda: ledger.transition(submitted["job_id"], expected_states={"submitted"}, state="downloaded", at="2026-07-20T12:00:00Z"),
         )
 
     def test_execution_cli_uses_explicit_injected_offline_context(self) -> None:
@@ -211,7 +224,7 @@ class VideoGenerationAdapterTests(unittest.TestCase):
         interface = self.make_interface(MalformedPollAdapter(), ledger)
         submitted = interface.submit_video(generation_request(), now=NOW)
         self.assert_code(GenerationErrorCode.PROVIDER_REJECTED, lambda: interface.poll_video(submitted["job_id"], now=NOW))
-        self.assertEqual(ledger.get(submitted["job_id"])["state"], "failed")
+        self.assertEqual(ledger.get(submitted["job_id"])["state"], "recovery_required")
 
         class MalformedDownloadAdapter(FakeVideoProviderAdapter):
             def download(self, provider_job_id):
@@ -233,6 +246,47 @@ class VideoGenerationAdapterTests(unittest.TestCase):
         interface.submit_video(first, now=NOW)
         interface.submit_video(second, now=NOW)
         self.assertEqual(adapter.job_count, 2)
+
+    def test_concurrent_exact_replay_waits_for_submission_result(self) -> None:
+        entered = Event()
+        release = Event()
+
+        class BlockingAdapter(FakeVideoProviderAdapter):
+            def submit(self, request):
+                entered.set()
+                release.wait(timeout=2)
+                return super().submit(request)
+
+        adapter = BlockingAdapter()
+        interface = self.make_interface(adapter)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(interface.submit_video, generation_request(), now=NOW)
+            self.assertTrue(entered.wait(timeout=1))
+            replay = pool.submit(interface.submit_video, generation_request(), now=NOW)
+            self.assertFalse(replay.done())
+            release.set()
+            results = [first.result(timeout=2), replay.result(timeout=2)]
+        self.assertEqual([result["state"] for result in results], ["submitted", "submitted"])
+        self.assertEqual(sorted(result["replayed"] for result in results), [False, True])
+
+    def test_malformed_or_sensitive_submit_identity_fails_closed(self) -> None:
+        for value in ({"bad": "identity"}, "sk-" + "J" * 24):
+            class BadSubmitAdapter(FakeVideoProviderAdapter):
+                def submit(self, request):
+                    return value
+            error = self.assert_code(
+                GenerationErrorCode.PROVIDER_REJECTED,
+                lambda: self.make_interface(BadSubmitAdapter()).submit_video(generation_request(), now=NOW),
+            )
+            self.assertNotIn(str(value), str(error))
+
+    def test_network_blocked_code_is_stable_after_submission(self) -> None:
+        ledger = InMemoryVideoExecutionLedger()
+        submitted = self.make_interface(ledger=ledger).submit_video(generation_request(), now=NOW)
+        blocked = self.make_interface(NetworkBlockedVideoProviderAdapter(), ledger)
+        self.assert_code(GenerationErrorCode.NETWORK_BLOCKED, lambda: blocked.poll_video(submitted["job_id"], now=NOW))
+        self.assertEqual(ledger.get(submitted["job_id"])["state"], "recovery_required")
+        self.assert_code(GenerationErrorCode.NETWORK_BLOCKED, lambda: blocked.cancel_video(submitted["job_id"], now=NOW))
 
     def test_rejecting_and_network_blocked_adapters_never_touch_network(self) -> None:
         for adapter, code in (

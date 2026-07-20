@@ -68,6 +68,7 @@ class GenerationPreflight:
             "package_digest": package["package_digest"],
             "approval_id": approval["approval_id"],
             "provider_binding": safe_binding,
+            "credential_ref_digest": content_digest(require_mapping(value.get("provider_binding"), "provider_binding")["credential_ref"]),
             "budget": budget,
             "output": output,
         }
@@ -230,7 +231,8 @@ class GenerationPreflight:
         if approval.get("approval_type") != "video_generation" or approval.get("outcome") != "approved":
             raise GenerationError(GenerationErrorCode.APPROVAL_NOT_EFFECTIVE, "ApprovalRecord is not effective for video generation")
         authority = require_mapping(approval.get("authority"), "approval_record.authority")
-        if require_string(authority, "boundary_id", GenerationErrorCode.APPROVAL_NOT_EFFECTIVE) != "authorized-approval-boundary":
+        authority_id = authority.get("authority_id", authority.get("boundary_id"))
+        if authority_id != "authorized-approval-boundary":
             raise GenerationError(GenerationErrorCode.APPROVAL_NOT_EFFECTIVE, "ApprovalRecord authority is not an authorized boundary")
         require_string(approval, "decision_ref", GenerationErrorCode.APPROVAL_NOT_EFFECTIVE)
         subject = require_mapping(approval.get("subject_ref"), "approval_record.subject_ref")
@@ -238,11 +240,11 @@ class GenerationPreflight:
             raise GenerationError(GenerationErrorCode.APPROVAL_SUBJECT_MISMATCH, "Approval subject does not match execution package")
         try:
             decided_at = parse_utc(approval.get("decided_at"), "approval_record.decided_at")
-            valid_until = parse_utc(approval.get("valid_until"), "approval_record.valid_until")
+            valid_until = parse_utc(approval["valid_until"], "approval_record.valid_until") if approval.get("valid_until") is not None else None
         except (TypeError, ValueError):
             raise GenerationError(GenerationErrorCode.APPROVAL_NOT_EFFECTIVE, "Approval timestamps are invalid") from None
         evaluated_at = now.astimezone(timezone.utc)
-        if decided_at > evaluated_at or valid_until <= evaluated_at or decided_at >= valid_until:
+        if decided_at > evaluated_at or (valid_until is not None and (valid_until <= evaluated_at or decided_at >= valid_until)):
             raise GenerationError(GenerationErrorCode.APPROVAL_NOT_EFFECTIVE, "ApprovalRecord is expired")
         return {"approval_id": approval_id}
 
