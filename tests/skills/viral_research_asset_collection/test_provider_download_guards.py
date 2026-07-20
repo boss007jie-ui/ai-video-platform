@@ -35,7 +35,7 @@ class ProviderDownloadGuardTests(unittest.TestCase):
     def test_metadata_only_never_downloads_and_free_first_requires_rights(self) -> None:
         selected = [{
             "source_id": "x", "source_url": "https://example.invalid/x", "rights_status": "UNKNOWN",
-            "pii_detected": False, "expires_at": "2026-07-21T00:00:00Z",
+            "pii_detected": False, "brand_safety": 1.0, "expires_at": "2026-07-21T00:00:00Z",
         }]
         fake = FakeDownloadAdapter()
         storage = InMemoryResearchLibraryAdapter()
@@ -51,6 +51,29 @@ class ProviderDownloadGuardTests(unittest.TestCase):
                 downloader=fake, storage=storage, now=NOW,
             )
         self.assertEqual(caught.exception.code, ErrorCode.RIGHTS_FORBIDDEN)
+
+    def test_collection_validates_every_candidate_before_side_effects_and_quarantines_unsafe(self) -> None:
+        valid = {
+            "source_id": "safe", "source_url": "https://example.invalid/safe", "rights_status": "PUBLIC",
+            "pii_detected": False, "brand_safety": 1.0, "expires_at": "2026-07-21T00:00:00Z",
+        }
+        downloader = FakeDownloadAdapter()
+        storage = InMemoryResearchLibraryAdapter()
+        with self.assertRaises(SkillError):
+            collect_reference_assets(
+                {"selected_candidates": [valid, {"source_id": "broken"}], "download_policy": "FREE_FIRST", "idempotency_key": "prevalidate"},
+                downloader=downloader, storage=storage, now=NOW,
+            )
+        self.assertEqual(downloader.attempt_count, 0)
+        self.assertEqual(storage.records, {})
+
+        unsafe = {**valid, "source_id": "unsafe", "brand_safety": 0.2}
+        result = collect_reference_assets(
+            {"selected_candidates": [unsafe], "download_policy": "FREE_FIRST", "idempotency_key": "unsafe"},
+            downloader=downloader, storage=storage, now=NOW,
+        )
+        self.assertEqual(result.items[0].lifecycle_state, "quarantined")
+        self.assertEqual(downloader.attempt_count, 0)
 
 
 if __name__ == "__main__":

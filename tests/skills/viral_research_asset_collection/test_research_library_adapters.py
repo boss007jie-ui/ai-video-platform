@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -39,6 +40,35 @@ class ResearchLibraryAdapterTests(unittest.TestCase):
             self.assertFalse(list(root.rglob("*.tmp")))
             with self.assertRaises(SkillError) as caught:
                 adapter.write_record({**RECORD, "source_id": "../escape"}, idempotency_key="escape")
+            self.assertEqual(caught.exception.code, ErrorCode.PATH_FORBIDDEN)
+
+    def test_filesystem_idempotency_and_audit_survive_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ResearchLibraryAdapter(root).write_record(RECORD, idempotency_key="write-1")
+            restarted = ResearchLibraryAdapter(root)
+            restarted.write_record(RECORD, idempotency_key="write-1")
+            with self.assertRaises(SkillError) as caught:
+                restarted.write_record({**RECORD, "rights_status": "UNKNOWN"}, idempotency_key="write-1")
+            self.assertEqual(caught.exception.code, ErrorCode.IDEMPOTENCY_CONFLICT)
+            with self.assertRaises(SkillError) as caught:
+                restarted.write_record({**RECORD, "rights_status": "UNKNOWN"}, idempotency_key="write-2")
+            self.assertEqual(caught.exception.code, ErrorCode.STORAGE_CONFLICT)
+            self.assertTrue((root / "audit" / "lifecycle.jsonl").is_file())
+            self.assertTrue((root / "audit" / "idempotency.json").is_file())
+
+    def test_filesystem_rejects_symlink_root_when_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            actual = base / "actual"
+            actual.mkdir()
+            linked = base / "linked"
+            try:
+                os.symlink(actual, linked, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlink creation is unavailable")
+            with self.assertRaises(SkillError) as caught:
+                ResearchLibraryAdapter(linked)
             self.assertEqual(caught.exception.code, ErrorCode.PATH_FORBIDDEN)
 
     def test_quarantine_is_separate_and_retention_is_not_extended(self) -> None:

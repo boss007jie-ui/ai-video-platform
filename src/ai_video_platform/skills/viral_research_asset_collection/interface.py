@@ -97,8 +97,12 @@ def inspect_research_request(
     start = _parse_z(window.get("start"), "time_window.start")
     end = _parse_z(window.get("end"), "time_window.end")
     expires = _parse_z(window.get("expires_at"), "time_window.expires_at")
-    if start >= end:
-        raise SkillError(ErrorCode.VALIDATION_FAILED, "time_window start must precede end", field_paths=("time_window.start", "time_window.end"))
+    if start >= end or end >= expires:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "time_window must satisfy start < end < expires_at",
+            field_paths=("time_window.start", "time_window.end", "time_window.expires_at"),
+        )
     if expires <= current:
         raise SkillError(ErrorCode.REQUEST_EXPIRED, "Research request has expired", field_paths=("time_window.expires_at",))
     budget = _validated_budget(request)
@@ -128,11 +132,11 @@ def _tokens(value: str) -> set[str]:
     return set(_TOKEN.findall(value.lower()))
 
 
-def _near_duplicate(left: Mapping[str, object], right: Mapping[str, object]) -> bool:
+def _similarity(left: Mapping[str, object], right: Mapping[str, object]) -> float:
     left_tokens = _tokens(f"{left.get('title', '')} {left.get('description', '')}")
     right_tokens = _tokens(f"{right.get('title', '')} {right.get('description', '')}")
     union = left_tokens | right_tokens
-    return bool(union) and len(left_tokens & right_tokens) / len(union) >= 0.8
+    return len(left_tokens & right_tokens) / len(union) if union else 0.0
 
 
 def _number(row: Mapping[str, object], name: str, default: float = 0.0) -> float:
@@ -162,7 +166,7 @@ def _score(row: Mapping[str, object], queries: Sequence[str], now: datetime) -> 
     relevance = len(content_tokens & query_tokens) / max(1, len(query_tokens))
     age_days = max(0.0, (now - _parse_z(row["published_at"], "published_at")).total_seconds() / 86400)
     views = max(1.0, _number(row, "views", 1.0))
-    factors = {
+    inputs = {
         "relevance": min(1.0, relevance),
         "freshness": max(0.0, 1.0 - age_days / 30.0),
         "engagement_velocity": min(1.0, (_number(row, "likes") + _number(row, "comments") + _number(row, "shares")) / views),
@@ -172,15 +176,24 @@ def _score(row: Mapping[str, object], queries: Sequence[str], now: datetime) -> 
         "platform_fit": min(1.0, _number(row, "platform_fit")),
         "brand_safety": min(1.0, _number(row, "brand_safety")),
         "rights_status": 1.0 if row.get("rights_status") in {"PUBLIC", "AUTHORIZED"} else 0.0,
-        "duplicate_distance": 1.0,
+        "duplicate_distance": float(row.get("_duplicate_distance", 1.0)),
     }
-    return ResearchScore(total=round(sum(factors.values()) / len(_SCORE_FACTORS), 6), explanation=factors)
+    weights = {name: 1.0 / len(_SCORE_FACTORS) for name in _SCORE_FACTORS}
+    contributions = {name: round(inputs[name] * weights[name], 8) for name in _SCORE_FACTORS}
+    return ResearchScore(
+        total=sum(contributions.values()),
+        inputs=inputs,
+        weights=weights,
+        contributions=contributions,
+        explanation=contributions,
+    )
 
 
 def _lifecycle(row: Mapping[str, object], now: datetime) -> tuple[str, tuple[str, ...]]:
     if _parse_z(row["expires_at"], "expires_at") <= now:
         return "expired", ("expiry_reached",)
-    if row.get("pii_detected") is True or _number(row, "brand_safety", 1.0) < 0.5:
+    brand_safety = row.get("brand_safety")
+    if row.get("pii_detected") is True or not isinstance(brand_safety, (int, float)) or isinstance(brand_safety, bool) or not 0 <= float(brand_safety) <= 1 or float(brand_safety) < 0.5:
         return "quarantined", ("pii_or_brand_safety",)
     if row.get("rights_status") not in {"PUBLIC", "AUTHORIZED"}:
         return "metadata_only", ("rights_unconfirmed",)
@@ -211,7 +224,12 @@ def research_viral(
                 raise SkillError(ErrorCode.CANCELLED, "Research was cancelled")
             provider_calls += 1
             try:
-                fetched = provider.fetch(query, limit=budget["max_results"] - len(rows), timeout_seconds=budget["timeout_seconds"])
+                try:
+                    fetched = provider.fetch(query, limit=budget["max_results"] - len(rows), timeout_seconds=budget["timeout_seconds"])
+                except SkillError:
+                    raise
+                except Exception as exc:
+                    raise SkillError(ErrorCode.PROVIDER_FAILURE, "Collection Provider failed", retryable=False) from exc
                 rows.extend(_normalized_candidate(row) for row in fetched)
                 break
             except SkillError as exc:
@@ -219,19 +237,29 @@ def research_viral(
                     raise
                 attempts_for_query += 1
     unique: list[dict[str, object]] = []
-    seen_identity: set[tuple[str, str]] = set()
+    seen_source_ids: set[str] = set()
+    seen_urls: set[str] = set()
+    seen_digests: set[str] = set()
     for row in rows:
-        identity = (str(row["source_id"]), str(row["source_url"]))
-        if identity in seen_identity or any(_near_duplicate(row, previous) for previous in unique):
+        source_id = str(row["source_id"]).strip().casefold()
+        source_url = str(row["source_url"]).strip().casefold().rstrip("/")
+        content_digest = _digest({"title": row.get("title"), "description": row.get("description")})
+        similarities = [_similarity(row, previous) for previous in unique]
+        nearest_similarity = max(similarities, default=0.0)
+        if source_id in seen_source_ids or source_url in seen_urls or content_digest in seen_digests or nearest_similarity >= 0.8:
             continue
-        seen_identity.add(identity)
+        seen_source_ids.add(source_id)
+        seen_urls.add(source_url)
+        seen_digests.add(content_digest)
+        row["_content_digest"] = content_digest
+        row["_duplicate_distance"] = round(1.0 - nearest_similarity, 6)
         unique.append(row)
         if len(unique) >= budget["max_results"]:
             break
     candidates: list[ResearchCandidate] = []
     for row in unique:
         state, reasons = _lifecycle(row, current)
-        content_digest = _digest({"title": row.get("title"), "description": row.get("description")})
+        content_digest = str(row["_content_digest"])
         candidate = ResearchCandidate(
             source_id=str(row["source_id"]), source_url=str(row["source_url"]), title=str(row["title"]),
             content_digest=content_digest, lifecycle_state=state, rights_status=str(row["rights_status"]),
@@ -241,13 +269,15 @@ def research_viral(
         candidates.append(candidate)
     candidates.sort(key=lambda item: (-item.score.total, item.source_id))
     for candidate in candidates:
-        storage.write_record(
-            {
-                **candidate.to_dict(),
-                "retention_until": candidate.expires_at,
-            },
-            idempotency_key=f"{request['idempotency_key']}:{candidate.source_id}",
-        )
+        try:
+            storage.write_record(
+                {**candidate.to_dict(), "retention_until": candidate.expires_at},
+                idempotency_key=f"{request['idempotency_key']}:{candidate.source_id}",
+            )
+        except SkillError:
+            raise
+        except Exception as exc:
+            raise SkillError(ErrorCode.STORAGE_CONFLICT, "Research storage failed") from exc
     return ResearchResult(
         status="COMPLETED", request_digest=inspection.request_digest,
         provider_calls=provider_calls, candidates=tuple(candidates),
@@ -267,40 +297,66 @@ def collect_reference_assets(
         raise SkillError(ErrorCode.VALIDATION_FAILED, "selected_candidates must be a non-empty array")
     if policy not in {"METADATA_ONLY", "FREE_FIRST"} or not isinstance(idempotency_key, str) or not idempotency_key:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "Collection policy or idempotency key is invalid")
-    items: list[CollectionItem] = []
+    normalized: list[dict[str, object]] = []
     for raw in selected:
-        if cancelled and cancelled():
-            raise SkillError(ErrorCode.CANCELLED, "Collection was cancelled")
         if not isinstance(raw, Mapping):
             raise SkillError(ErrorCode.VALIDATION_FAILED, "Selected candidate must be an object")
         source_id = _required_text(raw, "source_id")
         source_url = _required_text(raw, "source_url")
         rights = _required_text(raw, "rights_status")
         expires_at = _required_text(raw, "expires_at")
+        brand_safety = raw.get("brand_safety")
+        if not isinstance(brand_safety, (int, float)) or isinstance(brand_safety, bool) or not 0 <= float(brand_safety) <= 1:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "brand_safety must be between zero and one", field_paths=("brand_safety",))
         expired = _parse_z(expires_at, "expires_at") <= current
+        if policy == "FREE_FIRST" and not expired and raw.get("pii_detected") is not True and float(brand_safety) >= 0.5 and rights not in {"PUBLIC", "AUTHORIZED"}:
+            raise SkillError(ErrorCode.RIGHTS_FORBIDDEN, "FREE_FIRST requires public or authorized rights")
+        normalized.append({
+            "raw": raw, "source_id": source_id, "source_url": source_url, "rights": rights,
+            "expires_at": expires_at, "expired": expired, "brand_safety": float(brand_safety),
+        })
+
+    items: list[CollectionItem] = []
+    for selected_item in normalized:
+        if cancelled and cancelled():
+            raise SkillError(ErrorCode.CANCELLED, "Collection was cancelled")
+        raw = selected_item["raw"]
+        source_id = str(selected_item["source_id"])
+        source_url = str(selected_item["source_url"])
+        rights = str(selected_item["rights"])
+        expires_at = str(selected_item["expires_at"])
+        expired = bool(selected_item["expired"])
         if expired:
             state, object_digest = "expired", None
-        elif raw.get("pii_detected") is True:
+        elif raw.get("pii_detected") is True or float(selected_item["brand_safety"]) < 0.5:
             state, object_digest = "quarantined", None
         elif policy == "METADATA_ONLY":
             state, object_digest = "metadata_only", None
         else:
-            if rights not in {"PUBLIC", "AUTHORIZED"}:
-                raise SkillError(ErrorCode.RIGHTS_FORBIDDEN, "FREE_FIRST requires public or authorized rights")
-            receipt = downloader.download(raw)
+            try:
+                receipt = downloader.download(raw)
+            except SkillError:
+                raise
+            except Exception as exc:
+                raise SkillError(ErrorCode.DOWNLOAD_FORBIDDEN, "Download adapter failed") from exc
             digest = receipt.get("sha256")
             if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise SkillError(ErrorCode.VALIDATION_FAILED, "Download receipt digest is invalid")
             state, object_digest = "collected", digest
         item = CollectionItem(source_id=source_id, lifecycle_state=state, rights_status=rights, object_digest=object_digest)
-        storage.write_record(
-            {
-                "source_id": source_id, "source_url": source_url, "lifecycle_state": state,
-                "rights_status": rights, "pii_detected": raw.get("pii_detected") is True,
-                "expires_at": expires_at, "retention_until": expires_at,
-                "object_digest": object_digest,
-            },
-            idempotency_key=f"{idempotency_key}:{source_id}",
-        )
+        try:
+            storage.write_record(
+                {
+                    "source_id": source_id, "source_url": source_url, "lifecycle_state": state,
+                    "rights_status": rights, "pii_detected": raw.get("pii_detected") is True,
+                    "expires_at": expires_at, "retention_until": expires_at,
+                    "object_digest": object_digest,
+                },
+                idempotency_key=f"{idempotency_key}:{source_id}",
+            )
+        except SkillError:
+            raise
+        except Exception as exc:
+            raise SkillError(ErrorCode.STORAGE_CONFLICT, "Research storage failed") from exc
         items.append(item)
     return CollectionResult(status="COMPLETED", items=tuple(items))

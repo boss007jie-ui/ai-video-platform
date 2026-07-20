@@ -111,6 +111,16 @@ class ViralResearchInterfaceTests(unittest.TestCase):
             inspect_research_request(unsafe, now=NOW)
         self.assertEqual(caught.exception.code, ErrorCode.RIGHTS_FORBIDDEN)
 
+        bad_order = valid_request()
+        bad_order["time_window"] = {
+            "start": "2026-07-01T00:00:00Z",
+            "end": "2026-07-22T00:00:00Z",
+            "expires_at": "2026-07-21T00:00:00Z",
+        }
+        with self.assertRaises(SkillError) as caught:
+            inspect_research_request(bad_order, now=NOW)
+        self.assertEqual(caught.exception.code, ErrorCode.VALIDATION_FAILED)
+
     def test_research_normalizes_dedupes_scores_and_classifies(self) -> None:
         rows = [
             candidate(),
@@ -129,12 +139,25 @@ class ViralResearchInterfaceTests(unittest.TestCase):
             "rights_status", "duplicate_distance",
         })
         self.assertNotIn("raw_payload", result.candidates[0].to_dict())
+        self.assertEqual(set(result.candidates[0].score.inputs), set(result.candidates[0].score.weights))
+        self.assertEqual(set(result.candidates[0].score.inputs), set(result.candidates[0].score.contributions))
+        self.assertAlmostEqual(result.candidates[0].score.total, sum(result.candidates[0].score.contributions.values()))
         states = {item.source_id: item.lifecycle_state for item in result.candidates}
         self.assertEqual(states["video-pii"], "quarantined")
         self.assertEqual(states["video-u"], "metadata_only")
         self.assertEqual(states["video-x"], "expired")
         self.assertEqual(len(sink.records), 4)
         self.assertFalse(hasattr(result, "contract_type"))
+
+    def test_research_dedupes_independent_source_and_content_identities(self) -> None:
+        rows = [
+            candidate(),
+            candidate(source_id="video-1", source_url="https://example.invalid/changed", title="Different content"),
+            candidate(source_id="different", source_url="https://example.invalid/video-1", title="Other content"),
+            candidate(source_id="digest-copy", source_url="https://example.invalid/copy"),
+        ]
+        result = research_viral(valid_request(), provider=FakeProvider(rows), storage=MemorySink(), now=NOW)
+        self.assertEqual([item.source_id for item in result.candidates], ["video-1"])
 
     def test_retry_is_capped_cancellation_is_stable_and_errors_redact(self) -> None:
         provider = FakeProvider([candidate()], failures=1)
@@ -145,6 +168,16 @@ class ViralResearchInterfaceTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, ErrorCode.CANCELLED)
         error = SkillError(ErrorCode.VALIDATION_FAILED, "bad token", details={"api_token": "synthetic-secret-value"})
         self.assertEqual(error.to_dict()["details"]["api_token"], "[REDACTED]")
+
+        class CrashingProvider:
+            def fetch(self, query: str, *, limit: int, timeout_seconds: int):
+                del query, limit, timeout_seconds
+                raise RuntimeError("token=synthetic-secret-value")
+
+        with self.assertRaises(SkillError) as caught:
+            research_viral(valid_request(), provider=CrashingProvider(), storage=MemorySink(), now=NOW)
+        self.assertEqual(caught.exception.code, ErrorCode.PROVIDER_FAILURE)
+        self.assertNotIn("synthetic-secret-value", caught.exception.message)
 
 
 if __name__ == "__main__":

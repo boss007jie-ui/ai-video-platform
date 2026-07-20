@@ -23,6 +23,11 @@ class ErrorCode(str, Enum):
 
 
 _SENSITIVE = re.compile(r"(?i)(token|secret|password|credential|authorization|api[_-]?key)")
+_SENSITIVE_MESSAGE = re.compile(r"(?i)\b(token|secret|password|credential|authorization|api[_-]?key)\s*[:=]\s*\S+")
+
+
+def _sanitize_message(message: str) -> str:
+    return _SENSITIVE_MESSAGE.sub(lambda match: f"{match.group(1)}=[REDACTED]", message)
 
 
 def _redact(details: Mapping[str, Any]) -> dict[str, Any]:
@@ -51,6 +56,7 @@ class SkillError(Exception):
         field_paths: tuple[str, ...] = (),
         details: Mapping[str, Any] | None = None,
     ) -> None:
+        message = _sanitize_message(message)
         super().__init__(message)
         self.code = code
         self.message = message

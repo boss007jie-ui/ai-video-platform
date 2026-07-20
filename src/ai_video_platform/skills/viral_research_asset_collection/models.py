@@ -26,13 +26,25 @@ class ResearchInspection:
 @dataclass(frozen=True, slots=True)
 class ResearchScore:
     total: float
+    inputs: Mapping[str, float]
+    weights: Mapping[str, float]
+    contributions: Mapping[str, float]
     explanation: Mapping[str, float]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "inputs", MappingProxyType(dict(self.inputs)))
+        object.__setattr__(self, "weights", MappingProxyType(dict(self.weights)))
+        object.__setattr__(self, "contributions", MappingProxyType(dict(self.contributions)))
         object.__setattr__(self, "explanation", MappingProxyType(dict(self.explanation)))
 
     def to_dict(self) -> dict[str, object]:
-        return {"total": self.total, "explanation": dict(self.explanation)}
+        return {
+            "total": self.total,
+            "inputs": dict(self.inputs),
+            "weights": dict(self.weights),
+            "contributions": dict(self.contributions),
+            "explanation": dict(self.explanation),
+        }
 
 
 @dataclass(frozen=True, slots=True)

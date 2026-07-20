@@ -49,7 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
     except (SkillError, ValueError, OSError, json.JSONDecodeError) as exc:
         error = exc.to_dict() if isinstance(exc, SkillError) else {
-            "code": "VIRAL_RESEARCH_INPUT_FAILED", "message": str(exc), "retryable": False,
+            "code": "VIRAL_RESEARCH_INPUT_FAILED", "message": "Input could not be read or parsed", "retryable": False,
             "field_paths": [], "details": {},
         }
         print(json.dumps({"status": "ERROR", "error": error}, ensure_ascii=False, sort_keys=True))

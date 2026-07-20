@@ -41,6 +41,27 @@ def _retention_was_extended(existing: Mapping[str, object], incoming: Mapping[st
     return isinstance(old, str) and isinstance(new, str) and new > old
 
 
+def _is_link(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", lambda: False)
+    return path.is_symlink() or bool(is_junction())
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.stem}-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 class InMemoryResearchLibraryAdapter:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, object]] = {}
@@ -80,12 +101,35 @@ class ResearchLibraryAdapter:
     """Filesystem metadata writer; callers supply an explicitly authorized root."""
 
     def __init__(self, root: Path) -> None:
-        self.root = Path(root).resolve()
-        if self.root.is_symlink():
+        supplied_root = Path(os.path.abspath(os.fspath(root)))
+        if supplied_root.exists() and _is_link(supplied_root):
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library root cannot be a symlink")
+        supplied_root.mkdir(parents=True, exist_ok=True)
+        if _is_link(supplied_root):
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library root cannot be a symlink")
+        self.root = supplied_root.resolve()
         for relative in ("metadata", "quarantine", "audit"):
-            (self.root / relative).mkdir(parents=True, exist_ok=True)
+            path = self.root / relative
+            if path.exists() and _is_link(path):
+                raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library subdirectory cannot be a symlink")
+            path.mkdir(parents=True, exist_ok=True)
+            if _is_link(path):
+                raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library subdirectory cannot be a symlink")
         self._memory = InMemoryResearchLibraryAdapter()
+        self._ledger_path = self.root / "audit" / "idempotency.json"
+        self._lifecycle_path = self.root / "audit" / "lifecycle.jsonl"
+        self._assert_audit_path(self._ledger_path)
+        self._assert_audit_path(self._lifecycle_path)
+        if self._ledger_path.exists():
+            try:
+                loaded = json.loads(self._ledger_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise SkillError(ErrorCode.STORAGE_CONFLICT, "Idempotency ledger is unreadable") from exc
+            if not isinstance(loaded, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in loaded.items()):
+                raise SkillError(ErrorCode.STORAGE_CONFLICT, "Idempotency ledger is invalid")
+            self._ledger: dict[str, str] = loaded
+        else:
+            self._ledger = {}
 
     @property
     def audit_log(self) -> list[dict[str, object]]:
@@ -94,30 +138,44 @@ class ResearchLibraryAdapter:
     def _target(self, source_id: str, *, quarantined: bool) -> Path:
         folder = self.root / ("quarantine" if quarantined else "metadata")
         target = folder / f"{source_id}.json"
-        if folder.is_symlink() or target.is_symlink() or target.parent.resolve() != folder.resolve():
+        if _is_link(folder) or (target.exists() and _is_link(target)) or target.parent.resolve() != folder.resolve():
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library path escaped its controlled root")
         return target
 
+    def _assert_audit_path(self, path: Path) -> None:
+        audit = self.root / "audit"
+        if _is_link(audit) or (path.exists() and _is_link(path)) or path.parent.resolve() != audit.resolve():
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library audit path escaped its controlled root")
+
+    def _persist_ledger(self) -> None:
+        self._assert_audit_path(self._ledger_path)
+        _atomic_write(self._ledger_path, _canonical(self._ledger))
+
+    def _append_lifecycle(self, event: Mapping[str, object]) -> None:
+        self._assert_audit_path(self._lifecycle_path)
+        with self._lifecycle_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(dict(event), ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
     def write_record(self, record: Mapping[str, object], *, idempotency_key: str) -> None:
         source_id = _assert_record(record)
-        self._memory.write_record(record, idempotency_key=idempotency_key)
-        target = self._target(source_id, quarantined=record["lifecycle_state"] == "quarantined")
         payload = _canonical(record)
-        if target.exists() and target.read_bytes() == payload:
+        digest = hashlib.sha256(payload).hexdigest()
+        previous = self._ledger.get(idempotency_key)
+        if previous is not None:
+            if previous != digest:
+                raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Idempotency key already has different content")
             return
-        descriptor, temp_name = tempfile.mkstemp(prefix=f".{source_id}-", suffix=".tmp", dir=target.parent)
-        try:
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_name, target)
-        except BaseException:
-            try:
-                os.unlink(temp_name)
-            except FileNotFoundError:
-                pass
-            raise
+        target = self._target(source_id, quarantined=record["lifecycle_state"] == "quarantined")
+        if target.exists() and target.read_bytes() != payload:
+            raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record has different content")
+        self._memory.write_record(record, idempotency_key=idempotency_key)
+        if not target.exists():
+            _atomic_write(target, payload)
+        self._ledger[idempotency_key] = digest
+        self._persist_ledger()
+        self._append_lifecycle({"action": "written", "source_id": source_id, "digest": digest})
 
     def delete_record(self, source_id: str, *, reason: str) -> None:
         if not _SAFE_ID.fullmatch(source_id):
@@ -128,5 +186,8 @@ class ResearchLibraryAdapter:
                 target.unlink()
         self._memory.delete_record(source_id, reason=reason)
         audit_path = self.root / "audit" / "deletions.jsonl"
+        self._assert_audit_path(audit_path)
         with audit_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"source_id": source_id, "reason": reason}, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
