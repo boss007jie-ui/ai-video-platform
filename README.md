@@ -1,17 +1,23 @@
 # AI Video Platform
 
-Clean-room AI Video Platform foundation shared by Hermes and Codex.
+Clean-room AI Video Platform shared by Hermes and Codex.
 
-Current authorization is limited to IR-1 and IR-2:
+Current implementation authority is `FTG-0-20260720-001` for the Production
+Fast Track offline control plane:
 
 - clean platform skeleton and offline guardrails;
 - IR-2 Foundation Registry V1;
 - ContractEnvelope and eleven foundation payload contracts;
 - synthetic fixtures and offline tests.
+- a separate Fast Track Business Artifact Registry;
+- shared audit, budget, operation-ledger and merge ownership controls;
+- Hermes program control and deterministic offline RC evidence tooling.
 
-Product Library, business Skills, Hermes orchestration, Direct Verification,
-legacy adoption, credentials, Provider integrations, and real image/video API
-calls are not authorized.
+Product/Research Library creation, business Skill implementation outside the
+assigned workline, automatic legacy adoption, credentials, Provider smoke,
+network access, media downloads, and real image/video API calls remain
+unauthorized. The platform may produce RC/Gate evidence only; it is not
+declared Production Ready.
 
 Run the offline verification suite with:
 
