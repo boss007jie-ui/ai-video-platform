@@ -115,9 +115,49 @@ class VideoPlanningFailureTests(unittest.TestCase):
             self.interface.validate_video_plan(package)
         self.assertEqual(captured.exception.code, PlanningErrorCode.PROVIDER_SUBMISSION_FORBIDDEN)
 
+    def test_recomputed_hashes_cannot_hide_nested_identity_or_source_replacement(self) -> None:
+        package = self.interface.build_video_plan(planning_request())
+        package["storyboard_master"]["contract_status"] = "REGISTERED"
+        self.recompute_digest(package["storyboard_master"], "master_digest")
+        self.recompute_digest(package, "package_digest")
+        with self.assertRaises(PlanningError) as captured:
+            self.interface.validate_video_plan(package)
+        self.assertEqual(captured.exception.code, PlanningErrorCode.PACKAGE_TAMPERED)
+
+        package = self.interface.build_video_plan(planning_request())
+        package["source"] = {}
+        package["storyboard_master"]["source"] = {}
+        empty_digest = hashlib.sha256(b"{}").hexdigest()
+        package["package_id"] = "vep-" + empty_digest[:20]
+        self.recompute_digest(package["storyboard_master"], "master_digest")
+        self.recompute_digest(package, "package_digest")
+        with self.assertRaises(PlanningError) as captured:
+            self.interface.validate_video_plan(package)
+        self.assertEqual(captured.exception.code, PlanningErrorCode.PACKAGE_INVALID)
+
+    def test_recomputed_hashes_cannot_hide_malformed_mapping(self) -> None:
+        package = self.interface.build_video_plan(planning_request())
+        malformed = [{"shot_id": "", "role": "hero", "asset_id": "asset", "uri": "memory://x", "sha256": "sha256:" + "a" * 64}]
+        package["asset_mapping"] = malformed
+        package["storyboard_master"]["asset_mapping"] = malformed
+        self.recompute_digest(package["storyboard_master"], "master_digest")
+        self.recompute_digest(package, "package_digest")
+        with self.assertRaises(PlanningError) as captured:
+            self.interface.validate_video_plan(package)
+        self.assertEqual(captured.exception.code, PlanningErrorCode.PACKAGE_INVALID)
+
     def test_shot_without_required_assets_is_rejected_before_build(self) -> None:
         request = planning_request()
         request["storyboard"]["shots"][0]["required_asset_roles"] = []
+        self.assert_code(request, PlanningErrorCode.INVALID_INPUT)
+
+    def test_blank_role_and_non_hex_asset_digest_are_rejected(self) -> None:
+        request = planning_request()
+        request["storyboard"]["shots"][0]["required_asset_roles"] = ["   "]
+        self.assert_code(request, PlanningErrorCode.INVALID_INPUT)
+
+        request = planning_request()
+        request["asset_manifest"]["assets"][0]["sha256"] = "sha256:" + "z" * 64
         self.assert_code(request, PlanningErrorCode.INVALID_INPUT)
 
     def test_cli_returns_stable_error(self) -> None:
