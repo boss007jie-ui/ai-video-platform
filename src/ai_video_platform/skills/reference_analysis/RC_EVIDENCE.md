@@ -5,7 +5,7 @@
 - Authorization: `FTG-0-20260720-001`
 - Work item: `FT-02-001`
 - Branch: `ft/codex-02-research-reference`
-- Implementation evidence head: `b664804`
+- Implementation evidence head: `e6b7375`
 - Schema/algorithm version: `1.0.0`
 - Status: `RC_OFFLINE`
 - Production Ready: **not claimed**
@@ -31,7 +31,7 @@ The public interfaces are `analyze_reference` and `compare_result`. They accept 
 |---|---|
 | `python -m unittest -v tests.skills.reference_analysis.test_reference_analysis_interface` | PASS - 6/6, 0.083s |
 | `python -m unittest -v tests.skills.reference_analysis.test_reference_analysis_failures` | PASS - 5 passed, 1 host-capability skip, 0.058s |
-| `python tools\run_offline_tests.py` | BLOCKED SHARED BASELINE - 87 passed, 3 host-capability skips, 1 stale placeholder-only assertion; 91 total, 0.710s |
+| `python tools\run_offline_tests.py` | BLOCKED SHARED BASELINE - 88 passed, 3 host-capability skips, 1 stale placeholder-only assertion; 92 total, 0.819s |
 
 The Reference skip is a Windows environment where symlink creation is unavailable; the test fails closed when link creation is supported. No line-coverage tool or new dependency was introduced, so a coverage percentage is not claimed. The focused Reference acceptance surface contains 12 tests.
 

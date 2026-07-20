@@ -5,7 +5,7 @@
 - Authorization: `FTG-0-20260720-001`
 - Work item: `FT-02-001`
 - Branch: `ft/codex-02-research-reference`
-- Implementation evidence head: `b664804`
+- Implementation evidence head: `e6b7375`
 - Status: `RC_OFFLINE`
 - Production Ready: **not claimed**
 - Provenance: `CLEAN_ROOM_ONLY`; no Legacy source was read, copied, tested or adopted
@@ -21,7 +21,7 @@ The public local interfaces are `inspect_research_request`, `research_viral`, an
 - exact-type allowlisting for built-in fake/rejecting Provider and Download seams before `FTG-P`;
 - request claims before Provider/download work, durable completed replay and conflict rejection;
 - in-memory and filesystem Research Library metadata adapters;
-- atomic no-clobber writes, immutable source IDs, durable audit/index repair, retention and deletion audit;
+- atomic no-clobber writes, per-source cross-process locking across metadata/quarantine, immutable source IDs, durable audit/index repair, retention and deletion audit;
 - traversal, absolute path, symlink/junction/dangling-link guards where the host supports creating links;
 - recursive public-error and bearer/token redaction;
 - independent CLI and `SKILL.md`.
@@ -32,12 +32,12 @@ No Product Library was created or written. Tests use temporary directories only;
 
 | Command | Result |
 |---|---|
-| `python -m unittest -v tests.skills.viral_research_asset_collection.test_viral_research_interface` | PASS - 6/6, 0.009s |
-| `python -m unittest -v tests.skills.viral_research_asset_collection.test_research_library_adapters` | PASS - 7 passed, 2 host-capability skips, 0.307s |
+| `python -m unittest -v tests.skills.viral_research_asset_collection.test_viral_research_interface` | PASS - 6/6, 0.010s |
+| `python -m unittest -v tests.skills.viral_research_asset_collection.test_research_library_adapters` | PASS - 8 passed, 2 host-capability skips, 0.415s |
 | `python -m unittest -v tests.skills.viral_research_asset_collection.test_provider_download_guards` | PASS - 6/6, 0.001s |
-| `python tools\run_offline_tests.py` | BLOCKED SHARED BASELINE - 87 passed, 3 host-capability skips, 1 stale placeholder-only assertion; 91 total, 0.710s |
+| `python tools\run_offline_tests.py` | BLOCKED SHARED BASELINE - 88 passed, 3 host-capability skips, 1 stale placeholder-only assertion; 92 total, 0.819s |
 
-The three skips are Windows environments where symlink creation is unavailable; the implementation rejects links when present. No line-coverage tool or new dependency was introduced, so a coverage percentage is not claimed. The focused Viral acceptance surface contains 21 tests.
+The three skips are Windows environments where symlink creation is unavailable; the implementation rejects links when present. No line-coverage tool or new dependency was introduced, so a coverage percentage is not claimed. The focused Viral acceptance surface contains 22 tests.
 
 ## Security, dependency and operations evidence
 
@@ -47,7 +47,7 @@ The three skips are Windows environments where symlink creation is unavailable; 
 - Runtime dependencies in this Skill: Python standard library and local Skill modules only; no package/lock change.
 - Repository secret scan, Legacy-root guard, network/subprocess guards and rejecting-provider baseline tests pass in the complete suite.
 - Performance evidence is bounded offline unit execution only; no production throughput/SLA claim.
-- Rollback: Codex-00 can omit or revert commits `173657c`, `198be8b`, `d308414`, and `b664804`; the branch creates no production data migration.
+- Rollback: Codex-00 can omit or revert commits `173657c`, `198be8b`, `d308414`, `b664804`, and `e6b7375`; the branch creates no production data migration.
 
 ## Open gates
 
