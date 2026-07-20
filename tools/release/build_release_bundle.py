@@ -23,8 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     evidence = json.loads(Path(args.test_evidence).read_text(encoding="utf-8"))
-    if not isinstance(evidence, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in evidence.items()):
-        raise ValueError("test evidence must be a JSON object of string values")
+    if not isinstance(evidence, dict) or not all(isinstance(key, str) and isinstance(value, dict) for key, value in evidence.items()):
+        raise ValueError("test evidence must be a JSON object of structured check records")
     build_release_bundle(
         project_root=PROJECT_ROOT,
         output_dir=Path(args.output),

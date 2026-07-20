@@ -42,22 +42,28 @@ class MergeGuardTests(unittest.TestCase):
             storyboard = root / "src" / "ai_video_platform" / "skills" / "storyboard"
             storyboard.mkdir(parents=True)
             (storyboard / "bad.py").write_text(
-                "from ai_video_platform.skills.video_generation.domain import job\n",
+                "from ..video_generation.domain import job\n",
                 encoding="utf-8",
             )
             qa = root / "src" / "ai_video_platform" / "skills" / "qa_review"
             qa.mkdir(parents=True)
             (qa / "writer.py").write_text(
                 "from pathlib import Path\n"
-                "Path('AI Video Product Library/item.json').write_text('x')\n",
+                "target = Path('AI Video Product Library/item.json')\n"
+                "target.open('w').write('x')\n",
                 encoding="utf-8",
             )
+            (qa / "network.py").write_text("import requests\n", encoding="utf-8")
 
             violations = scan_runtime_boundaries(root)
 
         self.assertEqual(
             {violation.rule_id for violation in violations},
-            {"CROSS_SKILL_PRIVATE_IMPORT", "PRODUCT_LIBRARY_WRITER_FORBIDDEN"},
+            {
+                "CROSS_SKILL_PRIVATE_IMPORT",
+                "PRODUCT_LIBRARY_WRITER_FORBIDDEN",
+                "NETWORK_CLIENT_IMPORT_FORBIDDEN",
+            },
         )
 
 

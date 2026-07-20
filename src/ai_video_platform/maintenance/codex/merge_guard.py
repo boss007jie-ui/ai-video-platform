@@ -85,6 +85,18 @@ _LEGACY_MARKERS = {
     "ai-video-reference-gap-analyzer",
     "veo3.1-seedance-skill-runtime",
 }
+_SKILL_NAMES = {
+    "product_knowledge",
+    "viral_research_asset_collection",
+    "reference_analysis",
+    "storyboard",
+    "product_image_panel_generation",
+    "storyboard_master_video_planning",
+    "video_generation",
+    "qa_review",
+}
+_NETWORK_IMPORTS = {"requests", "httpx", "urllib.request", "aiohttp"}
+_PROVIDER_IMPORTS = {"openai", "google.generativeai", "replicate", "fal_client", "apify_client"}
 
 
 def _normalize(relative_path: str) -> str:
@@ -145,6 +157,9 @@ def _cross_skill_imports(tree: ast.AST, owner_skill: str | None) -> bool:
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
+            first = node.module.split(".")[0]
+            if node.level >= 2 and first in _SKILL_NAMES and first != owner_skill:
+                return True
             modules.append(node.module)
         for module in modules:
             parts = module.split(".")
@@ -166,12 +181,40 @@ def _write_call_text(tree: ast.AST) -> tuple[str, ...]:
         is_write = isinstance(function, ast.Attribute) and function.attr in {
             "write_text", "write_bytes", "mkdir", "touch", "unlink", "rename", "replace"
         }
+        if isinstance(function, ast.Attribute) and function.attr == "open":
+            mode_nodes = [*node.args[:1], *[item.value for item in node.keywords if item.arg == "mode"]]
+            is_write = any(
+                isinstance(item, ast.Constant) and any(flag in str(item.value) for flag in "wax+")
+                for item in mode_nodes
+            )
+        if isinstance(function, ast.Attribute) and function.attr in {
+            "copy", "copy2", "copyfile", "copytree", "move"
+        }:
+            is_write = True
         if isinstance(function, ast.Name) and function.id == "open":
             mode_nodes = [*node.args[1:2], *[item.value for item in node.keywords if item.arg == "mode"]]
             is_write = any(isinstance(item, ast.Constant) and any(flag in str(item.value) for flag in "wax+") for item in mode_nodes)
         if is_write:
             calls.append(ast.unparse(node))
     return tuple(calls)
+
+
+def _forbidden_runtime_import(tree: ast.AST, relative: Path) -> str | None:
+    if relative.as_posix().endswith("core/guards.py"):
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules = [node.module]
+        else:
+            continue
+        for module in modules:
+            if any(module == root or module.startswith(root + ".") for root in _PROVIDER_IMPORTS):
+                return "PROVIDER_SDK_IMPORT_FORBIDDEN"
+            if any(module == root or module.startswith(root + ".") for root in _NETWORK_IMPORTS):
+                return "NETWORK_CLIENT_IMPORT_FORBIDDEN"
+    return None
 
 
 def scan_runtime_boundaries(project_root: Path) -> tuple[MergeViolation, ...]:
@@ -184,14 +227,16 @@ def scan_runtime_boundaries(project_root: Path) -> tuple[MergeViolation, ...]:
         owner_skill = _skill_for_path(relative)
         if _cross_skill_imports(tree, owner_skill):
             violations.append(MergeViolation("CROSS_SKILL_PRIVATE_IMPORT", relative.as_posix(), "Use public_api or cli"))
+        forbidden_import = _forbidden_runtime_import(tree, relative)
+        if forbidden_import:
+            violations.append(MergeViolation(forbidden_import, relative.as_posix(), "Unreviewed network/provider import detected"))
         lowered = text.lower()
         if path.name != "merge_guard.py" and any(marker.lower() in lowered for marker in _LEGACY_MARKERS):
             violations.append(MergeViolation("LEGACY_RUNTIME_PATH_FORBIDDEN", relative.as_posix(), "Legacy runtime dependency detected"))
-        for call in _write_call_text(tree):
-            if "AI Video Product Library" in call and owner_skill != "product_knowledge":
-                violations.append(MergeViolation("PRODUCT_LIBRARY_WRITER_FORBIDDEN", relative.as_posix(), "Only Product Knowledge may write Product Library"))
-                break
-            if "AI Video Research Library" in call and owner_skill != "viral_research_asset_collection":
-                violations.append(MergeViolation("RESEARCH_LIBRARY_WRITER_FORBIDDEN", relative.as_posix(), "Only Viral Research may write Research Library"))
-                break
+        write_calls = _write_call_text(tree)
+        policy_source = path.name == "merge_guard.py"
+        if not policy_source and write_calls and "ai video product library" in lowered and owner_skill != "product_knowledge":
+            violations.append(MergeViolation("PRODUCT_LIBRARY_WRITER_FORBIDDEN", relative.as_posix(), "Only Product Knowledge may write Product Library"))
+        if not policy_source and write_calls and "ai video research library" in lowered and owner_skill != "viral_research_asset_collection":
+            violations.append(MergeViolation("RESEARCH_LIBRARY_WRITER_FORBIDDEN", relative.as_posix(), "Only Viral Research may write Research Library"))
     return tuple(violations)

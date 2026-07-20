@@ -11,7 +11,7 @@ Fast Track offline control plane:
 - synthetic fixtures and offline tests.
 - a separate Fast Track Business Artifact Registry;
 - shared audit, budget, operation-ledger and merge ownership controls;
-- Hermes program control and deterministic offline RC evidence tooling.
+- deterministic offline RC evidence tooling.
 
 Product/Research Library creation, business Skill implementation outside the
 assigned workline, automatic legacy adoption, credentials, Provider smoke,
