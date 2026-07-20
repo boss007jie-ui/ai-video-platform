@@ -35,8 +35,8 @@ def require_mapping(value: object, field: str) -> dict[str, Any]:
         raise GenerationError(GenerationErrorCode.INVALID_INPUT, f"{field} must be an object", field_paths=(field,))
     try:
         return snapshot(value)
-    except (TypeError, ValueError) as exc:
-        raise GenerationError(GenerationErrorCode.INVALID_INPUT, f"{field} must contain finite JSON values", field_paths=(field,)) from exc
+    except (TypeError, ValueError):
+        raise GenerationError(GenerationErrorCode.INVALID_INPUT, f"{field} must contain finite JSON values", field_paths=(field,)) from None
 
 
 def require_string(mapping: Mapping[str, object], field: str, code: GenerationErrorCode) -> str:
@@ -239,8 +239,8 @@ class GenerationPreflight:
         try:
             decided_at = parse_utc(approval.get("decided_at"), "approval_record.decided_at")
             valid_until = parse_utc(approval.get("valid_until"), "approval_record.valid_until")
-        except (TypeError, ValueError) as exc:
-            raise GenerationError(GenerationErrorCode.APPROVAL_NOT_EFFECTIVE, "Approval timestamps are invalid") from exc
+        except (TypeError, ValueError):
+            raise GenerationError(GenerationErrorCode.APPROVAL_NOT_EFFECTIVE, "Approval timestamps are invalid") from None
         evaluated_at = now.astimezone(timezone.utc)
         if decided_at > evaluated_at or valid_until <= evaluated_at or decided_at >= valid_until:
             raise GenerationError(GenerationErrorCode.APPROVAL_NOT_EFFECTIVE, "ApprovalRecord is expired")

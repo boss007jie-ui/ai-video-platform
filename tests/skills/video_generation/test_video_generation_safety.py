@@ -6,6 +6,7 @@ from io import StringIO
 import json
 from pathlib import Path
 import sys
+import traceback
 import unittest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -49,6 +50,13 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         request = generation_request()
         request["approval_record"]["authority"]["boundary_id"] = "qa-review"
         self.assert_code(request, GenerationErrorCode.APPROVAL_NOT_EFFECTIVE)
+
+        raw_value = "Bearer " + "synthetic" + "G" * 24
+        request = generation_request()
+        request["approval_record"]["decided_at"] = raw_value
+        error = self.assert_code(request, GenerationErrorCode.APPROVAL_NOT_EFFECTIVE)
+        self.assertIsNone(error.__cause__)
+        self.assertNotIn(raw_value, "".join(traceback.format_exception(error)))
 
     def test_budget_and_limits_fail_closed(self) -> None:
         request = generation_request()
@@ -136,6 +144,35 @@ class VideoGenerationSafetyTests(unittest.TestCase):
         package = request["execution_package"]
         master = package["storyboard_master"]
         master["shots"][0]["motion"] = {"kind": "different-shot-motion"}
+        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
+        self.assert_code(request, GenerationErrorCode.PACKAGE_INVALID)
+
+        request = generation_request()
+        package = request["execution_package"]
+        master = package["storyboard_master"]
+        master["shots"][0]["visual_anchor"] = {"angle": "different-shot-anchor"}
+        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
+        self.assert_code(request, GenerationErrorCode.PACKAGE_INVALID)
+
+        request = generation_request()
+        package = request["execution_package"]
+        master = package["storyboard_master"]
+        master["shots"].append({
+            "shot_id": "shot-002", "sequence": 2, "required_asset_roles": ["hero"],
+            "continuity_group": "product", "visual_anchor": {"angle": "side"},
+            "motion": {"kind": "hold"},
+        })
+        master["asset_mapping"].append({
+            "shot_id": "shot-002", "role": "hero", "asset_id": "asset-001",
+            "uri": "memory://asset.png", "sha256": "sha256:" + "3" * 64,
+        })
+        master["motion_plan"].append({"shot_id": "shot-002", "sequence": 2, "motion": {"kind": "hold"}})
+        package["asset_mapping"] = master["asset_mapping"]
+        package["motion_plan"] = master["motion_plan"]
         master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
         package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
         request["approval_record"]["subject_ref"]["digest"] = package["package_digest"]
