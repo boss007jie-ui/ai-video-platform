@@ -151,6 +151,11 @@ def _normalized_candidate(row: Mapping[str, object]) -> dict[str, object]:
     missing = tuple(name for name in required if not isinstance(row.get(name), str) or not str(row.get(name)).strip())
     if missing:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "Provider result is missing normalized fields", field_paths=missing)
+    if not isinstance(row.get("pii_detected"), bool):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "pii_detected must be boolean", field_paths=("pii_detected",))
+    brand_safety = row.get("brand_safety")
+    if not isinstance(brand_safety, (int, float)) or isinstance(brand_safety, bool) or not 0 <= float(brand_safety) <= 1:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "brand_safety must be between zero and one", field_paths=("brand_safety",))
     safe_names = (
         "source_id", "source_url", "title", "description", "published_at", "retrieved_at",
         "views", "likes", "comments", "shares", "comment_quality", "reproducibility",
@@ -226,11 +231,16 @@ def research_viral(
             try:
                 try:
                     fetched = provider.fetch(query, limit=budget["max_results"] - len(rows), timeout_seconds=budget["timeout_seconds"])
+                    normalized_rows: list[dict[str, object]] = []
+                    for provider_row in fetched:
+                        if not isinstance(provider_row, Mapping):
+                            raise SkillError(ErrorCode.VALIDATION_FAILED, "Provider result must be an object")
+                        normalized_rows.append(_normalized_candidate(provider_row))
                 except SkillError:
                     raise
                 except Exception as exc:
                     raise SkillError(ErrorCode.PROVIDER_FAILURE, "Collection Provider failed", retryable=False) from exc
-                rows.extend(_normalized_candidate(row) for row in fetched)
+                rows.extend(normalized_rows)
                 break
             except SkillError as exc:
                 if not exc.retryable or attempts_for_query >= retry_limit or provider_calls >= budget["max_provider_calls"]:
@@ -308,12 +318,15 @@ def collect_reference_assets(
         brand_safety = raw.get("brand_safety")
         if not isinstance(brand_safety, (int, float)) or isinstance(brand_safety, bool) or not 0 <= float(brand_safety) <= 1:
             raise SkillError(ErrorCode.VALIDATION_FAILED, "brand_safety must be between zero and one", field_paths=("brand_safety",))
+        if not isinstance(raw.get("pii_detected"), bool):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "pii_detected must be boolean", field_paths=("pii_detected",))
         expired = _parse_z(expires_at, "expires_at") <= current
         if policy == "FREE_FIRST" and not expired and raw.get("pii_detected") is not True and float(brand_safety) >= 0.5 and rights not in {"PUBLIC", "AUTHORIZED"}:
             raise SkillError(ErrorCode.RIGHTS_FORBIDDEN, "FREE_FIRST requires public or authorized rights")
         normalized.append({
             "raw": raw, "source_id": source_id, "source_url": source_url, "rights": rights,
             "expires_at": expires_at, "expired": expired, "brand_safety": float(brand_safety),
+            "pii_detected": bool(raw["pii_detected"]),
         })
 
     items: list[CollectionItem] = []
@@ -328,7 +341,7 @@ def collect_reference_assets(
         expired = bool(selected_item["expired"])
         if expired:
             state, object_digest = "expired", None
-        elif raw.get("pii_detected") is True or float(selected_item["brand_safety"]) < 0.5:
+        elif bool(selected_item["pii_detected"]) or float(selected_item["brand_safety"]) < 0.5:
             state, object_digest = "quarantined", None
         elif policy == "METADATA_ONLY":
             state, object_digest = "metadata_only", None
@@ -348,7 +361,7 @@ def collect_reference_assets(
             storage.write_record(
                 {
                     "source_id": source_id, "source_url": source_url, "lifecycle_state": state,
-                    "rights_status": rights, "pii_detected": raw.get("pii_detected") is True,
+                    "rights_status": rights, "pii_detected": bool(selected_item["pii_detected"]),
                     "expires_at": expires_at, "retention_until": expires_at,
                     "object_digest": object_digest,
                 },

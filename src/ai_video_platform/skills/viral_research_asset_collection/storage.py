@@ -43,7 +43,19 @@ def _retention_was_extended(existing: Mapping[str, object], incoming: Mapping[st
 
 def _is_link(path: Path) -> bool:
     is_junction = getattr(path, "is_junction", lambda: False)
-    return path.is_symlink() or bool(is_junction())
+    try:
+        return path.is_symlink() or bool(is_junction())
+    except OSError:
+        return True
+
+
+def _assert_no_link_components(path: Path) -> None:
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if _is_link(current):
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library path contains a link or reparse point")
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
@@ -102,6 +114,7 @@ class ResearchLibraryAdapter:
 
     def __init__(self, root: Path) -> None:
         supplied_root = Path(os.path.abspath(os.fspath(root)))
+        _assert_no_link_components(supplied_root)
         if supplied_root.exists() and _is_link(supplied_root):
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library root cannot be a symlink")
         supplied_root.mkdir(parents=True, exist_ok=True)
@@ -117,8 +130,10 @@ class ResearchLibraryAdapter:
                 raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library subdirectory cannot be a symlink")
         self._memory = InMemoryResearchLibraryAdapter()
         self._ledger_path = self.root / "audit" / "idempotency.json"
+        self._audit_index_path = self.root / "audit" / "lifecycle-index.json"
         self._lifecycle_path = self.root / "audit" / "lifecycle.jsonl"
         self._assert_audit_path(self._ledger_path)
+        self._assert_audit_path(self._audit_index_path)
         self._assert_audit_path(self._lifecycle_path)
         if self._ledger_path.exists():
             try:
@@ -130,6 +145,16 @@ class ResearchLibraryAdapter:
             self._ledger: dict[str, str] = loaded
         else:
             self._ledger = {}
+        if self._audit_index_path.exists():
+            try:
+                audit_loaded = json.loads(self._audit_index_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise SkillError(ErrorCode.STORAGE_CONFLICT, "Lifecycle audit index is unreadable") from exc
+            if not isinstance(audit_loaded, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in audit_loaded.items()):
+                raise SkillError(ErrorCode.STORAGE_CONFLICT, "Lifecycle audit index is invalid")
+            self._audit_index: dict[str, str] = audit_loaded
+        else:
+            self._audit_index = {}
 
     @property
     def audit_log(self) -> list[dict[str, object]]:
@@ -138,13 +163,15 @@ class ResearchLibraryAdapter:
     def _target(self, source_id: str, *, quarantined: bool) -> Path:
         folder = self.root / ("quarantine" if quarantined else "metadata")
         target = folder / f"{source_id}.json"
-        if _is_link(folder) or (target.exists() and _is_link(target)) or target.parent.resolve() != folder.resolve():
+        _assert_no_link_components(folder)
+        if _is_link(folder) or _is_link(target) or target.parent.resolve() != folder.resolve():
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library path escaped its controlled root")
         return target
 
     def _assert_audit_path(self, path: Path) -> None:
         audit = self.root / "audit"
-        if _is_link(audit) or (path.exists() and _is_link(path)) or path.parent.resolve() != audit.resolve():
+        _assert_no_link_components(audit)
+        if _is_link(audit) or _is_link(path) or path.parent.resolve() != audit.resolve():
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library audit path escaped its controlled root")
 
     def _persist_ledger(self) -> None:
@@ -158,6 +185,17 @@ class ResearchLibraryAdapter:
             handle.flush()
             os.fsync(handle.fileno())
 
+    def _ensure_lifecycle_event(self, idempotency_key: str, source_id: str, digest: str) -> None:
+        existing = self._audit_index.get(idempotency_key)
+        if existing is not None:
+            if existing != digest:
+                raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Lifecycle audit key has different content")
+            return
+        self._append_lifecycle({"action": "written", "source_id": source_id, "digest": digest, "idempotency_key": idempotency_key})
+        self._audit_index[idempotency_key] = digest
+        self._assert_audit_path(self._audit_index_path)
+        _atomic_write(self._audit_index_path, _canonical(self._audit_index))
+
     def write_record(self, record: Mapping[str, object], *, idempotency_key: str) -> None:
         source_id = _assert_record(record)
         payload = _canonical(record)
@@ -166,6 +204,7 @@ class ResearchLibraryAdapter:
         if previous is not None:
             if previous != digest:
                 raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Idempotency key already has different content")
+            self._ensure_lifecycle_event(idempotency_key, source_id, digest)
             return
         target = self._target(source_id, quarantined=record["lifecycle_state"] == "quarantined")
         if target.exists() and target.read_bytes() != payload:
@@ -173,9 +212,9 @@ class ResearchLibraryAdapter:
         self._memory.write_record(record, idempotency_key=idempotency_key)
         if not target.exists():
             _atomic_write(target, payload)
+        self._ensure_lifecycle_event(idempotency_key, source_id, digest)
         self._ledger[idempotency_key] = digest
         self._persist_ledger()
-        self._append_lifecycle({"action": "written", "source_id": source_id, "digest": digest})
 
     def delete_record(self, source_id: str, *, reason: str) -> None:
         if not _SAFE_ID.fullmatch(source_id):

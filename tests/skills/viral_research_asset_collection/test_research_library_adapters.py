@@ -56,6 +56,12 @@ class ResearchLibraryAdapterTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, ErrorCode.STORAGE_CONFLICT)
             self.assertTrue((root / "audit" / "lifecycle.jsonl").is_file())
             self.assertTrue((root / "audit" / "idempotency.json").is_file())
+            lifecycle_index = root / "audit" / "lifecycle-index.json"
+            self.assertTrue(lifecycle_index.is_file())
+            lifecycle_index.unlink()
+            ResearchLibraryAdapter(root).write_record(RECORD, idempotency_key="write-1")
+            repaired = json.loads(lifecycle_index.read_text(encoding="utf-8"))
+            self.assertIn("write-1", repaired)
 
     def test_filesystem_rejects_symlink_root_when_supported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -69,6 +75,30 @@ class ResearchLibraryAdapterTests(unittest.TestCase):
                 self.skipTest("symlink creation is unavailable")
             with self.assertRaises(SkillError) as caught:
                 ResearchLibraryAdapter(linked)
+            self.assertEqual(caught.exception.code, ErrorCode.PATH_FORBIDDEN)
+
+    def test_filesystem_rejects_symlink_ancestor_and_dangling_audit_target_when_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            actual = base / "actual"
+            actual.mkdir()
+            linked_parent = base / "linked-parent"
+            try:
+                os.symlink(actual, linked_parent, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlink creation is unavailable")
+            with self.assertRaises(SkillError) as caught:
+                ResearchLibraryAdapter(linked_parent / "new-root")
+            self.assertEqual(caught.exception.code, ErrorCode.PATH_FORBIDDEN)
+
+            root = base / "root"
+            adapter = ResearchLibraryAdapter(root)
+            outside = base / "outside-lifecycle.jsonl"
+            lifecycle = root / "audit" / "lifecycle.jsonl"
+            lifecycle.unlink(missing_ok=True)
+            os.symlink(outside, lifecycle)
+            with self.assertRaises(SkillError) as caught:
+                adapter.write_record(RECORD, idempotency_key="dangling")
             self.assertEqual(caught.exception.code, ErrorCode.PATH_FORBIDDEN)
 
     def test_quarantine_is_separate_and_retention_is_not_extended(self) -> None:

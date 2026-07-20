@@ -168,6 +168,14 @@ class ViralResearchInterfaceTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, ErrorCode.CANCELLED)
         error = SkillError(ErrorCode.VALIDATION_FAILED, "bad token", details={"api_token": "synthetic-secret-value"})
         self.assertEqual(error.to_dict()["details"]["api_token"], "[REDACTED]")
+        nested = SkillError(
+            ErrorCode.PROVIDER_FAILURE,
+            "Authorization Bearer synthetic-bearer-value",
+            details={"provider_error": "token synthetic-token-value", "nested": {"message": "Bearer nested-bearer-value"}},
+        ).to_dict()
+        self.assertNotIn("synthetic-bearer-value", nested["message"])
+        self.assertNotIn("synthetic-token-value", nested["details"]["provider_error"])
+        self.assertNotIn("nested-bearer-value", nested["details"]["nested"]["message"])
 
         class CrashingProvider:
             def fetch(self, query: str, *, limit: int, timeout_seconds: int):
@@ -178,6 +186,24 @@ class ViralResearchInterfaceTests(unittest.TestCase):
             research_viral(valid_request(), provider=CrashingProvider(), storage=MemorySink(), now=NOW)
         self.assertEqual(caught.exception.code, ErrorCode.PROVIDER_FAILURE)
         self.assertNotIn("synthetic-secret-value", caught.exception.message)
+
+        class FailingIteratorProvider:
+            def fetch(self, query: str, *, limit: int, timeout_seconds: int):
+                del query, limit, timeout_seconds
+                def rows():
+                    yield candidate()
+                    raise RuntimeError("Bearer iterator-secret")
+                return rows()
+
+        sink = MemorySink()
+        with self.assertRaises(SkillError) as caught:
+            research_viral(valid_request(), provider=FailingIteratorProvider(), storage=sink, now=NOW)
+        self.assertEqual(caught.exception.code, ErrorCode.PROVIDER_FAILURE)
+        self.assertEqual(sink.records, [])
+
+        with self.assertRaises(SkillError) as caught:
+            research_viral(valid_request(), provider=FakeProvider([candidate(pii_detected="false")]), storage=MemorySink(), now=NOW)
+        self.assertEqual(caught.exception.code, ErrorCode.VALIDATION_FAILED)
 
 
 if __name__ == "__main__":

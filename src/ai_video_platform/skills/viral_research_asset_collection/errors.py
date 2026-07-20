@@ -23,10 +23,12 @@ class ErrorCode(str, Enum):
 
 
 _SENSITIVE = re.compile(r"(?i)(token|secret|password|credential|authorization|api[_-]?key)")
-_SENSITIVE_MESSAGE = re.compile(r"(?i)\b(token|secret|password|credential|authorization|api[_-]?key)\s*[:=]\s*\S+")
+_BEARER = re.compile(r"(?i)\bbearer\s+\S+")
+_SENSITIVE_MESSAGE = re.compile(r"(?i)\b(token|secret|password|credential|authorization|api[_-]?key)\s*(?:[:=]\s*|\s+)\S+")
 
 
 def _sanitize_message(message: str) -> str:
+    message = _BEARER.sub("Bearer [REDACTED]", message)
     return _SENSITIVE_MESSAGE.sub(lambda match: f"{match.group(1)}=[REDACTED]", message)
 
 
@@ -37,7 +39,9 @@ def _redact(details: Mapping[str, Any]) -> dict[str, Any]:
             result[str(key)] = "[REDACTED]"
         elif isinstance(value, Mapping):
             result[str(key)] = _redact(value)
-        elif value is None or isinstance(value, (str, int, float, bool)):
+        elif isinstance(value, str):
+            result[str(key)] = _sanitize_message(value)
+        elif value is None or isinstance(value, (int, float, bool)):
             result[str(key)] = value
         else:
             result[str(key)] = f"<{type(value).__name__}>"

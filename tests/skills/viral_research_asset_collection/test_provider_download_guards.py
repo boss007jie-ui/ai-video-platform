@@ -75,6 +75,15 @@ class ProviderDownloadGuardTests(unittest.TestCase):
         self.assertEqual(result.items[0].lifecycle_state, "quarantined")
         self.assertEqual(downloader.attempt_count, 0)
 
+        invalid_pii = {**valid, "source_id": "bad-pii", "pii_detected": "false"}
+        with self.assertRaises(SkillError) as caught:
+            collect_reference_assets(
+                {"selected_candidates": [invalid_pii], "download_policy": "FREE_FIRST", "idempotency_key": "bad-pii"},
+                downloader=downloader, storage=storage, now=NOW,
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.VALIDATION_FAILED)
+        self.assertEqual(downloader.attempt_count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
