@@ -24,20 +24,27 @@ other side-effect seam may be invoked.
 
 Video Generation does not rewrite storyboards, import Planning implementation,
 write Product Library, read Legacy, inspect credential values, access a network,
-download media, or create a formal business identity. Draft business artifacts
+download remote media or write media files, or create a formal business identity. Draft business artifacts
 remain `DRAFT_UNREGISTERED` pending the Codex-00 Business Artifact Registry gate.
 
 ## Public command and side effects
 
 ```text
 python -m ai_video_platform.skills.video_generation.cli inspect-video-request <file|->
+python -m ai_video_platform.skills.video_generation.cli submit-video <file|->
+python -m ai_video_platform.skills.video_generation.cli poll-video <job-file|->
+python -m ai_video_platform.skills.video_generation.cli cancel-video <job-file|->
+python -m ai_video_platform.skills.video_generation.cli download-video <job-file|->
+python -m ai_video_platform.skills.video_generation.cli recover-video <job-file|->
 ```
 
 The CLI reads exactly the named local JSON file or stdin and writes one JSON result
 to stdout. Exit `0` is ready; exit `2` is a fail-closed rejection. Preflight has no
 Provider or filesystem write side effect. Submit/poll/cancel/download/recovery are
 available only through an explicitly injected fake/rejecting/network-blocked Python
-adapter plus snapshotting execution ledger; the CLI cannot silently select one.
+adapter plus snapshotting execution ledger. `run_cli` accepts that explicit context
+for offline orchestration; the module CLI never silently selects an adapter and thus
+fails closed for execution commands unless the host supplies one.
 
 Stable errors cover package identity/version/digest, ApprovalRecord effectiveness
 and subject binding, budgets, Provider binding, opaque credential reference, and
@@ -46,7 +53,8 @@ Corrected inputs may be retried; deterministic request hashing supplies the basi
 for exact replay and mismatch handling in the execution ledger.
 
 The ledger atomically reserves request and concurrency budget, snapshots every
-read/write, and records deterministic states: `submitting`, `submitted`, `running`,
+read/write, retains transition history, exposes read-only recovery, and records
+deterministic states: `submitting`, `submitted`, `polling`,
 `succeeded`, `failed`, `cancelled`, `timed_out`, and `downloaded`. Download verifies
 the in-memory artifact digest and emits only a `DRAFT_UNREGISTERED`
 AssetManifestRequest; it never writes Product Library.

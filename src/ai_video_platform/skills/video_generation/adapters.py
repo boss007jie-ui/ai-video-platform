@@ -28,15 +28,27 @@ class FakeVideoProviderAdapter:
         *,
         poll_states: tuple[str, ...] = ("succeeded",),
         submit_failures: int = 0,
+        poll_failures: int = 0,
         corrupt_download: bool = False,
+        artifact_content: bytes = b"synthetic-video",
+        artifact_content_type: str = "video/mp4",
+        artifact_uri: str | None = None,
     ) -> None:
         self._poll_states = poll_states
         self._remaining_submit_failures = submit_failures
+        self._remaining_poll_failures = poll_failures
         self._corrupt_download = corrupt_download
+        self._artifact_content = bytes(artifact_content)
+        self._artifact_content_type = artifact_content_type
+        self._artifact_uri = artifact_uri
         self._jobs: dict[str, dict[str, object]] = {}
         self.submit_count = 0
         self.network_calls = 0
         self.last_submission: dict[str, object] | None = None
+
+    @property
+    def job_count(self) -> int:
+        return len(self._jobs)
 
     def submit(self, request: Mapping[str, object]) -> str:
         self.submit_count += 1
@@ -44,13 +56,16 @@ class FakeVideoProviderAdapter:
         if self._remaining_submit_failures:
             self._remaining_submit_failures -= 1
             raise AdapterFailure("TRANSIENT", "Synthetic transient submit failure", retryable=True)
-        request_hash = str(request["request_hash"])
-        provider_job_id = "fake-" + request_hash.removeprefix("sha256:")[:20]
+        identity = str(request["request_hash"]) + ":" + str(request["idempotency_key"])
+        provider_job_id = "fake-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
         self._jobs.setdefault(provider_job_id, {"poll_index": 0, "cancelled": False})
         return provider_job_id
 
     def poll(self, provider_job_id: str) -> Mapping[str, object]:
         job = self._job(provider_job_id)
+        if self._remaining_poll_failures:
+            self._remaining_poll_failures -= 1
+            raise AdapterFailure("TRANSIENT", "Synthetic transient poll failure", retryable=True)
         if job["cancelled"]:
             return {"state": "cancelled"}
         index = int(job["poll_index"])
@@ -63,11 +78,16 @@ class FakeVideoProviderAdapter:
 
     def download(self, provider_job_id: str) -> Mapping[str, object]:
         self._job(provider_job_id)
-        content = ("synthetic-video:" + provider_job_id).encode("utf-8")
+        content = self._artifact_content
         digest = "sha256:" + hashlib.sha256(content).hexdigest()
         if self._corrupt_download:
             digest = "sha256:" + "0" * 64
-        return {"content": content, "sha256": digest, "uri": "memory://" + provider_job_id + ".mp4"}
+        return {
+            "content": content,
+            "sha256": digest,
+            "uri": self._artifact_uri or "memory://" + provider_job_id + ".mp4",
+            "content_type": self._artifact_content_type,
+        }
 
     def _job(self, provider_job_id: str) -> dict[str, object]:
         try:

@@ -20,11 +20,32 @@ class _JsonArgumentParser(argparse.ArgumentParser):
         raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Invalid CLI arguments", field_paths=("arguments",))
 
 
-def run_cli(command: str, document: Mapping[str, object], *, now: datetime | None = None) -> dict[str, object]:
-    if command != "inspect-video-request":
-        return {"ok": False, "exit_code": 2, "error": GenerationError(GenerationErrorCode.INVALID_INPUT, "Unsupported command").to_dict()}
+def run_cli(
+    command: str,
+    document: Mapping[str, object],
+    *,
+    now: datetime | None = None,
+    interface: VideoGenerationInterface | None = None,
+) -> dict[str, object]:
+    service = interface or VideoGenerationInterface()
     try:
-        result = VideoGenerationInterface().inspect_video_request(document, now=now)
+        if command == "inspect-video-request":
+            result = service.inspect_video_request(document, now=now)
+        elif command == "submit-video":
+            result = service.submit_video(document, now=now)
+        elif command in {"poll-video", "cancel-video", "download-video", "recover-video"}:
+            job_id = document.get("job_id")
+            if not isinstance(job_id, str) or not job_id:
+                raise GenerationError(GenerationErrorCode.INVALID_INPUT, "job_id is required", field_paths=("job_id",))
+            operation = {
+                "poll-video": service.poll_video,
+                "cancel-video": service.cancel_video,
+                "download-video": service.download_video,
+                "recover-video": service.recover_video,
+            }[command]
+            result = operation(job_id, now=now)
+        else:
+            raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Unsupported command")
         return {"ok": True, "exit_code": 0, "result": result}
     except GenerationError as error:
         return {"ok": False, "exit_code": 2, "error": error.to_dict()}
@@ -32,7 +53,10 @@ def run_cli(command: str, document: Mapping[str, object], *, now: datetime | Non
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _JsonArgumentParser(prog="video-generation")
-    parser.add_argument("command", choices=("inspect-video-request",))
+    parser.add_argument("command", choices=(
+        "inspect-video-request", "submit-video", "poll-video", "cancel-video",
+        "download-video", "recover-video",
+    ))
     parser.add_argument("input", help="UTF-8 JSON request file or '-' for stdin")
     try:
         args = parser.parse_args(argv)

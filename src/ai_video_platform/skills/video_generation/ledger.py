@@ -9,7 +9,7 @@ from .errors import GenerationError, GenerationErrorCode
 from .models import snapshot
 
 
-ACTIVE_STATES = {"submitting", "submitted", "running"}
+ACTIVE_STATES = {"submitting", "submitted", "polling"}
 
 
 class InMemoryVideoExecutionLedger:
@@ -18,61 +18,41 @@ class InMemoryVideoExecutionLedger:
         self._idempotency: dict[str, str] = {}
         self._lock = RLock()
 
-    def idempotent(self, key: str, request_hash: str) -> dict[str, object] | None:
-        with self._lock:
-            job_id = self._idempotency.get(key)
-            if job_id is None:
-                return None
-            record = self._records[job_id]
-            if record["request_hash"] != request_hash:
-                raise GenerationError(
-                    GenerationErrorCode.IDEMPOTENCY_MISMATCH,
-                    "Idempotency key was already used for a different request",
-                )
-            return snapshot(record)
-
-    def enforce_limits(self, *, max_requests: int, max_concurrency: int) -> None:
-        with self._lock:
-            if len(self._records) >= max_requests:
-                raise GenerationError(GenerationErrorCode.REQUEST_LIMIT, "Approved request limit is exhausted")
-            active = sum(record["state"] in ACTIVE_STATES for record in self._records.values())
-            if active >= max_concurrency:
-                raise GenerationError(GenerationErrorCode.CONCURRENCY_LIMIT, "Approved concurrency limit is exhausted")
-
     def reserve(
         self,
         record: Mapping[str, object],
         *,
         max_requests: int,
         max_concurrency: int,
-    ) -> dict[str, object]:
+    ) -> tuple[dict[str, object], bool]:
         """Atomically enforce both limits and reserve idempotency/job identity."""
 
         value = snapshot(record)
+        value["history"] = [{"state": value["state"], "at": value["submitted_at"]}]
         job_id = str(value["job_id"])
         key = str(value["idempotency_key"])
         with self._lock:
-            if key in self._idempotency or job_id in self._records:
+            existing_job_id = self._idempotency.get(key)
+            if existing_job_id is not None:
+                existing = self._records[existing_job_id]
+                if existing["request_hash"] != value["request_hash"]:
+                    raise GenerationError(
+                        GenerationErrorCode.IDEMPOTENCY_MISMATCH,
+                        "Idempotency key was already used for a different request",
+                    )
+                return snapshot(existing), False
+            if job_id in self._records:
                 raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Execution identity already exists")
-            if len(self._records) >= max_requests:
+            request_limits = [max_requests, *(int(item["budget"]["max_requests"]) for item in self._records.values())]
+            if len(self._records) >= min(request_limits):
                 raise GenerationError(GenerationErrorCode.REQUEST_LIMIT, "Approved request limit is exhausted")
-            active = sum(item["state"] in ACTIVE_STATES for item in self._records.values())
-            if active >= max_concurrency:
+            active_records = [item for item in self._records.values() if item["state"] in ACTIVE_STATES]
+            concurrency_limits = [max_concurrency, *(int(item["budget"]["max_concurrency"]) for item in active_records)]
+            if len(active_records) >= min(concurrency_limits):
                 raise GenerationError(GenerationErrorCode.CONCURRENCY_LIMIT, "Approved concurrency limit is exhausted")
             self._records[job_id] = value
             self._idempotency[key] = job_id
-            return snapshot(value)
-
-    def create(self, record: Mapping[str, object]) -> dict[str, object]:
-        value = snapshot(record)
-        job_id = str(value["job_id"])
-        key = str(value["idempotency_key"])
-        with self._lock:
-            if job_id in self._records or key in self._idempotency:
-                raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Execution identity already exists")
-            self._records[job_id] = value
-            self._idempotency[key] = job_id
-            return snapshot(value)
+            return snapshot(value), True
 
     def get(self, job_id: str) -> dict[str, object]:
         with self._lock:
@@ -81,10 +61,23 @@ class InMemoryVideoExecutionLedger:
             except KeyError:
                 raise GenerationError(GenerationErrorCode.JOB_NOT_FOUND, "Video execution job was not found") from None
 
-    def update(self, job_id: str, **changes: object) -> dict[str, object]:
+    def active_count(self) -> int:
+        with self._lock:
+            return sum(record["state"] in ACTIVE_STATES for record in self._records.values())
+
+    def recoverable(self) -> list[dict[str, object]]:
+        with self._lock:
+            return [snapshot(record) for record in self._records.values() if record["state"] in ACTIVE_STATES]
+
+    def transition(self, job_id: str, *, expected_states: set[str], state: str, at: str, **changes: object) -> dict[str, object]:
         safe_changes = snapshot(changes)
         with self._lock:
             if job_id not in self._records:
                 raise GenerationError(GenerationErrorCode.JOB_NOT_FOUND, "Video execution job was not found")
-            self._records[job_id].update(safe_changes)
-            return snapshot(self._records[job_id])
+            record = self._records[job_id]
+            if record["state"] not in expected_states:
+                raise GenerationError(GenerationErrorCode.INVALID_TRANSITION, "Video execution state transition is invalid")
+            record.update(safe_changes)
+            record["state"] = state
+            record["history"].append({"state": state, "at": at})
+            return snapshot(record)
