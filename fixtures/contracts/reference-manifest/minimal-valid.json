@@ -1,0 +1,25 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.reference-manifest",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "reference-manifest-minimal-valid-v1",
+    "fixture_kind": "minimal-valid",
+    "payload_digest": "sha256:32342e16c979183c3ed659ff2913d85a94f42e37abd6b67f18a075403b1a1f32",
+    "producer_agent": "skill",
+    "producer_component_id": "reference-analysis",
+    "purpose": "Foundation Registry V1 minimal-valid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "created_at": "2026-07-20T00:00:00Z",
+    "reference_manifest_id": "reference-manifest-synthetic-001",
+    "references": [],
+    "revision": 1,
+    "task_id": "task-synthetic-001"
+  }
+}

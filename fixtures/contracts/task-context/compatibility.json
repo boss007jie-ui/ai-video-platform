@@ -1,0 +1,28 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.task-context",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "task-context-compatibility-v1",
+    "fixture_kind": "compatibility",
+    "payload_digest": "sha256:db6990a95e4366c037b95bab5ae20de7537493605d9fe5e15a377cd680742b34",
+    "producer_agent": "hermes",
+    "producer_component_id": "hermes",
+    "purpose": "Foundation Registry V1 compatibility fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "active_skill_id": "storyboard",
+    "bindings": {},
+    "context_revision": 1,
+    "input_contract_refs": [],
+    "state": "ready",
+    "task_id": "task-synthetic-001",
+    "task_spec_ref": "contract-synthetic-task-spec",
+    "updated_at": "2026-07-20T00:00:00Z"
+  }
+}

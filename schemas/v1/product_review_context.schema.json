@@ -1,0 +1,52 @@
+{
+  "$id": "avp.contract.product-review-context",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "blocking_task_ids": {
+      "type": "array"
+    },
+    "context_revision": {
+      "type": "integer"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "recommended_resolution": {},
+    "related_feedback_refs": {
+      "type": "array"
+    },
+    "review_context_id": {
+      "type": "string"
+    },
+    "review_items": {
+      "type": "array"
+    },
+    "sku_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "review_context_id",
+    "context_revision",
+    "product_id",
+    "review_items",
+    "generated_at"
+  ],
+  "title": "ProductReviewContext",
+  "type": "object",
+  "x-avp-authorized-consumers": [
+    "hermes",
+    "qa-review",
+    "authorized-human-review-interface",
+    "codex-maintenance"
+  ],
+  "x-avp-authorized-producers": [
+    "product-knowledge"
+  ],
+  "x-avp-registry": "IR-2 Foundation Registry V1",
+  "x-avp-version": "1.0.0"
+}

@@ -1,0 +1,28 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.reference-manifest",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "reference-manifest-full-valid-v1",
+    "fixture_kind": "full-valid",
+    "payload_digest": "sha256:56f3943f4d6145b689e509937cb3624c4130249b1141ace67de7a802ac835919",
+    "producer_agent": "skill",
+    "producer_component_id": "reference-analysis",
+    "purpose": "Foundation Registry V1 full-valid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "created_at": "2026-07-20T00:00:00Z",
+    "extensions": {
+      "fixture_note": "synthetic-full"
+    },
+    "reference_manifest_id": "reference-manifest-synthetic-001",
+    "references": [],
+    "revision": 1,
+    "task_id": "task-synthetic-001"
+  }
+}

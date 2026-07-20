@@ -1,0 +1,29 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.asset-manifest",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "asset-manifest-full-valid-v1",
+    "fixture_kind": "full-valid",
+    "payload_digest": "sha256:7cc18543a2ae2dec2bfda50cc04bf7ca361e7ba8843448241fb5ab4fa5101efd",
+    "producer_agent": "skill",
+    "producer_component_id": "storyboard",
+    "purpose": "Foundation Registry V1 full-valid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "assets": [],
+    "created_at": "2026-07-20T00:00:00Z",
+    "extensions": {
+      "fixture_note": "synthetic-full"
+    },
+    "manifest_id": "asset-manifest-synthetic-001",
+    "manifest_revision": 1,
+    "owner_id": "task-synthetic-001",
+    "owner_type": "task"
+  }
+}

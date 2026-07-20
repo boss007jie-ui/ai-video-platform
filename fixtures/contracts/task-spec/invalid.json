@@ -1,0 +1,31 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.task-spec",
+    "expected_error": "CONTRACT_VALIDATION_FAILED",
+    "expected_result": "invalid",
+    "fixture_id": "task-spec-invalid-v1",
+    "fixture_kind": "invalid",
+    "payload_digest": "sha256:5cf826506e7f69a25be1ca8c9c7b601b161414658e60b4e85069fbfe222c511a",
+    "producer_agent": "human",
+    "producer_component_id": "authorized-direct-cli-caller",
+    "purpose": "Foundation Registry V1 invalid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "created_at": "2026-07-20T00:00:00Z",
+    "created_by": "human:test",
+    "input_refs": [],
+    "objective": "Produce a synthetic contract fixture",
+    "requested_outputs": [
+      "synthetic-output"
+    ],
+    "requested_skills": [
+      "storyboard"
+    ],
+    "task_type": "single-skill"
+  }
+}

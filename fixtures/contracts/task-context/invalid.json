@@ -1,0 +1,27 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.task-context",
+    "expected_error": "CONTRACT_VALIDATION_FAILED",
+    "expected_result": "invalid",
+    "fixture_id": "task-context-invalid-v1",
+    "fixture_kind": "invalid",
+    "payload_digest": "sha256:e695406aa511af5df84ebea409a871203794e791d3121c966786ecd0ab09b532",
+    "producer_agent": "hermes",
+    "producer_component_id": "hermes",
+    "purpose": "Foundation Registry V1 invalid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "active_skill_id": "storyboard",
+    "bindings": {},
+    "context_revision": 1,
+    "input_contract_refs": [],
+    "state": "ready",
+    "task_spec_ref": "contract-synthetic-task-spec",
+    "updated_at": "2026-07-20T00:00:00Z"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.skill-execution-event",
+    "expected_error": "CONTRACT_VALIDATION_FAILED",
+    "expected_result": "invalid",
+    "fixture_id": "skill-execution-event-invalid-v1",
+    "fixture_kind": "invalid",
+    "payload_digest": "sha256:e7a4f7f0bf1fbdc32837415eb1ec334a9c1603306b44f550efd0d5548d58f479",
+    "producer_agent": "skill",
+    "producer_component_id": "storyboard",
+    "purpose": "Foundation Registry V1 invalid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "event_type": "accepted",
+    "input_contract_refs": [],
+    "occurred_at": "2026-07-20T00:00:00Z",
+    "sequence": 1,
+    "skill_id": "storyboard",
+    "status": "accepted",
+    "task_id": "task-synthetic-001"
+  }
+}

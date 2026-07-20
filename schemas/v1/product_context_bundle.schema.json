@@ -1,0 +1,87 @@
+{
+  "$id": "avp.contract.product-context-bundle",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "approved_asset_refs": {
+      "type": "array"
+    },
+    "bundle_id": {
+      "type": "string"
+    },
+    "bundle_revision": {
+      "type": "integer"
+    },
+    "category_ids": {
+      "type": "array"
+    },
+    "dimensions": {
+      "type": "object"
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "facts": {
+      "type": "array"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "known_error_refs": {
+      "type": "array"
+    },
+    "packaging": {
+      "type": "object"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "rule_refs": {
+      "type": "array"
+    },
+    "sku_id": {
+      "type": "string"
+    },
+    "source_evidence": {
+      "type": "array"
+    },
+    "successful_pattern_refs": {
+      "type": "array"
+    },
+    "visual_constraints": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "bundle_id",
+    "bundle_revision",
+    "product_id",
+    "purpose",
+    "facts",
+    "approved_asset_refs",
+    "rule_refs",
+    "known_error_refs",
+    "successful_pattern_refs",
+    "source_evidence",
+    "generated_at"
+  ],
+  "title": "ProductContextBundle",
+  "type": "object",
+  "x-avp-authorized-consumers": [
+    "reference-analysis",
+    "storyboard",
+    "product-image-panel-generation",
+    "storyboard-master-video-planning",
+    "video-generation",
+    "qa-review",
+    "hermes"
+  ],
+  "x-avp-authorized-producers": [
+    "product-knowledge"
+  ],
+  "x-avp-registry": "IR-2 Foundation Registry V1",
+  "x-avp-version": "1.0.0"
+}

@@ -1,0 +1,69 @@
+{
+  "$id": "avp.contract.review-decision",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "conditions": {},
+    "criteria_results": {
+      "type": "array"
+    },
+    "decided_at": {
+      "type": "string"
+    },
+    "decided_by": {
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "approve",
+        "approve_with_conditions",
+        "reject",
+        "request_changes",
+        "defer"
+      ],
+      "type": "string"
+    },
+    "evidence_refs": {
+      "type": "array"
+    },
+    "issue_refs": {
+      "type": "array"
+    },
+    "product_review_item_refs": {
+      "type": "array"
+    },
+    "review_decision_id": {
+      "type": "string"
+    },
+    "subject_ref": {
+      "type": "object"
+    },
+    "supersedes_decision_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "review_decision_id",
+    "subject_ref",
+    "decision",
+    "decided_by",
+    "decided_at",
+    "criteria_results",
+    "evidence_refs"
+  ],
+  "title": "ReviewDecision",
+  "type": "object",
+  "x-avp-authorized-consumers": [
+    "hermes",
+    "subject-owning-skill",
+    "product-knowledge",
+    "codex-maintenance"
+  ],
+  "x-avp-authorized-producers": [
+    "qa-review",
+    "hermes",
+    "authorized-human-review-interface"
+  ],
+  "x-avp-registry": "IR-2 Foundation Registry V1",
+  "x-avp-version": "1.0.0"
+}

@@ -1,0 +1,86 @@
+{
+  "$id": "avp.contract.feedback-event",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "asset_refs": {
+      "type": "array"
+    },
+    "bindings": {
+      "type": "object"
+    },
+    "evidence_refs": {
+      "type": "array"
+    },
+    "feedback_id": {
+      "type": "string"
+    },
+    "feedback_type": {
+      "type": "string"
+    },
+    "observed_at": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "reference_refs": {
+      "type": "array"
+    },
+    "rule_scope": {
+      "type": "string"
+    },
+    "scope_key": {
+      "type": "object"
+    },
+    "severity": {
+      "type": "string"
+    },
+    "sku_id": {
+      "type": "string"
+    },
+    "source_skill_id": {
+      "type": "string"
+    },
+    "statement": {
+      "type": "string"
+    },
+    "submitted_by": {
+      "type": "string"
+    },
+    "suggested_rule": {
+      "type": "object"
+    },
+    "supersedes_feedback_id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "feedback_id",
+    "task_id",
+    "source_skill_id",
+    "feedback_type",
+    "statement",
+    "evidence_refs",
+    "rule_scope",
+    "scope_key",
+    "bindings",
+    "observed_at",
+    "submitted_by"
+  ],
+  "title": "FeedbackEvent",
+  "type": "object",
+  "x-avp-authorized-consumers": [
+    "product-knowledge"
+  ],
+  "x-avp-authorized-producers": [
+    "non-product-knowledge-skill",
+    "hermes",
+    "authorized-human-review-interface"
+  ],
+  "x-avp-registry": "IR-2 Foundation Registry V1",
+  "x-avp-version": "1.0.0"
+}

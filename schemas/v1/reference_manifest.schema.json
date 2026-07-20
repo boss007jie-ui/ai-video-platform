@@ -1,0 +1,54 @@
+{
+  "$id": "avp.contract.reference-manifest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "analysis_contract_refs": {
+      "type": "array"
+    },
+    "comparison_target_refs": {
+      "type": "array"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "extraction_ranges": {
+      "type": "array"
+    },
+    "reference_manifest_id": {
+      "type": "string"
+    },
+    "references": {
+      "type": "array"
+    },
+    "revision": {
+      "type": "integer"
+    },
+    "rights_assertion": {},
+    "task_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "reference_manifest_id",
+    "revision",
+    "task_id",
+    "references",
+    "created_at"
+  ],
+  "title": "ReferenceManifest",
+  "type": "object",
+  "x-avp-authorized-consumers": [
+    "storyboard",
+    "product-image-panel-generation",
+    "storyboard-master-video-planning",
+    "video-generation",
+    "qa-review"
+  ],
+  "x-avp-authorized-producers": [
+    "reference-analysis",
+    "hermes"
+  ],
+  "x-avp-registry": "IR-2 Foundation Registry V1",
+  "x-avp-version": "1.0.0"
+}

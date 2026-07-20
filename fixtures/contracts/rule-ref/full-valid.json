@@ -1,0 +1,33 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.rule-ref",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "rule-ref-full-valid-v1",
+    "fixture_kind": "full-valid",
+    "payload_digest": "sha256:1ca131dae2d334442ef2caccdf2811cfe910c14076e6315d8439355702ea6202",
+    "producer_agent": "skill",
+    "producer_component_id": "product-knowledge",
+    "purpose": "Foundation Registry V1 full-valid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "bindings": {},
+    "content_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "effective_period": {},
+    "extensions": {
+      "fixture_note": "synthetic-full"
+    },
+    "rule_id": "rule-synthetic-001",
+    "rule_scope": "product",
+    "rule_version": "1.0.0",
+    "scope_key": {
+      "product_id": "product-synthetic-001"
+    },
+    "status": "approved"
+  }
+}

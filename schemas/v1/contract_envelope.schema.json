@@ -1,0 +1,116 @@
+{
+  "$id": "avp.schema.contract-envelope",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "causation_id": {
+      "type": "string"
+    },
+    "contract_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "contract_type": {
+      "enum": [
+        "avp.contract.task-spec",
+        "avp.contract.task-context",
+        "avp.contract.skill-execution-event",
+        "avp.contract.product-context-bundle",
+        "avp.contract.product-review-context",
+        "avp.contract.feedback-event",
+        "avp.contract.rule-ref",
+        "avp.contract.asset-manifest",
+        "avp.contract.reference-manifest",
+        "avp.contract.review-decision",
+        "avp.contract.approval-record"
+      ]
+    },
+    "correlation_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "extensions": {
+      "type": "object"
+    },
+    "idempotency_key": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "payload_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "producer": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "enum": [
+            "hermes",
+            "codex",
+            "catpaw",
+            "skill",
+            "system",
+            "human"
+          ]
+        },
+        "component_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "component_version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "component_id",
+        "component_version"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$",
+      "type": "string"
+    },
+    "source_contract_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "source_hashes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "trace_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "contract_type",
+    "schema_version",
+    "contract_id",
+    "created_at",
+    "producer",
+    "correlation_id",
+    "idempotency_key",
+    "payload_digest",
+    "payload"
+  ],
+  "title": "ContractEnvelope",
+  "type": "object",
+  "x-avp-registry": "IR-2 Foundation Registry V1"
+}

@@ -1,0 +1,29 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.review-decision",
+    "expected_error": "CONTRACT_VALIDATION_FAILED",
+    "expected_result": "invalid",
+    "fixture_id": "review-decision-invalid-v1",
+    "fixture_kind": "invalid",
+    "payload_digest": "sha256:bc2bd44ef7bf70ce3535071af111b2ff26b7af0611044f848b94f422808f1578",
+    "producer_agent": "skill",
+    "producer_component_id": "qa-review",
+    "purpose": "Foundation Registry V1 invalid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "criteria_results": [],
+    "decided_at": "2026-07-20T00:00:00Z",
+    "decided_by": "qa-review:synthetic",
+    "decision": "defer",
+    "evidence_refs": [],
+    "subject_ref": {
+      "contract_id": "subject-synthetic-001",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

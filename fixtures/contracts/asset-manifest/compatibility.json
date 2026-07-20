@@ -1,0 +1,26 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.asset-manifest",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "asset-manifest-compatibility-v1",
+    "fixture_kind": "compatibility",
+    "payload_digest": "sha256:5c3d204e385cd236de346d3497494c53ebc64d9949e86b865361b90554e1f795",
+    "producer_agent": "skill",
+    "producer_component_id": "storyboard",
+    "purpose": "Foundation Registry V1 compatibility fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "assets": [],
+    "created_at": "2026-07-20T00:00:00Z",
+    "manifest_id": "asset-manifest-synthetic-001",
+    "manifest_revision": 1,
+    "owner_id": "task-synthetic-001",
+    "owner_type": "task"
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "$id": "avp.contract.skill-execution-event",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "error": {
+      "type": "object"
+    },
+    "event_type": {
+      "enum": [
+        "accepted",
+        "started",
+        "progressed",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "execution_id": {
+      "type": "string"
+    },
+    "input_contract_refs": {
+      "type": "array"
+    },
+    "metrics": {
+      "type": "object"
+    },
+    "occurred_at": {
+      "type": "string"
+    },
+    "output_contract_refs": {
+      "type": "array"
+    },
+    "provider_binding": {
+      "type": "object"
+    },
+    "retry_of_execution_id": {
+      "type": "string"
+    },
+    "sequence": {
+      "type": "integer"
+    },
+    "skill_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "execution_id",
+    "task_id",
+    "skill_id",
+    "event_type",
+    "sequence",
+    "occurred_at",
+    "status",
+    "input_contract_refs"
+  ],
+  "title": "SkillExecutionEvent",
+  "type": "object",
+  "x-avp-authorized-consumers": [
+    "hermes",
+    "qa-review",
+    "codex-observability"
+  ],
+  "x-avp-authorized-producers": [
+    "skill-runtime",
+    "hermes"
+  ],
+  "x-avp-registry": "IR-2 Foundation Registry V1",
+  "x-avp-version": "1.0.0"
+}

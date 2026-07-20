@@ -1,0 +1,24 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.product-review-context",
+    "expected_error": "CONTRACT_VALIDATION_FAILED",
+    "expected_result": "invalid",
+    "fixture_id": "product-review-context-invalid-v1",
+    "fixture_kind": "invalid",
+    "payload_digest": "sha256:1ecd1181f8586b6695d26466f49719f6b6cbe3385b1e13554885b8f3cb0cab51",
+    "producer_agent": "skill",
+    "producer_component_id": "product-knowledge",
+    "purpose": "Foundation Registry V1 invalid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "context_revision": 1,
+    "generated_at": "2026-07-20T00:00:00Z",
+    "product_id": "product-synthetic-001",
+    "review_items": []
+  }
+}

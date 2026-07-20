@@ -1,0 +1,34 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.feedback-event",
+    "expected_error": "CONTRACT_VALIDATION_FAILED",
+    "expected_result": "invalid",
+    "fixture_id": "feedback-event-invalid-v1",
+    "fixture_kind": "invalid",
+    "payload_digest": "sha256:47f1961d63c937da1205c60348447b65a7a2db270df20f513f9c2e07f5e27b23",
+    "producer_agent": "skill",
+    "producer_component_id": "storyboard",
+    "purpose": "Foundation Registry V1 invalid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "bindings": {},
+    "evidence_refs": [
+      "evidence-synthetic-001"
+    ],
+    "feedback_type": "observation",
+    "observed_at": "2026-07-20T00:00:00Z",
+    "rule_scope": "product",
+    "scope_key": {
+      "product_id": "product-synthetic-001"
+    },
+    "source_skill_id": "storyboard",
+    "statement": "Synthetic observation only",
+    "submitted_by": "skill:storyboard",
+    "task_id": "task-synthetic-001"
+  }
+}

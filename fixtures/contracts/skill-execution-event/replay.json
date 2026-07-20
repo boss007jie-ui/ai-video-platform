@@ -1,0 +1,28 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.skill-execution-event",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "skill-execution-event-replay-v1",
+    "fixture_kind": "replay",
+    "payload_digest": "sha256:57eb155567fe4a44f946fc4d7947a9401a0e5c906bc7c5fb3271256d3b6b8a5c",
+    "producer_agent": "skill",
+    "producer_component_id": "storyboard",
+    "purpose": "Foundation Registry V1 replay fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "event_type": "accepted",
+    "execution_id": "execution-synthetic-001",
+    "input_contract_refs": [],
+    "occurred_at": "2026-07-20T00:00:00Z",
+    "sequence": 1,
+    "skill_id": "storyboard",
+    "status": "accepted",
+    "task_id": "task-synthetic-001"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "$id": "avp.contract.rule-ref",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "bindings": {
+      "type": "object"
+    },
+    "content_digest": {
+      "type": "string"
+    },
+    "effective_period": {
+      "type": "object"
+    },
+    "rule_id": {
+      "type": "string"
+    },
+    "rule_scope": {
+      "type": "string"
+    },
+    "rule_version": {
+      "type": "string"
+    },
+    "scope_key": {
+      "type": "object"
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "pending_review",
+        "approved",
+        "deprecated",
+        "revoked"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "rule_id",
+    "rule_version",
+    "rule_scope",
+    "scope_key",
+    "bindings",
+    "status",
+    "effective_period",
+    "content_digest"
+  ],
+  "title": "RuleRef",
+  "type": "object",
+  "x-avp-authorized-consumers": [
+    "all-skills",
+    "hermes"
+  ],
+  "x-avp-authorized-producers": [
+    "product-knowledge"
+  ],
+  "x-avp-registry": "IR-2 Foundation Registry V1",
+  "x-avp-version": "1.0.0"
+}

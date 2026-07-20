@@ -1,0 +1,73 @@
+{
+  "$id": "avp.contract.task-context",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "active_skill_id": {
+      "type": "string"
+    },
+    "asset_manifest_refs": {
+      "type": "array"
+    },
+    "bindings": {
+      "type": "object"
+    },
+    "context_revision": {
+      "type": "integer"
+    },
+    "input_contract_refs": {
+      "type": "array"
+    },
+    "prior_execution_event_refs": {
+      "type": "array"
+    },
+    "product_context_ref": {
+      "type": "string"
+    },
+    "product_review_context_ref": {
+      "type": "string"
+    },
+    "reference_manifest_refs": {
+      "type": "array"
+    },
+    "review_decision_refs": {
+      "type": "array"
+    },
+    "state": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "task_spec_ref": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "context_revision",
+    "task_spec_ref",
+    "active_skill_id",
+    "input_contract_refs",
+    "bindings",
+    "state",
+    "updated_at"
+  ],
+  "title": "TaskContext",
+  "type": "object",
+  "x-avp-authorized-consumers": [
+    "active-skill",
+    "hermes",
+    "qa-review",
+    "codex-maintenance"
+  ],
+  "x-avp-authorized-producers": [
+    "hermes",
+    "active-skill"
+  ],
+  "x-avp-registry": "IR-2 Foundation Registry V1",
+  "x-avp-version": "1.0.0"
+}

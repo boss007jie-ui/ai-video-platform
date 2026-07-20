@@ -1,0 +1,32 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.task-spec",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "task-spec-replay-v1",
+    "fixture_kind": "replay",
+    "payload_digest": "sha256:de9fe7339c214d063e0b4ecaa3991cf47b15f0a366209b17f9fdc6478f4c7c9b",
+    "producer_agent": "human",
+    "producer_component_id": "authorized-direct-cli-caller",
+    "purpose": "Foundation Registry V1 replay fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "created_at": "2026-07-20T00:00:00Z",
+    "created_by": "human:test",
+    "input_refs": [],
+    "objective": "Produce a synthetic contract fixture",
+    "requested_outputs": [
+      "synthetic-output"
+    ],
+    "requested_skills": [
+      "storyboard"
+    ],
+    "task_id": "task-synthetic-001",
+    "task_type": "single-skill"
+  }
+}

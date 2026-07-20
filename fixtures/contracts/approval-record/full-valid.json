@@ -1,0 +1,35 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.approval-record",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "approval-record-full-valid-v1",
+    "fixture_kind": "full-valid",
+    "payload_digest": "sha256:4be612ca32fb3b0fef155ab04f3d1ba54f1287b577d449bb5e1bfe23626dc53b",
+    "producer_agent": "system",
+    "producer_component_id": "authorized-approval-boundary",
+    "purpose": "Foundation Registry V1 full-valid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "approval_id": "approval-synthetic-001",
+    "approval_type": "release",
+    "authority": {
+      "authority_id": "approval-boundary-synthetic"
+    },
+    "decided_at": "2026-07-20T00:00:00Z",
+    "decision_ref": "review-decision-synthetic-001",
+    "extensions": {
+      "fixture_note": "synthetic-full"
+    },
+    "outcome": "denied",
+    "subject_ref": {
+      "contract_id": "subject-synthetic-001",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

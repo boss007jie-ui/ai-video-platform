@@ -1,0 +1,16 @@
+[build-system]
+requires = []
+build-backend = "ai_video_platform.build_backend"
+backend-path = ["src"]
+
+[project]
+name = "ai-video-platform"
+version = "0.1.0"
+description = "Clean-room AI Video Platform foundation"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.ai-video-platform]
+authorization = "IR-1_IR-2_ONLY"
+network = "DENY_BY_DEFAULT"
+foundation-registry = "IR-2 Foundation Registry V1"

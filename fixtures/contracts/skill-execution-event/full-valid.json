@@ -1,0 +1,31 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.skill-execution-event",
+    "expected_error": null,
+    "expected_result": "valid",
+    "fixture_id": "skill-execution-event-full-valid-v1",
+    "fixture_kind": "full-valid",
+    "payload_digest": "sha256:d78d4d5595f966aa92bc6b33711cf8dd45bbd70f54167f0d6e7e311582421ab1",
+    "producer_agent": "skill",
+    "producer_component_id": "storyboard",
+    "purpose": "Foundation Registry V1 full-valid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "event_type": "accepted",
+    "execution_id": "execution-synthetic-001",
+    "extensions": {
+      "fixture_note": "synthetic-full"
+    },
+    "input_contract_refs": [],
+    "occurred_at": "2026-07-20T00:00:00Z",
+    "sequence": 1,
+    "skill_id": "storyboard",
+    "status": "accepted",
+    "task_id": "task-synthetic-001"
+  }
+}

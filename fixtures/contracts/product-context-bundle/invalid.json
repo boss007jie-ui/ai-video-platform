@@ -1,0 +1,30 @@
+{
+  "manifest": {
+    "contains_real_data": false,
+    "contains_secrets": false,
+    "contract_type": "avp.contract.product-context-bundle",
+    "expected_error": "CONTRACT_VALIDATION_FAILED",
+    "expected_result": "invalid",
+    "fixture_id": "product-context-bundle-invalid-v1",
+    "fixture_kind": "invalid",
+    "payload_digest": "sha256:377879ecc9a7474a26fa722a8fe9c39bed0af4b0dcd466b876603dc490a08133",
+    "producer_agent": "skill",
+    "producer_component_id": "product-knowledge",
+    "purpose": "Foundation Registry V1 invalid fixture",
+    "retryable": false,
+    "schema_version": "1.0.0",
+    "synthetic": true
+  },
+  "payload": {
+    "approved_asset_refs": [],
+    "bundle_revision": 1,
+    "facts": [],
+    "generated_at": "2026-07-20T00:00:00Z",
+    "known_error_refs": [],
+    "product_id": "product-synthetic-001",
+    "purpose": "storyboard",
+    "rule_refs": [],
+    "source_evidence": [],
+    "successful_pattern_refs": []
+  }
+}
