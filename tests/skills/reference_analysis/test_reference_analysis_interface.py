@@ -59,6 +59,9 @@ class ReferenceAnalysisInterfaceTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(first.artifact["reference_id"], "ref-1")
             self.assertIn("product", first.artifact["missing_motifs"])
+            gap_metrics = {item["metric"] for item in first.artifact["ordered_gaps"]}
+            self.assertTrue(any(metric.startswith("shot_distribution.") for metric in gap_metrics))
+            self.assertTrue(any(metric.startswith("emotion_distribution.") for metric in gap_metrics))
             severities = [item["severity_rank"] for item in first.artifact["ordered_gaps"]]
             self.assertEqual(severities, sorted(severities, reverse=True))
 

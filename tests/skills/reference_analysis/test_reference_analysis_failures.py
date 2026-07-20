@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from ai_video_platform.skills.reference_analysis import ErrorCode, SkillError, analyze_reference, compare_result
 from tests.skills.reference_analysis.test_reference_analysis_interface import analyze_request, selected_reference
@@ -24,6 +25,25 @@ class ReferenceAnalysisFailureTests(unittest.TestCase):
                 analyze_reference(bad, workspace=workspace, output_path="bad.json")
             self.assertEqual(caught.exception.code, ErrorCode.VALIDATION_FAILED)
 
+            nested = analyze_request()
+            nested["selected_reference"] = {**selected_reference(), "provenance": {"selected_by": "user", "provider": "forbidden"}}
+            with self.assertRaises(SkillError) as caught:
+                analyze_reference(nested, workspace=workspace, output_path="nested.json")
+            self.assertEqual(caught.exception.code, ErrorCode.SCOPE_FORBIDDEN)
+
+            unknown = {**analyze_request(), "unexpected": True}
+            with self.assertRaises(SkillError) as caught:
+                analyze_reference(unknown, workspace=workspace, output_path="unknown.json")
+            self.assertEqual(caught.exception.code, ErrorCode.VALIDATION_FAILED)
+
+    def test_pre_cancelled_request_wins_before_segment_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bad = analyze_request()
+            bad["selected_reference"] = {**selected_reference(), "segments": "invalid"}
+            with self.assertRaises(SkillError) as caught:
+                analyze_reference(bad, workspace=Path(directory), output_path="cancelled.json", cancelled=lambda: True)
+            self.assertEqual(caught.exception.code, ErrorCode.CANCELLED)
+
     def test_path_escape_collision_and_cancellation_fail_without_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -39,6 +59,23 @@ class ReferenceAnalysisFailureTests(unittest.TestCase):
             with self.assertRaises(SkillError) as caught:
                 analyze_reference(analyze_request("ref-2"), workspace=workspace, output_path="collision.json")
             self.assertEqual(caught.exception.code, ErrorCode.OUTPUT_CONFLICT)
+            self.assertFalse(list(workspace.rglob("*.tmp")))
+
+    def test_atomic_publish_never_clobbers_a_racing_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            target = workspace / "race.json"
+
+            def racing_link(source, destination):
+                del source
+                Path(destination).write_bytes(b"racing-writer")
+                raise FileExistsError
+
+            with patch("ai_video_platform.skills.reference_analysis.storage.os.link", side_effect=racing_link):
+                with self.assertRaises(SkillError) as caught:
+                    analyze_reference(analyze_request(), workspace=workspace, output_path="race.json")
+            self.assertEqual(caught.exception.code, ErrorCode.OUTPUT_CONFLICT)
+            self.assertEqual(target.read_bytes(), b"racing-writer")
             self.assertFalse(list(workspace.rglob("*.tmp")))
 
     def test_symlink_output_is_rejected_when_supported(self) -> None:
@@ -68,6 +105,24 @@ class ReferenceAnalysisFailureTests(unittest.TestCase):
                 compare_result(
                     {"analysis_version": "1.0.0", "analysis": analysis.artifact, "produced_result": produced},
                     workspace=workspace, output_path="mismatch.json",
+                )
+            self.assertEqual(caught.exception.code, ErrorCode.REFERENCE_MISMATCH)
+
+            tampered = analysis.to_dict()["artifact"]
+            tampered["metrics"]["segment_count"] = 999
+            with self.assertRaises(SkillError) as caught:
+                compare_result(
+                    {"analysis_version": "1.0.0", "analysis": tampered, "produced_result": selected_reference()},
+                    workspace=workspace, output_path="tampered.json",
+                )
+            self.assertEqual(caught.exception.code, ErrorCode.VALIDATION_FAILED)
+
+            wrong_source = selected_reference()
+            wrong_source["sha256"] = "0" * 64
+            with self.assertRaises(SkillError) as caught:
+                compare_result(
+                    {"analysis_version": "1.0.0", "analysis": analysis.artifact, "produced_result": wrong_source},
+                    workspace=workspace, output_path="wrong-source.json",
                 )
             self.assertEqual(caught.exception.code, ErrorCode.REFERENCE_MISMATCH)
             error = SkillError(ErrorCode.VALIDATION_FAILED, "Bearer synthetic-secret", details={"message": "token synthetic-token"})

@@ -86,7 +86,12 @@ class SafeArtifactWriter:
                 raise SkillError(ErrorCode.CANCELLED, "Reference analysis was cancelled")
             if _is_link(target) or _is_link(target.parent):
                 raise SkillError(ErrorCode.PATH_FORBIDDEN, "Output path changed to a link")
-            os.replace(temp_name, target)
+            try:
+                os.link(temp_name, target)
+            except FileExistsError:
+                if target.read_bytes() != payload:
+                    raise SkillError(ErrorCode.OUTPUT_CONFLICT, "A concurrent writer published different content")
+            os.unlink(temp_name)
         except SkillError:
             try:
                 os.unlink(temp_name)

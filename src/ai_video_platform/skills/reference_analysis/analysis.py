@@ -75,6 +75,8 @@ def summarize_segments(segments: object) -> dict[str, object]:
 
 
 def compare_metrics(reference: Mapping[str, object], produced: Mapping[str, object]) -> dict[str, object]:
+    validate_metrics(reference)
+    validate_metrics(produced)
     scalar_names = ("segment_count", "total_duration", "average_segment_duration", "cuts_per_second")
     deltas: dict[str, float] = {}
     gaps: list[dict[str, object]] = []
@@ -91,11 +93,18 @@ def compare_metrics(reference: Mapping[str, object], produced: Mapping[str, obje
     if missing_motifs:
         gaps.append({"metric": "missing_motifs", "delta": len(missing_motifs), "severity_rank": len(missing_motifs) * 1000})
     gaps.sort(key=lambda item: (-int(item["severity_rank"]), str(item["metric"])))
+    shot_gaps = _distribution_gap(reference["shot_distribution"], produced["shot_distribution"])
+    emotion_gaps = _distribution_gap(reference["emotion_distribution"], produced["emotion_distribution"])
+    for prefix, distribution in (("shot_distribution", shot_gaps), ("emotion_distribution", emotion_gaps)):
+        for key, delta in distribution.items():
+            if delta:
+                gaps.append({"metric": f"{prefix}.{key}", "delta": delta, "severity_rank": abs(delta) * 1000})
+    gaps.sort(key=lambda item: (-int(item["severity_rank"]), str(item["metric"])))
     return {
         "metric_deltas": deltas,
         "missing_motifs": missing_motifs,
-        "shot_gaps": _distribution_gap(reference["shot_distribution"], produced["shot_distribution"]),
-        "emotion_gaps": _distribution_gap(reference["emotion_distribution"], produced["emotion_distribution"]),
+        "shot_gaps": shot_gaps,
+        "emotion_gaps": emotion_gaps,
         "ordered_gaps": gaps,
     }
 
@@ -107,3 +116,28 @@ def _distribution_gap(reference: object, produced: object) -> dict[str, int]:
         key: int(produced_map.get(key, 0)) - int(reference_map.get(key, 0))
         for key in sorted(set(reference_map) | set(produced_map))
     }
+
+
+def validate_metrics(metrics: object) -> None:
+    if not isinstance(metrics, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Analysis metrics must be an object", field_paths=("metrics",))
+    required = {
+        "segment_count", "total_duration", "average_segment_duration", "cuts_per_second",
+        "shot_distribution", "emotion_distribution", "visual_motifs", "hook_positions", "cta_positions",
+    }
+    if set(metrics) != required:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Analysis metrics schema is invalid", field_paths=("metrics",))
+    for name in ("segment_count", "total_duration", "average_segment_duration", "cuts_per_second"):
+        value = metrics[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) < 0:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Analysis metric is invalid", field_paths=(f"metrics.{name}",))
+    if not isinstance(metrics["segment_count"], int) or metrics["segment_count"] <= 0:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "segment_count must be a positive integer", field_paths=("metrics.segment_count",))
+    for name in ("shot_distribution", "emotion_distribution", "visual_motifs"):
+        value = metrics[name]
+        if not isinstance(value, Mapping) or any(not isinstance(key, str) or not isinstance(count, int) or count < 0 for key, count in value.items()):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Distribution metric is invalid", field_paths=(f"metrics.{name}",))
+    for name in ("hook_positions", "cta_positions"):
+        value = metrics[name]
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Position metric is invalid", field_paths=(f"metrics.{name}",))
