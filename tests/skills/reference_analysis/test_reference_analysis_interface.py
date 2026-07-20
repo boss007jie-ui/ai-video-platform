@@ -30,6 +30,21 @@ def analyze_request(reference_id: str = "ref-1") -> dict[str, object]:
     return {"analysis_version": "1.0.0", "selected_reference": selected_reference(reference_id)}
 
 
+def manifest_request() -> dict[str, object]:
+    reference = {**selected_reference(), "reference_type": "video"}
+    return {
+        "analysis_version": "1.0.0",
+        "selected_reference_id": "ref-1",
+        "reference_manifest": {
+            "reference_manifest_id": "manifest-1",
+            "revision": 1,
+            "task_id": "task-1",
+            "references": [reference],
+            "created_at": "2026-07-20T00:00:00Z",
+        },
+    }
+
+
 class ReferenceAnalysisInterfaceTests(unittest.TestCase):
     def test_analyze_reference_is_deterministic_versioned_and_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -77,6 +92,12 @@ class ReferenceAnalysisInterfaceTests(unittest.TestCase):
             payload = json.loads(output.getvalue())
             self.assertEqual(payload["status"], "COMPLETED")
             self.assertTrue((workspace / "cli-analysis.json").is_file())
+
+    def test_analyze_accepts_selected_synthetic_reference_manifest_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = analyze_reference(manifest_request(), workspace=Path(directory), output_path="manifest-analysis.json")
+            self.assertEqual(result.artifact["reference_id"], "ref-1")
+            self.assertEqual(result.artifact["source_provenance"]["reference_manifest_id"], "manifest-1")
 
     def test_reference_analysis_has_no_private_viral_import(self) -> None:
         source_root = Path(__file__).resolve().parents[3] / "src" / "ai_video_platform" / "skills" / "reference_analysis"

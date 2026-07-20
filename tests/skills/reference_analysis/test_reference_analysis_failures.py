@@ -25,6 +25,13 @@ class ReferenceAnalysisFailureTests(unittest.TestCase):
                 analyze_reference(bad, workspace=workspace, output_path="bad.json")
             self.assertEqual(caught.exception.code, ErrorCode.VALIDATION_FAILED)
 
+            for source_uri in ("legacy://asset/1", "product-library://asset/1", "research-library://asset/1", "Legacy/asset.json"):
+                forbidden_uri = analyze_request()
+                forbidden_uri["selected_reference"] = {**selected_reference(), "source_uri": source_uri}
+                with self.assertRaises(SkillError) as caught:
+                    analyze_reference(forbidden_uri, workspace=workspace, output_path="forbidden-uri.json")
+                self.assertEqual(caught.exception.code, ErrorCode.SCOPE_FORBIDDEN)
+
             nested = analyze_request()
             nested["selected_reference"] = {**selected_reference(), "provenance": {"selected_by": "user", "provider": "forbidden"}}
             with self.assertRaises(SkillError) as caught:

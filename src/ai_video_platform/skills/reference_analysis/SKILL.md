@@ -11,7 +11,7 @@ Reference Analysis deterministically analyzes one explicitly selected, structure
 
 Both print one machine-readable JSON result and return `0` on success or `2` for a stable redacted error. Hermes calls these commands explicitly and must supply the selected-reference structure; missing input never triggers discovery.
 
-Hermes example: `python -m ai_video_platform.skills.reference_analysis analyze-reference --input selected.json --workspace task-123 --output reference/analysis.json`. The request has exactly `analysis_version` and `selected_reference`; the latter has exactly `reference_id`, `source_uri`, `sha256`, `usage`, `provenance`, and structured `segments`. Compare requests have exactly `analysis_version`, the unchanged analysis artifact, and a `produced_result` with the same selected-reference shape.
+Hermes example: `python -m ai_video_platform.skills.reference_analysis analyze-reference --input selected.json --workspace task-123 --output reference/analysis.json`. The direct request has exactly `analysis_version` and `selected_reference`; the latter has exactly `reference_id`, `source_uri`, `sha256`, `usage`, `provenance`, and structured `segments`. A synthetic Foundation-shaped mode instead supplies exactly `analysis_version`, `reference_manifest`, and `selected_reference_id`; the manifest must have the registered `ReferenceManifest` required fields and exactly one selected entry with synthetic segments. This mode does not publish or claim a new Contract. Compare requests have exactly `analysis_version`, the unchanged analysis artifact, and a `produced_result` with the direct selected-reference shape.
 
 ## Invariants and outputs
 
@@ -19,7 +19,7 @@ Inputs pin version `1.0.0`, identify the selected reference, carry source digest
 
 The only side effect is one canonical JSON artifact below an existing task workspace. Absolute paths, traversal, link/reparse-point paths, and conflicting output are rejected. Writes use same-directory temporary files, fsync, atomic replacement, cleanup, idempotent replay, and cancellation immediately before replacement.
 
-Read scope is limited to the JSON request supplied by the caller; `source_uri` is provenance only and is never opened. Synthetic fixtures use `task://selected/<id>` URIs and local structured segments. Unsupported/missing versions, malformed/tampered analysis, source identity or digest mismatch, forbidden nested discovery/Provider/download/Library directives, bad segments, unsafe output paths, cancellation, and output collision are blockers.
+Read scope is limited to the JSON request supplied by the caller; `source_uri` is provenance only and is never opened. Allowed URI schemes are `task`, `http`, `https`, and `urn`; local paths and Legacy/Product/Research Library identifiers are rejected. Synthetic fixtures use `task://selected/<id>` URIs and local structured segments. Unsupported/missing versions, malformed/tampered analysis, source identity or digest mismatch, forbidden nested discovery/Provider/download/Library directives, bad segments, unsafe output paths, cancellation, and output collision are blockers.
 
 ## Errors, retries, and operation
 

@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlparse
 
 from .analysis import ALGORITHM_VERSION, compare_metrics, summarize_segments, validate_metrics
 from .errors import ErrorCode, SkillError
@@ -18,8 +19,14 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _FORBIDDEN_SCOPE = {"query", "queries", "search_budget", "provider", "download", "discovery", "product_library", "research_library"}
 _FORBIDDEN_TOKENS = ("query", "search", "provider", "download", "discovery", "library", "legacy")
 _ANALYZE_KEYS = {"analysis_version", "selected_reference"}
+_MANIFEST_REQUEST_KEYS = {"analysis_version", "reference_manifest", "selected_reference_id"}
 _COMPARE_KEYS = {"analysis_version", "analysis", "produced_result"}
 _REFERENCE_KEYS = {"reference_id", "source_uri", "sha256", "usage", "provenance", "segments"}
+_MANIFEST_KEYS = {
+    "reference_manifest_id", "revision", "task_id", "references", "created_at",
+    "analysis_contract_refs", "comparison_target_refs", "extraction_ranges", "rights_assertion",
+}
+_MANIFEST_REQUIRED = {"reference_manifest_id", "revision", "task_id", "references", "created_at"}
 _ANALYSIS_KEYS = {
     "schema_version", "algorithm_version", "analysis_id", "reference_id", "source_uri",
     "source_sha256", "source_provenance", "input_digest", "metrics", "artifact_digest",
@@ -81,6 +88,17 @@ def _strict_keys(mapping: Mapping[str, object], allowed: set[str], field: str) -
         )
 
 
+def _allowed_keys(mapping: Mapping[str, object], required: set[str], allowed: set[str], field: str) -> None:
+    unexpected = sorted(set(mapping) - allowed)
+    missing = sorted(required - set(mapping))
+    if unexpected or missing:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "Object fields do not match the versioned schema",
+            field_paths=tuple([*(f"{field}.{name}" for name in missing), *(f"{field}.{name}" for name in unexpected)]),
+        )
+
+
 def _validate_version(request: Mapping[str, object]) -> None:
     if request.get("analysis_version") != ALGORITHM_VERSION:
         raise SkillError(ErrorCode.VERSION_UNSUPPORTED, "Only analysis version 1.0.0 is supported", field_paths=("analysis_version",))
@@ -92,7 +110,14 @@ def _selected_reference(value: object) -> dict[str, object]:
     _strict_keys(value, _REFERENCE_KEYS, "selected_reference")
     reference_id = _text(value, "reference_id")
     source_uri = _text(value, "source_uri")
-    if source_uri.lower().startswith("file:") or Path(source_uri).is_absolute():
+    parsed_uri = urlparse(source_uri)
+    lowered_uri = source_uri.casefold()
+    if (
+        parsed_uri.scheme.casefold() not in {"task", "https", "http", "urn"}
+        or (parsed_uri.scheme.casefold() in {"task", "https", "http"} and not parsed_uri.netloc)
+        or any(token in lowered_uri for token in ("legacy", "product-library", "research-library"))
+        or Path(source_uri).is_absolute()
+    ):
         raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Reference Analysis does not read local or Library paths", field_paths=("source_uri",))
     sha256 = _text(value, "sha256")
     usage = _text(value, "usage")
@@ -111,6 +136,43 @@ def _selected_reference(value: object) -> dict[str, object]:
         "segments": value.get("segments"),
         "metrics": metrics,
     }
+
+
+def _selected_from_manifest(value: object, selected_reference_id: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "reference_manifest must be an object", field_paths=("reference_manifest",))
+    _allowed_keys(value, _MANIFEST_REQUIRED, _MANIFEST_KEYS, "reference_manifest")
+    manifest_id = _text(value, "reference_manifest_id")
+    task_id = _text(value, "task_id")
+    created_at = _text(value, "created_at")
+    revision = value.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "ReferenceManifest revision must be a positive integer")
+    if not isinstance(selected_reference_id, str) or not selected_reference_id:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "selected_reference_id is required")
+    references = value.get("references")
+    if not isinstance(references, (list, tuple)) or not references:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "ReferenceManifest references must be a non-empty array")
+    matches: list[Mapping[str, object]] = []
+    for index, reference in enumerate(references):
+        if not isinstance(reference, Mapping):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "ReferenceManifest entry must be an object", field_paths=(f"references[{index}]",))
+        _strict_keys(reference, _REFERENCE_KEYS | {"reference_type"}, f"references[{index}]")
+        if reference.get("reference_id") == selected_reference_id:
+            matches.append(reference)
+    if len(matches) != 1:
+        raise SkillError(ErrorCode.REFERENCE_MISMATCH, "selected_reference_id must match exactly one manifest entry")
+    selected_input = {key: matches[0][key] for key in _REFERENCE_KEYS}
+    selected = _selected_reference(selected_input)
+    selected["provenance"] = {
+        **dict(selected["provenance"]),
+        "reference_manifest_id": manifest_id,
+        "reference_manifest_revision": revision,
+        "task_id": task_id,
+        "manifest_created_at": created_at,
+        "fixture_status": "SYNTHETIC_FOUNDATION_SHAPE",
+    }
+    return selected
 
 
 def _validated_analysis(value: object) -> Mapping[str, object]:
@@ -144,10 +206,21 @@ def analyze_reference(
         raise SkillError(ErrorCode.VALIDATION_FAILED, "Request must be an object")
     _validate_scope(request)
     _validate_version(request)
-    _strict_keys(request, _ANALYZE_KEYS, "request")
+    request_keys = set(request)
+    if request_keys == _ANALYZE_KEYS:
+        input_mode = "selected"
+    elif request_keys == _MANIFEST_REQUEST_KEYS:
+        input_mode = "manifest"
+    else:
+        _allowed_keys(request, {"analysis_version"}, _ANALYZE_KEYS | _MANIFEST_REQUEST_KEYS, "request")
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Analyze request must select exactly one supported input mode")
     if cancelled and cancelled():
         raise SkillError(ErrorCode.CANCELLED, "Reference analysis was cancelled")
-    selected = _selected_reference(request.get("selected_reference"))
+    selected = (
+        _selected_reference(request.get("selected_reference"))
+        if input_mode == "selected"
+        else _selected_from_manifest(request.get("reference_manifest"), request.get("selected_reference_id"))
+    )
     input_digest = _digest(dict(request))
     artifact: dict[str, object] = {
         "schema_version": ALGORITHM_VERSION,
