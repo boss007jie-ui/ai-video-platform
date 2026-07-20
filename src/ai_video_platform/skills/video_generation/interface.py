@@ -81,11 +81,9 @@ class VideoGenerationInterface:
                 break
             except AdapterFailure as exc:
                 if not exc.retryable:
-                    code = {
-                        "PROVIDER_REJECTED": GenerationErrorCode.PROVIDER_REJECTED,
-                        "NETWORK_BLOCKED": GenerationErrorCode.NETWORK_BLOCKED,
-                    }.get(exc.code, GenerationErrorCode.PROVIDER_REJECTED)
-                    ledger.transition(job_id, expected_states={"submitting"}, state="failed", at=self._format_time(evaluated_at), attempts=attempts, error_code=code.value, retryable=False)
+                    code = self._adapter_error_code(exc)
+                    terminal_rejection = exc.code in {"PROVIDER_REJECTED", "NETWORK_BLOCKED"}
+                    ledger.transition(job_id, expected_states={"submitting"}, state="failed" if terminal_rejection else "recovery_required", at=self._format_time(evaluated_at), attempts=attempts, error_code=code.value, retryable=False)
                     raise GenerationError(code, str(exc), retryable=False) from None
             except GenerationError:
                 ledger.transition(job_id, expected_states={"submitting"}, state="recovery_required", at=self._format_time(evaluated_at), attempts=attempts, error_code=GenerationErrorCode.PROVIDER_REJECTED.value, retryable=False)

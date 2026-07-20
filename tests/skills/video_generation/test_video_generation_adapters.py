@@ -13,7 +13,7 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from ai_video_platform.skills.video_generation import GenerationError, GenerationErrorCode, VideoGenerationInterface
-from ai_video_platform.skills.video_generation.adapters import FakeVideoProviderAdapter, NetworkBlockedVideoProviderAdapter, RejectingVideoProviderAdapter
+from ai_video_platform.skills.video_generation.adapters import AdapterFailure, FakeVideoProviderAdapter, NetworkBlockedVideoProviderAdapter, RejectingVideoProviderAdapter
 from ai_video_platform.skills.video_generation.cli import run_cli
 from ai_video_platform.skills.video_generation.ledger import InMemoryVideoExecutionLedger
 from tests.skills.video_generation.test_video_generation_interface import NOW, generation_request
@@ -282,6 +282,18 @@ class VideoGenerationAdapterTests(unittest.TestCase):
             self.assertNotIn(str(value), str(error))
             self.assertEqual(ledger.active_count(), 1)
             self.assertEqual(ledger.recoverable()[0]["state"], "recovery_required")
+
+        class UnknownFailureAdapter(FakeVideoProviderAdapter):
+            def submit(self, request):
+                raise AdapterFailure("UNKNOWN", "Synthetic unknown outcome", retryable=False)
+
+        ledger = InMemoryVideoExecutionLedger()
+        self.assert_code(
+            GenerationErrorCode.PROVIDER_REJECTED,
+            lambda: self.make_interface(UnknownFailureAdapter(), ledger).submit_video(generation_request(), now=NOW),
+        )
+        self.assertEqual(ledger.active_count(), 1)
+        self.assertEqual(ledger.recoverable()[0]["state"], "recovery_required")
 
     def test_network_blocked_code_is_stable_after_submission(self) -> None:
         ledger = InMemoryVideoExecutionLedger()
