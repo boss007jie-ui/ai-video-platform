@@ -10,6 +10,9 @@ import math
 import re
 from typing import Protocol
 
+from .adapters import (
+    FakeCollectionAdapter, FakeDownloadAdapter, RejectingCollectionAdapter, RejectingDownloadAdapter,
+)
 from .errors import ErrorCode, SkillError
 from .models import CollectionItem, CollectionResult, ResearchCandidate, ResearchInspection, ResearchResult, ResearchScore
 
@@ -19,6 +22,13 @@ class CollectionProvider(Protocol):
 
 
 class ResearchStorage(Protocol):
+    def begin_request(
+        self, operation: str, idempotency_key: str, request_digest: str,
+    ) -> Mapping[str, object] | None: ...
+    def complete_request(
+        self, operation: str, idempotency_key: str, request_digest: str, result: Mapping[str, object],
+    ) -> None: ...
+    def abort_request(self, operation: str, idempotency_key: str, request_digest: str) -> None: ...
     def write_record(self, record: Mapping[str, object], *, idempotency_key: str) -> None: ...
 
 
@@ -37,6 +47,73 @@ _SCORE_FACTORS = (
     "reproducibility", "production_feasibility", "platform_fit", "brand_safety",
     "rights_status", "duplicate_distance",
 )
+
+
+def _assert_offline_provider(provider: CollectionProvider) -> None:
+    if type(provider) not in (FakeCollectionAdapter, RejectingCollectionAdapter):
+        raise SkillError(
+            ErrorCode.PROVIDER_FORBIDDEN,
+            "Only built-in fake or rejecting Providers are enabled before FTG-P",
+        )
+
+
+def _assert_offline_downloader(downloader: DownloadAdapter) -> None:
+    if type(downloader) not in (FakeDownloadAdapter, RejectingDownloadAdapter):
+        raise SkillError(
+            ErrorCode.DOWNLOAD_FORBIDDEN,
+            "Only built-in fake or rejecting download adapters are enabled before FTG-P",
+        )
+
+
+def _research_result_from_dict(value: Mapping[str, object]) -> ResearchResult:
+    try:
+        raw_candidates = value["candidates"]
+        if not isinstance(raw_candidates, Sequence) or isinstance(raw_candidates, (str, bytes)):
+            raise TypeError
+        candidates: list[ResearchCandidate] = []
+        for raw in raw_candidates:
+            if not isinstance(raw, Mapping) or not isinstance(raw.get("score"), Mapping):
+                raise TypeError
+            score_value = raw["score"]
+            score = ResearchScore(
+                total=float(score_value["total"]),
+                inputs={str(key): float(item) for key, item in score_value["inputs"].items()},
+                weights={str(key): float(item) for key, item in score_value["weights"].items()},
+                contributions={str(key): float(item) for key, item in score_value["contributions"].items()},
+                explanation={str(key): float(item) for key, item in score_value["explanation"].items()},
+            )
+            reasons = raw.get("reasons", ())
+            if not isinstance(reasons, Sequence) or isinstance(reasons, (str, bytes)):
+                raise TypeError
+            candidates.append(ResearchCandidate(
+                source_id=str(raw["source_id"]), source_url=str(raw["source_url"]), title=str(raw["title"]),
+                content_digest=str(raw["content_digest"]), lifecycle_state=str(raw["lifecycle_state"]),
+                rights_status=str(raw["rights_status"]), pii_detected=bool(raw["pii_detected"]),
+                expires_at=str(raw["expires_at"]), score=score, reasons=tuple(str(item) for item in reasons),
+            ))
+        return ResearchResult(
+            status=str(value["status"]), request_digest=str(value["request_digest"]),
+            provider_calls=int(value["provider_calls"]), candidates=tuple(candidates), partial=bool(value.get("partial", False)),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise SkillError(ErrorCode.STORAGE_CONFLICT, "Stored research replay is invalid") from exc
+
+
+def _collection_result_from_dict(value: Mapping[str, object]) -> CollectionResult:
+    try:
+        raw_items = value["items"]
+        if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
+            raise TypeError
+        items = tuple(CollectionItem(
+            source_id=str(raw["source_id"]), lifecycle_state=str(raw["lifecycle_state"]),
+            rights_status=str(raw["rights_status"]),
+            object_digest=None if raw.get("object_digest") is None else str(raw["object_digest"]),
+        ) for raw in raw_items if isinstance(raw, Mapping))
+        if len(items) != len(raw_items):
+            raise TypeError
+        return CollectionResult(status=str(value["status"]), items=items)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise SkillError(ErrorCode.STORAGE_CONFLICT, "Stored collection replay is invalid") from exc
 
 
 def _canonical(value: object) -> bytes:
@@ -209,6 +286,35 @@ def research_viral(
     request: Mapping[str, object], *, provider: CollectionProvider, storage: ResearchStorage,
     now: datetime | None = None, cancelled: Callable[[], bool] | None = None,
 ) -> ResearchResult:
+    _assert_offline_provider(provider)
+    inspection = inspect_research_request(request, now=now)
+    if cancelled and cancelled():
+        raise SkillError(ErrorCode.CANCELLED, "Research was cancelled")
+    idempotency_key = str(request["idempotency_key"])
+    try:
+        replay = storage.begin_request("research", idempotency_key, inspection.request_digest)
+    except SkillError:
+        raise
+    except Exception as exc:
+        raise SkillError(ErrorCode.STORAGE_CONFLICT, "Research request ledger failed") from exc
+    if replay is not None:
+        return _research_result_from_dict(replay)
+    try:
+        result = _research_viral_claimed(request, provider=provider, storage=storage, now=now, cancelled=cancelled)
+        storage.complete_request("research", idempotency_key, inspection.request_digest, result.to_dict())
+        return result
+    except BaseException:
+        try:
+            storage.abort_request("research", idempotency_key, inspection.request_digest)
+        except Exception:
+            pass
+        raise
+
+
+def _research_viral_claimed(
+    request: Mapping[str, object], *, provider: CollectionProvider, storage: ResearchStorage,
+    now: datetime | None = None, cancelled: Callable[[], bool] | None = None,
+) -> ResearchResult:
     current = now or datetime.now(timezone.utc)
     inspection = inspect_research_request(request, now=current)
     if cancelled and cancelled():
@@ -296,6 +402,42 @@ def research_viral(
 
 
 def collect_reference_assets(
+    request: Mapping[str, object], *, downloader: DownloadAdapter, storage: ResearchStorage,
+    now: datetime | None = None, cancelled: Callable[[], bool] | None = None,
+) -> CollectionResult:
+    _assert_offline_downloader(downloader)
+    if not isinstance(request, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Request must be an object")
+    try:
+        request_digest = _digest(dict(request))
+    except (TypeError, ValueError) as exc:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Request must be JSON-compatible") from exc
+    idempotency_key = request.get("idempotency_key")
+    if not isinstance(idempotency_key, str) or not idempotency_key:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Collection idempotency key is invalid")
+    try:
+        replay = storage.begin_request("collection", idempotency_key, request_digest)
+    except SkillError:
+        raise
+    except Exception as exc:
+        raise SkillError(ErrorCode.STORAGE_CONFLICT, "Collection request ledger failed") from exc
+    if replay is not None:
+        return _collection_result_from_dict(replay)
+    try:
+        result = _collect_reference_assets_claimed(
+            request, downloader=downloader, storage=storage, now=now, cancelled=cancelled,
+        )
+        storage.complete_request("collection", idempotency_key, request_digest, result.to_dict())
+        return result
+    except BaseException:
+        try:
+            storage.abort_request("collection", idempotency_key, request_digest)
+        except Exception:
+            pass
+        raise
+
+
+def _collect_reference_assets_claimed(
     request: Mapping[str, object], *, downloader: DownloadAdapter, storage: ResearchStorage,
     now: datetime | None = None, cancelled: Callable[[], bool] | None = None,
 ) -> CollectionResult:

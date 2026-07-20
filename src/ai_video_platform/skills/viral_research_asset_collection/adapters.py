@@ -10,14 +10,36 @@ from .errors import ErrorCode, SkillError
 
 
 class FakeCollectionAdapter:
-    def __init__(self, rows: Iterable[Mapping[str, object]]) -> None:
+    def __init__(
+        self,
+        rows: Iterable[Mapping[str, object]],
+        *,
+        failures: int = 0,
+        terminal_error: Exception | None = None,
+        iterator_error: Exception | None = None,
+    ) -> None:
         self._rows = tuple(deepcopy(dict(row)) for row in rows)
+        self._failures = failures
+        self._terminal_error = terminal_error
+        self._iterator_error = iterator_error
         self.attempt_count = 0
 
-    def fetch(self, query: str, *, limit: int, timeout_seconds: int) -> tuple[dict[str, object], ...]:
+    def fetch(self, query: str, *, limit: int, timeout_seconds: int):
         del query, timeout_seconds
         self.attempt_count += 1
-        return tuple(deepcopy(row) for row in self._rows[:limit])
+        if self.attempt_count <= self._failures:
+            raise SkillError(ErrorCode.PROVIDER_FAILURE, "Synthetic offline failure", retryable=True)
+        if self._terminal_error is not None:
+            raise self._terminal_error
+        rows = tuple(deepcopy(row) for row in self._rows[:limit])
+        if self._iterator_error is None:
+            return rows
+
+        def failing_rows():
+            yield from rows
+            raise self._iterator_error
+
+        return failing_rows()
 
 
 class RejectingCollectionAdapter:

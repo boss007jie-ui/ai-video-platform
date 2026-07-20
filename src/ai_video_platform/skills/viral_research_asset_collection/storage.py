@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import tempfile
+from threading import Lock
 from typing import Mapping
 
 from .errors import ErrorCode, SkillError
@@ -74,12 +76,67 @@ def _atomic_write(path: Path, payload: bytes) -> None:
         raise
 
 
+def _atomic_create(path: Path, payload: bytes) -> None:
+    """Publish bytes only if the destination is still absent."""
+    descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.stem}-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temp_name, path)
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+
 class InMemoryResearchLibraryAdapter:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, object]] = {}
         self.quarantine: dict[str, dict[str, object]] = {}
         self.audit_log: list[dict[str, object]] = []
         self._idempotency: dict[str, str] = {}
+        self._requests: dict[str, dict[str, object]] = {}
+        self._request_lock = Lock()
+
+    def begin_request(self, operation: str, idempotency_key: str, request_digest: str) -> Mapping[str, object] | None:
+        with self._request_lock:
+            existing = self._requests.get(idempotency_key)
+            if existing is None:
+                self._requests[idempotency_key] = {
+                    "operation": operation, "request_digest": request_digest, "status": "IN_PROGRESS",
+                }
+                return None
+            if existing.get("operation") != operation or existing.get("request_digest") != request_digest:
+                raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Idempotency key already belongs to a different request")
+            if existing.get("status") == "COMPLETED" and isinstance(existing.get("result"), Mapping):
+                return deepcopy(dict(existing["result"]))
+            raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Idempotent request is already in progress")
+
+    def complete_request(
+        self, operation: str, idempotency_key: str, request_digest: str, result: Mapping[str, object],
+    ) -> None:
+        with self._request_lock:
+            existing = self._requests.get(idempotency_key)
+            if existing is None or existing.get("operation") != operation or existing.get("request_digest") != request_digest:
+                raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Request claim does not match completion")
+            self._requests[idempotency_key] = {
+                "operation": operation, "request_digest": request_digest, "status": "COMPLETED",
+                "result": deepcopy(dict(result)),
+            }
+
+    def abort_request(self, operation: str, idempotency_key: str, request_digest: str) -> None:
+        with self._request_lock:
+            existing = self._requests.get(idempotency_key)
+            if (
+                existing is not None
+                and existing.get("operation") == operation
+                and existing.get("request_digest") == request_digest
+                and existing.get("status") == "IN_PROGRESS"
+            ):
+                del self._requests[idempotency_key]
 
     def write_record(self, record: Mapping[str, object], *, idempotency_key: str) -> None:
         source_id = _assert_record(record)
@@ -97,6 +154,8 @@ class InMemoryResearchLibraryAdapter:
                 "Retention cannot be silently extended",
                 field_paths=("retention_until",),
             )
+        if existing is not None and _digest(existing) != digest:
+            raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record has different content")
         target = self.quarantine if snapshot["lifecycle_state"] == "quarantined" else self.records
         target[source_id] = snapshot
         self._idempotency[idempotency_key] = digest
@@ -128,6 +187,12 @@ class ResearchLibraryAdapter:
             path.mkdir(parents=True, exist_ok=True)
             if _is_link(path):
                 raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library subdirectory cannot be a symlink")
+        self._request_root = self.root / "audit" / "requests"
+        if self._request_root.exists() and _is_link(self._request_root):
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Request ledger directory cannot be a symlink")
+        self._request_root.mkdir(parents=True, exist_ok=True)
+        if _is_link(self._request_root):
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Request ledger directory cannot be a symlink")
         self._memory = InMemoryResearchLibraryAdapter()
         self._ledger_path = self.root / "audit" / "idempotency.json"
         self._audit_index_path = self.root / "audit" / "lifecycle-index.json"
@@ -174,6 +239,63 @@ class ResearchLibraryAdapter:
         if _is_link(audit) or _is_link(path) or path.parent.resolve() != audit.resolve():
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research Library audit path escaped its controlled root")
 
+    def _request_target(self, idempotency_key: str) -> Path:
+        filename = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest() + ".json"
+        target = self._request_root / filename
+        _assert_no_link_components(self._request_root)
+        if _is_link(self._request_root) or _is_link(target) or target.parent.resolve() != self._request_root.resolve():
+            raise SkillError(ErrorCode.PATH_FORBIDDEN, "Request ledger path escaped its controlled root")
+        return target
+
+    @staticmethod
+    def _read_request(target: Path) -> dict[str, object]:
+        try:
+            value = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SkillError(ErrorCode.STORAGE_CONFLICT, "Request ledger entry is unreadable") from exc
+        if not isinstance(value, dict):
+            raise SkillError(ErrorCode.STORAGE_CONFLICT, "Request ledger entry is invalid")
+        return value
+
+    def begin_request(self, operation: str, idempotency_key: str, request_digest: str) -> Mapping[str, object] | None:
+        target = self._request_target(idempotency_key)
+        claim = {"operation": operation, "request_digest": request_digest, "status": "IN_PROGRESS"}
+        try:
+            _atomic_create(target, _canonical(claim))
+            return None
+        except FileExistsError:
+            existing = self._read_request(target)
+        if existing.get("operation") != operation or existing.get("request_digest") != request_digest:
+            raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Idempotency key already belongs to a different request")
+        if existing.get("status") == "COMPLETED" and isinstance(existing.get("result"), Mapping):
+            return deepcopy(dict(existing["result"]))
+        raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Idempotent request is already in progress")
+
+    def complete_request(
+        self, operation: str, idempotency_key: str, request_digest: str, result: Mapping[str, object],
+    ) -> None:
+        target = self._request_target(idempotency_key)
+        existing = self._read_request(target)
+        if existing.get("operation") != operation or existing.get("request_digest") != request_digest:
+            raise SkillError(ErrorCode.IDEMPOTENCY_CONFLICT, "Request claim does not match completion")
+        completed = {
+            "operation": operation, "request_digest": request_digest, "status": "COMPLETED",
+            "result": deepcopy(dict(result)),
+        }
+        _atomic_write(target, _canonical(completed))
+
+    def abort_request(self, operation: str, idempotency_key: str, request_digest: str) -> None:
+        target = self._request_target(idempotency_key)
+        if not target.exists():
+            return
+        existing = self._read_request(target)
+        if (
+            existing.get("operation") == operation
+            and existing.get("request_digest") == request_digest
+            and existing.get("status") == "IN_PROGRESS"
+        ):
+            target.unlink()
+
     def _persist_ledger(self) -> None:
         self._assert_audit_path(self._ledger_path)
         _atomic_write(self._ledger_path, _canonical(self._ledger))
@@ -207,11 +329,27 @@ class ResearchLibraryAdapter:
             self._ensure_lifecycle_event(idempotency_key, source_id, digest)
             return
         target = self._target(source_id, quarantined=record["lifecycle_state"] == "quarantined")
-        if target.exists() and target.read_bytes() != payload:
-            raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record has different content")
+        alternate = self._target(source_id, quarantined=record["lifecycle_state"] != "quarantined")
+        for existing_target in (target, alternate):
+            if not existing_target.exists():
+                continue
+            try:
+                existing_payload = existing_target.read_bytes()
+            except OSError as exc:
+                raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record is unreadable") from exc
+            if existing_target != target or existing_payload != payload:
+                raise SkillError(ErrorCode.STORAGE_CONFLICT, "Existing research record has different content")
         self._memory.write_record(record, idempotency_key=idempotency_key)
         if not target.exists():
-            _atomic_write(target, payload)
+            try:
+                _atomic_create(target, payload)
+            except FileExistsError:
+                try:
+                    winner = target.read_bytes()
+                except OSError as exc:
+                    raise SkillError(ErrorCode.STORAGE_CONFLICT, "Racing research record is unreadable") from exc
+                if winner != payload:
+                    raise SkillError(ErrorCode.STORAGE_CONFLICT, "Concurrent writer published different content")
         self._ensure_lifecycle_event(idempotency_key, source_id, digest)
         self._ledger[idempotency_key] = digest
         self._persist_ledger()

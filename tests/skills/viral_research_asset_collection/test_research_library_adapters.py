@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from ai_video_platform.skills.viral_research_asset_collection import ErrorCode, SkillError
 from ai_video_platform.skills.viral_research_asset_collection.storage import InMemoryResearchLibraryAdapter, ResearchLibraryAdapter
@@ -18,6 +19,24 @@ RECORD = {
 
 
 class ResearchLibraryAdapterTests(unittest.TestCase):
+    def test_filesystem_atomic_create_never_clobbers_a_racing_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = ResearchLibraryAdapter(root)
+            target = root / "metadata" / "source-1.json"
+
+            def racing_link(source, destination):
+                del source
+                Path(destination).write_bytes(b"racing-writer")
+                raise FileExistsError
+
+            with patch("ai_video_platform.skills.viral_research_asset_collection.storage.os.link", side_effect=racing_link):
+                with self.assertRaises(SkillError) as caught:
+                    adapter.write_record(RECORD, idempotency_key="race")
+            self.assertEqual(caught.exception.code, ErrorCode.STORAGE_CONFLICT)
+            self.assertEqual(target.read_bytes(), b"racing-writer")
+            self.assertFalse(list(root.rglob("*.tmp")))
+
     def test_memory_adapter_is_idempotent_and_audits_deletion(self) -> None:
         adapter = InMemoryResearchLibraryAdapter()
         adapter.write_record(RECORD, idempotency_key="write-1")
@@ -62,6 +81,37 @@ class ResearchLibraryAdapterTests(unittest.TestCase):
             ResearchLibraryAdapter(root).write_record(RECORD, idempotency_key="write-1")
             repaired = json.loads(lifecycle_index.read_text(encoding="utf-8"))
             self.assertIn("write-1", repaired)
+
+    def test_request_claim_and_completed_replay_survive_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = ResearchLibraryAdapter(root)
+            self.assertIsNone(adapter.begin_request("research", "request-1", "a" * 64))
+            adapter.complete_request(
+                "research", "request-1", "a" * 64,
+                {"status": "COMPLETED", "request_digest": "a" * 64, "provider_calls": 1, "partial": False, "candidates": []},
+            )
+            replay = ResearchLibraryAdapter(root).begin_request("research", "request-1", "a" * 64)
+            self.assertEqual(replay["provider_calls"], 1)
+            with self.assertRaises(SkillError) as caught:
+                ResearchLibraryAdapter(root).begin_request("research", "request-1", "b" * 64)
+            self.assertEqual(caught.exception.code, ErrorCode.IDEMPOTENCY_CONFLICT)
+
+    def test_same_source_id_cannot_move_or_change_content(self) -> None:
+        memory = InMemoryResearchLibraryAdapter()
+        memory.write_record(RECORD, idempotency_key="first")
+        with self.assertRaises(SkillError) as caught:
+            memory.write_record({**RECORD, "rights_status": "UNKNOWN"}, idempotency_key="changed")
+        self.assertEqual(caught.exception.code, ErrorCode.STORAGE_CONFLICT)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ResearchLibraryAdapter(root).write_record(RECORD, idempotency_key="first")
+            moved = {**RECORD, "lifecycle_state": "quarantined", "pii_detected": True}
+            with self.assertRaises(SkillError) as caught:
+                ResearchLibraryAdapter(root).write_record(moved, idempotency_key="moved")
+            self.assertEqual(caught.exception.code, ErrorCode.STORAGE_CONFLICT)
+            self.assertFalse((root / "quarantine" / "source-1.json").exists())
 
     def test_filesystem_rejects_symlink_root_when_supported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -15,6 +15,8 @@ from ai_video_platform.skills.viral_research_asset_collection import (
     research_viral,
 )
 from ai_video_platform.skills.viral_research_asset_collection.cli import main
+from ai_video_platform.skills.viral_research_asset_collection.adapters import FakeCollectionAdapter
+from ai_video_platform.skills.viral_research_asset_collection.storage import InMemoryResearchLibraryAdapter
 
 
 NOW = datetime(2026, 7, 20, 4, 0, tzinfo=timezone.utc)
@@ -41,21 +43,19 @@ def valid_request() -> dict[str, object]:
     }
 
 
-class FakeProvider:
-    def __init__(self, rows: list[dict[str, object]], *, failures: int = 0) -> None:
-        self.rows, self.failures, self.calls = rows, failures, 0
-
-    def fetch(self, query: str, *, limit: int, timeout_seconds: int):
-        del query, timeout_seconds
-        self.calls += 1
-        if self.calls <= self.failures:
-            raise SkillError(ErrorCode.PROVIDER_FAILURE, "temporary failure", retryable=True)
-        return self.rows[:limit]
-
-
 class MemorySink:
     def __init__(self) -> None:
         self.records: list[dict[str, object]] = []
+        self._request_ledger = InMemoryResearchLibraryAdapter()
+
+    def begin_request(self, operation: str, idempotency_key: str, request_digest: str):
+        return self._request_ledger.begin_request(operation, idempotency_key, request_digest)
+
+    def complete_request(self, operation: str, idempotency_key: str, request_digest: str, result):
+        self._request_ledger.complete_request(operation, idempotency_key, request_digest, result)
+
+    def abort_request(self, operation: str, idempotency_key: str, request_digest: str):
+        self._request_ledger.abort_request(operation, idempotency_key, request_digest)
 
     def write_record(self, record, *, idempotency_key: str):
         del idempotency_key
@@ -130,7 +130,7 @@ class ViralResearchInterfaceTests(unittest.TestCase):
             candidate(source_id="video-x", source_url="https://example.invalid/x", title="Old", expires_at="2026-07-19T00:00:00Z"),
         ]
         sink = MemorySink()
-        result = research_viral(valid_request(), provider=FakeProvider(rows), storage=sink, now=NOW)
+        result = research_viral(valid_request(), provider=FakeCollectionAdapter(rows), storage=sink, now=NOW)
         self.assertEqual(result.status, "COMPLETED")
         self.assertEqual(len(result.candidates), 4)
         self.assertEqual(set(result.candidates[0].score.explanation), {
@@ -156,11 +156,11 @@ class ViralResearchInterfaceTests(unittest.TestCase):
             candidate(source_id="different", source_url="https://example.invalid/video-1", title="Other content"),
             candidate(source_id="digest-copy", source_url="https://example.invalid/copy"),
         ]
-        result = research_viral(valid_request(), provider=FakeProvider(rows), storage=MemorySink(), now=NOW)
+        result = research_viral(valid_request(), provider=FakeCollectionAdapter(rows), storage=MemorySink(), now=NOW)
         self.assertEqual([item.source_id for item in result.candidates], ["video-1"])
 
     def test_retry_is_capped_cancellation_is_stable_and_errors_redact(self) -> None:
-        provider = FakeProvider([candidate()], failures=1)
+        provider = FakeCollectionAdapter([candidate()], failures=1)
         result = research_viral(valid_request(), provider=provider, storage=MemorySink(), now=NOW)
         self.assertEqual(result.provider_calls, 2)
         with self.assertRaises(SkillError) as caught:
@@ -177,32 +177,30 @@ class ViralResearchInterfaceTests(unittest.TestCase):
         self.assertNotIn("synthetic-token-value", nested["details"]["provider_error"])
         self.assertNotIn("nested-bearer-value", nested["details"]["nested"]["message"])
 
-        class CrashingProvider:
-            def fetch(self, query: str, *, limit: int, timeout_seconds: int):
-                del query, limit, timeout_seconds
-                raise RuntimeError("token=synthetic-secret-value")
-
         with self.assertRaises(SkillError) as caught:
-            research_viral(valid_request(), provider=CrashingProvider(), storage=MemorySink(), now=NOW)
+            research_viral(
+                valid_request(),
+                provider=FakeCollectionAdapter([], terminal_error=RuntimeError("token=synthetic-secret-value")),
+                storage=MemorySink(), now=NOW,
+            )
         self.assertEqual(caught.exception.code, ErrorCode.PROVIDER_FAILURE)
         self.assertNotIn("synthetic-secret-value", caught.exception.message)
 
-        class FailingIteratorProvider:
-            def fetch(self, query: str, *, limit: int, timeout_seconds: int):
-                del query, limit, timeout_seconds
-                def rows():
-                    yield candidate()
-                    raise RuntimeError("Bearer iterator-secret")
-                return rows()
-
         sink = MemorySink()
         with self.assertRaises(SkillError) as caught:
-            research_viral(valid_request(), provider=FailingIteratorProvider(), storage=sink, now=NOW)
+            research_viral(
+                valid_request(),
+                provider=FakeCollectionAdapter([candidate()], iterator_error=RuntimeError("Bearer iterator-secret")),
+                storage=sink, now=NOW,
+            )
         self.assertEqual(caught.exception.code, ErrorCode.PROVIDER_FAILURE)
         self.assertEqual(sink.records, [])
 
         with self.assertRaises(SkillError) as caught:
-            research_viral(valid_request(), provider=FakeProvider([candidate(pii_detected="false")]), storage=MemorySink(), now=NOW)
+            research_viral(
+                valid_request(), provider=FakeCollectionAdapter([candidate(pii_detected="false")]),
+                storage=MemorySink(), now=NOW,
+            )
         self.assertEqual(caught.exception.code, ErrorCode.VALIDATION_FAILED)
 
 
