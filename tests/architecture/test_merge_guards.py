@@ -11,6 +11,25 @@ from ai_video_platform.maintenance.codex.merge_guard import (
 
 
 class MergeGuardTests(unittest.TestCase):
+    def test_runtime_scan_allows_ft1_skill_implementation_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill = root / "src" / "ai_video_platform" / "skills" / "storyboard"
+            (skill / "public_api").mkdir(parents=True)
+            (skill / "adapters").mkdir()
+            (skill / "__init__.py").write_text("from .public_api.interface import run\n", encoding="utf-8")
+            (skill / "SKILL.md").write_text("# Storyboard\n", encoding="utf-8")
+            (skill / "public_api" / "interface.py").write_text(
+                "def run(payload):\n    return payload\n",
+                encoding="utf-8",
+            )
+            (skill / "adapters" / "fake.py").write_text(
+                "class FakeAdapter:\n    pass\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(scan_runtime_boundaries(root), ())
+
     def test_changed_path_guard_enforces_exclusive_owners(self) -> None:
         self.assertEqual(
             check_changed_paths(
@@ -50,10 +69,13 @@ class MergeGuardTests(unittest.TestCase):
             (qa / "writer.py").write_text(
                 "from pathlib import Path\n"
                 "target = Path('AI Video Product Library/item.json')\n"
-                "target.open('w').write('x')\n",
+                "target.open('w').write('x')\n"
+                "research = Path('AI Video Research Library/item.json')\n"
+                "research.write_text('x')\n",
                 encoding="utf-8",
             )
             (qa / "network.py").write_text("import requests\n", encoding="utf-8")
+            (qa / "legacy.py").write_text("SOURCE = 'veo3.1-production'\n", encoding="utf-8")
 
             violations = scan_runtime_boundaries(root)
 
@@ -62,7 +84,9 @@ class MergeGuardTests(unittest.TestCase):
             {
                 "CROSS_SKILL_PRIVATE_IMPORT",
                 "PRODUCT_LIBRARY_WRITER_FORBIDDEN",
+                "RESEARCH_LIBRARY_WRITER_FORBIDDEN",
                 "NETWORK_CLIENT_IMPORT_FORBIDDEN",
+                "LEGACY_RUNTIME_PATH_FORBIDDEN",
             },
         )
 
