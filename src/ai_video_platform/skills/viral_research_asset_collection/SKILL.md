@@ -7,8 +7,8 @@ This Skill validates viral-research requests, expands queries, normalizes and de
 ## Public commands
 
 - `inspect-research-request`: validates all inputs without side effects.
-- `research-viral`: performs the offline research flow. The command-line default uses a rejecting Provider.
-- `collect-reference-assets`: collects selected metadata. The command-line default uses a rejecting downloader.
+- `research-viral`: performs the offline research flow using only the exact built-in fake or rejecting Provider type.
+- `collect-reference-assets`: collects selected metadata using only the exact built-in fake or rejecting downloader type.
 
 Each command accepts `--input <json-file>` and optional `--now <UTC-Z>`, prints one JSON result, and returns `0` on success or `2` for a stable redacted error.
 
@@ -22,7 +22,7 @@ Only this Skill's controlled storage seam may write Research Library metadata. T
 
 ## Failure, retry, cancellation, and safety
 
-Validation precedes side effects. Provider retries are limited to two and remain inside the request's total provider-call budget. Cancellation is checked before and during work. Idempotency key reuse with different content fails. Errors are stable and redact secret-like fields. Real Provider/network/media/credential paths are unavailable; fake and rejecting adapters are the only adapters in this release candidate.
+Validation precedes external side effects. A request claim is recorded before Provider or download work; exact completed replays return the stored result without repeating calls, conflicting or concurrent key reuse fails closed, and failed attempts release their claim. Provider retries are limited to two and remain inside the request's total provider-call budget. Cancellation is checked before and during work. Errors are stable and redact secret-like fields. Real Provider/network/media/credential paths are unavailable; exact built-in fake and rejecting adapter types are the only adapters accepted in this release candidate.
 
 Stable codes include validation, budget, expiry, cancellation, idempotency conflict, Provider forbidden/failure, download forbidden, path forbidden, rights forbidden, storage conflict, and retention-extension forbidden. Example Hermes call: `python -m ai_video_platform.skills.viral_research_asset_collection inspect-research-request --input request.json`; consume the JSON status and never import an adapter.
 

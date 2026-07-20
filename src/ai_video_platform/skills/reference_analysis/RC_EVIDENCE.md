@@ -1,11 +1,11 @@
-# Reference Analysis — Offline RC Evidence
+# Reference Analysis - Offline RC Evidence
 
 ## Identity and status
 
 - Authorization: `FTG-0-20260720-001`
 - Work item: `FT-02-001`
 - Branch: `ft/codex-02-research-reference`
-- Evidence head: `c6505f8`
+- Implementation evidence head: `b664804`
 - Schema/algorithm version: `1.0.0`
 - Status: `RC_OFFLINE`
 - Production Ready: **not claimed**
@@ -22,18 +22,18 @@ The public interfaces are `analyze_reference` and `compare_result`. They accept 
 - cancellation before analysis, stable errors and recursive redaction;
 - atomic no-clobber output, collision handling and temporary-file cleanup;
 - traversal, absolute path and symlink output rejection where the host supports link creation;
-- recursive selected-reference-only enforcement: nested Provider/discovery/download/Library/Legacy directives and location-like values are rejected without blocking benign provenance prose;
+- recursive selected-reference-only enforcement for Provider/discovery/download/Library/Legacy directives and location-like values without blocking benign provenance prose;
 - independent CLI and `SKILL.md`, with no private import from Viral Research.
 
-## Fresh verification at evidence head
+## Fresh verification at implementation evidence head
 
 | Command | Result |
 |---|---|
-| `python -m unittest -v tests.skills.reference_analysis.test_reference_analysis_interface` | PASS — 6/6, 0.082s |
-| `python -m unittest -v tests.skills.reference_analysis.test_reference_analysis_failures` | PASS — 5 passed, 1 host-capability skip, 0.064s |
-| `python tools\run_offline_tests.py` | BLOCKED SHARED BASELINE — 82 passed, 3 host-capability skips, 1 stale placeholder-only assertion; 86 total, 0.812s |
+| `python -m unittest -v tests.skills.reference_analysis.test_reference_analysis_interface` | PASS - 6/6, 0.083s |
+| `python -m unittest -v tests.skills.reference_analysis.test_reference_analysis_failures` | PASS - 5 passed, 1 host-capability skip, 0.058s |
+| `python tools\run_offline_tests.py` | BLOCKED SHARED BASELINE - 87 passed, 3 host-capability skips, 1 stale placeholder-only assertion; 91 total, 0.710s |
 
-The Reference skip is a Windows environment where symlink creation is unavailable; the test fails closed when link creation is supported. No line-coverage tool or new dependency was introduced, so a coverage percentage is not claimed. The focused acceptance surface contains 12 tests.
+The Reference skip is a Windows environment where symlink creation is unavailable; the test fails closed when link creation is supported. No line-coverage tool or new dependency was introduced, so a coverage percentage is not claimed. The focused Reference acceptance surface contains 12 tests.
 
 ## Security, dependency and operations evidence
 
