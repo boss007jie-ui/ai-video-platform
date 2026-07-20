@@ -71,8 +71,30 @@ def _forbidden_paths(value: object, prefix: str = "") -> list[str]:
     return findings
 
 
+def _forbidden_values(value: object, prefix: str = "", owner_key: str = "") -> list[str]:
+    findings: list[str] = []
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            findings.extend(_forbidden_values(nested, path, str(key).casefold()))
+    elif isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            findings.extend(_forbidden_values(nested, f"{prefix}[{index}]", owner_key))
+    elif isinstance(value, str):
+        lowered = value.casefold()
+        forbidden_identity = any(token in lowered for token in (
+            "legacy", "product-library", "product library", "research-library", "research library",
+        ))
+        path_field = any(token in owner_key for token in ("path", "uri", "root"))
+        path = Path(value)
+        unsafe_path = path_field and (lowered.startswith("file:") or path.is_absolute() or ".." in path.parts)
+        if forbidden_identity or unsafe_path:
+            findings.append(prefix)
+    return findings
+
+
 def _validate_scope(request: Mapping[str, object]) -> None:
-    forbidden = sorted(set(_forbidden_paths(request)))
+    forbidden = sorted(set([*_forbidden_paths(request), *_forbidden_values(request)]))
     if forbidden:
         raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Reference Analysis cannot discover, download, call Providers, or access Libraries", field_paths=tuple(forbidden))
 

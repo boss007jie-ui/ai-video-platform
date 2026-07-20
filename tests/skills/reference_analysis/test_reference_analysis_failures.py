@@ -32,6 +32,17 @@ class ReferenceAnalysisFailureTests(unittest.TestCase):
                     analyze_reference(forbidden_uri, workspace=workspace, output_path="forbidden-uri.json")
                 self.assertEqual(caught.exception.code, ErrorCode.SCOPE_FORBIDDEN)
 
+            for provenance in (
+                {"selected_by": "user", "origin": "Legacy/asset.json"},
+                {"selected_by": "user", "origin_path": "../outside.json"},
+                {"selected_by": "user", "note": "product-library://asset/1"},
+            ):
+                forbidden_value = analyze_request()
+                forbidden_value["selected_reference"] = {**selected_reference(), "provenance": provenance}
+                with self.assertRaises(SkillError) as caught:
+                    analyze_reference(forbidden_value, workspace=workspace, output_path="forbidden-value.json")
+                self.assertEqual(caught.exception.code, ErrorCode.SCOPE_FORBIDDEN)
+
             nested = analyze_request()
             nested["selected_reference"] = {**selected_reference(), "provenance": {"selected_by": "user", "provider": "forbidden"}}
             with self.assertRaises(SkillError) as caught:
