@@ -10,9 +10,11 @@ from ai_video_platform.core.guards import SecretScanner
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONTROL_ROOT = PROJECT_ROOT.parent / "AI Video Platform Re-architecture Control"
-PRODUCT_LIBRARY = PROJECT_ROOT.parent / "AI Video Product Library"
-RESEARCH_LIBRARY = PROJECT_ROOT.parent / "AI Video Research Library"
+PLATFORM_ROOT = PROJECT_ROOT.parent.parent if PROJECT_ROOT.parent.name == ".worktrees" else PROJECT_ROOT
+PROJECTS_ROOT = PLATFORM_ROOT.parent
+CONTROL_ROOT = PROJECTS_ROOT / "AI Video Platform Re-architecture Control"
+PRODUCT_LIBRARY = PROJECTS_ROOT / "AI Video Product Library"
+RESEARCH_LIBRARY = PROJECTS_ROOT / "AI Video Research Library"
 SKILL_NAMES = {
     "product_knowledge",
     "viral_research_asset_collection",
