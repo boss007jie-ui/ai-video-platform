@@ -1,0 +1,27 @@
+# Viral Research & Asset Collection
+
+Version: `0.1.0-rc.offline`
+
+This Skill validates viral-research requests, expands queries, normalizes and deduplicates fake Provider results, produces explainable rankings, enforces rights/PII/expiry policy, plans selected-reference collection, and writes controlled Research Library metadata. It does not write Product Library, analyze selected references, call a real Provider, download real media, publish unregistered business artifacts, or read Legacy paths.
+
+## Public commands
+
+- `inspect-research-request`: validates all inputs without side effects.
+- `research-viral`: performs the offline research flow. The command-line default uses a rejecting Provider.
+- `collect-reference-assets`: collects selected metadata. The command-line default uses a rejecting downloader.
+
+Each command accepts `--input <json-file>` and optional `--now <UTC-Z>`, prints one JSON result, and returns `0` on success or `2` for a stable redacted error.
+
+## Inputs, outputs, and boundaries
+
+Requests explicitly include platform, market, region, time window/expiry, campaign goal, audience, format, bounded search budget, guarded download policy, seed queries, and idempotency key. Outputs are local immutable Skill results, not `ViralResearchPack` or `ReferenceCollectionManifest`; those cross-Skill artifacts remain blocked until Codex-00 registers them in the separate Business Artifact Registry. Foundation Registry remains 1 Envelope + 11 payload IDs.
+
+Only this Skill's controlled storage seam may write Research Library metadata. The filesystem adapter requires an explicit root and tests use temporary roots only. Unknown rights become metadata-only; PII/unsafe material is quarantined; expired material stays expired. Retention cannot be silently extended and deletion is audited.
+
+## Failure, retry, cancellation, and safety
+
+Validation precedes side effects. Provider retries are limited to two and remain inside the request's total provider-call budget. Cancellation is checked before and during work. Idempotency key reuse with different content fails. Errors are stable and redact secret-like fields. Real Provider/network/media/credential paths are unavailable; fake and rejecting adapters are the only adapters in this release candidate.
+
+## Tests and operations
+
+Run the three owned unittest modules from the task card, then `python tools\run_offline_tests.py`. Rollback is the owning branch commit revert; real seams remain fail-closed. Hermes may call only the three public commands and must not import adapters. Maintainer: `codex-02`; authorization: `FTG-0-20260720-001`; Provider smoke: `NOT_AUTHORIZED`.
