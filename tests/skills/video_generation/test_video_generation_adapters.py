@@ -153,7 +153,7 @@ class VideoGenerationAdapterTests(unittest.TestCase):
         adapter = FakeVideoProviderAdapter(poll_states=("running", "succeeded"))
         first = self.make_interface(adapter, ledger)
         submitted = first.submit_video(generation_request(), now=NOW)
-        recovered = self.make_interface(adapter, ledger).recover_video(submitted["job_id"], now=NOW)
+        recovered = self.make_interface(FakeVideoProviderAdapter(), ledger).recover_video(submitted["job_id"], now=NOW)
         self.assertEqual(recovered["job_id"], submitted["job_id"])
         self.assertEqual(recovered["state"], "submitted")
         self.assertTrue(recovered["recovered"])
