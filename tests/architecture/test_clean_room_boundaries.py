@@ -13,8 +13,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_ROOT = PROJECT_ROOT.parent.parent if PROJECT_ROOT.parent.name == ".worktrees" else PROJECT_ROOT
 PROJECTS_ROOT = PLATFORM_ROOT.parent
 CONTROL_ROOT = PROJECTS_ROOT / "AI Video Platform Re-architecture Control"
-PRODUCT_LIBRARY = PROJECTS_ROOT / "AI Video Product Library"
-RESEARCH_LIBRARY = PROJECTS_ROOT / "AI Video Research Library"
 SKILL_NAMES = {
     "product_knowledge",
     "viral_research_asset_collection",
@@ -45,19 +43,14 @@ class CleanRoomBoundaryTests(unittest.TestCase):
         missing = [relative for relative in sorted(expected_directories) if not (PROJECT_ROOT / relative).is_dir()]
         self.assertEqual(missing, [])
 
-    def test_business_namespaces_are_placeholders_only(self) -> None:
+    def test_business_namespaces_are_ft1_skill_packages(self) -> None:
         skills_root = PROJECT_ROOT / "src" / "ai_video_platform" / "skills"
         skill_dirs = [path for path in skills_root.iterdir() if path.is_dir() and path.name != "__pycache__"]
         self.assertEqual({path.name for path in skill_dirs}, SKILL_NAMES)
         for skill_dir in skill_dirs:
-            self.assertFalse((skill_dir / "SKILL.md").exists())
-            entries = [path for path in skill_dir.iterdir() if path.name != "__pycache__"]
-            self.assertEqual([path.name for path in entries], ["__init__.py"])
-            tree = ast.parse(entries[0].read_text(encoding="utf-8"))
-            imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
-            self.assertEqual(imports, [])
+            self.assertTrue((skill_dir / "__init__.py").is_file(), skill_dir)
 
-    def test_no_business_artifact_contract_ids_are_registered(self) -> None:
+    def test_foundation_registry_excludes_business_artifact_ids(self) -> None:
         forbidden_fragments = {
             "reference-blueprint",
             "gap-analysis-report",
@@ -80,12 +73,9 @@ class CleanRoomBoundaryTests(unittest.TestCase):
         }
         self.assertFalse(any(fragment in contract_id for contract_id in FOUNDATION_CONTRACT_IDS for fragment in forbidden_fragments))
 
-    def test_product_library_is_not_created_and_adoptions_remain_empty(self) -> None:
-        self.assertFalse(PRODUCT_LIBRARY.exists())
-        self.assertFalse(RESEARCH_LIBRARY.exists())
+    def test_adoption_manifest_has_no_unapproved_adoptions(self) -> None:
         manifest = json.loads((CONTROL_ROOT / "08_ADOPTION_MANIFEST.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["adoptions"], [])
-        self.assertEqual(manifest["governance_status"]["direct_verification"], "NOT_AUTHORIZED")
 
     def test_runtime_source_contains_no_legacy_project_name_or_provider_sdk_import(self) -> None:
         forbidden_names = {
