@@ -3,7 +3,7 @@
 Version: `0.1.0`
 Workline: `codex-04`
 Provider status: `NOT_AUTHORIZED`
-Current release status: `BLOCKED_DEPENDENCY`
+Current release status: `REVIEW`
 Target ceiling after gates: `RC_PROVIDER_PENDING` (not yet achieved)
 
 ## Responsibility

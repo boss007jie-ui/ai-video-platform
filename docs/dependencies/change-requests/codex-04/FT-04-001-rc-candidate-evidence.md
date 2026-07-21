@@ -5,7 +5,7 @@ Work item: `FT-04-001`
 Workline: `codex-04`
 Branch: `ft/codex-04-image-panel`
 Baseline: `3bf2c567aebda769ccac22b51b4339541eddb609`
-Status: `BLOCKED_DEPENDENCY`
+Status: `REVIEW`
 Provider smoke: `NOT_AUTHORIZED`
 Production Ready claim: `NONE`
 
@@ -25,15 +25,15 @@ Production Ready claim: `NONE`
 
 | Command | Result |
 |---|---|
-| `python -m unittest tests.skills.product_image_panel_generation.test_image_panel_interface` | PASS — 21 tests |
-| `python -m unittest tests.skills.product_image_panel_generation.test_image_panel_adapters` | PASS — 11 tests |
-| `python -m unittest tests.skills.product_image_panel_generation.test_image_panel_safety` | PASS — 18 tests |
-| in-memory `compile()` of owner Python sources/tests | PASS — 15 files |
-| `python tools\\run_offline_tests.py` | BLOCKED — 108 tests run, 107 passed, one Codex-00-owned launch placeholder assertion failed |
+| `py -3.14 tools\\run_offline_tests.py` | PASS — 120 tests |
+| `python -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_interface` | PASS — 21 tests |
+| `python -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_adapters` | PASS — 11 tests |
+| `python -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_safety` | PASS — 18 tests |
+| `python tools\\run_offline_tests.py` | PASS — 120 tests |
 
-The only full-suite failure is `architecture.test_clean_room_boundaries.CleanRoomBoundaryTests.test_business_namespaces_are_placeholders_only`. It rejects the authorized presence of `SKILL.md` and implementation files. Codex-04 did not edit the shared guard; the exact replacement request is recorded in `FT-04-001-image-panel-contract-and-guard-request.md`.
+These results were captured after merging `ft/codex-00-integration`. The shared architecture guard now recognizes authorized FT-1 Skill packages; the earlier placeholder-only failure is resolved without a Codex-04-owned shared-file edit.
 
-The full suite separately passed `contracts.test_registry.FoundationRegistryTests.test_registry_is_exactly_one_envelope_and_eleven_payloads`, the repository secret scan, no-provider-SDK/Legacy checks, offline network/subprocess guards, and reproducible offline wheel build.
+Both full-suite runs separately passed `contracts.test_registry.FoundationRegistryTests.test_registry_is_exactly_one_envelope_and_eleven_payloads`, the repository secret scan, no-provider-SDK/Legacy checks, offline network/subprocess guards, release bundle controls, and reproducible offline wheel build. Fresh raw logs are stored under `logs/hermes-acceptance-20260721/`.
 
 ## Review and negative-path closure
 
@@ -52,10 +52,9 @@ No finding changed Shared Contracts, Core, Main, release, integration-control, o
 ## Dependency and release blockers
 
 1. Codex-00 must accept or reject the Business Artifact Registry request for the Skill-local generation request and record identities.
-2. Codex-00 must update the launch placeholder architecture guard before the full offline suite can pass on an authorized implementation branch.
-3. The baseline has no `coverage` module. Codex-00 must provide approved offline coverage tooling or an FTG-3 waiver; no dependency installation was attempted.
-4. Codex-06 independent acceptance fixtures/results are not yet available on this branch.
-5. No production Adapter, credential path, Provider dependency, FTG-P authorization, or real Provider smoke exists. A production orchestration ledger/store is also outside this owner boundary.
+2. The synchronized dependency lock still contains no coverage tool. Codex-00 must provide approved offline coverage tooling or an FTG-3 waiver; no dependency installation was attempted.
+3. Codex-06 independent acceptance fixtures/results are not yet available on this branch.
+4. No production Adapter, credential path, Provider dependency, FTG-P authorization, or real Provider smoke exists. A production orchestration ledger/store is also outside this owner boundary.
 
 Accordingly this evidence is an owner-scoped RC candidate packet only. It does not assert `RC_PROVIDER_PENDING`, `Production Ready`, Provider approval, integration acceptance, or release approval.
 
