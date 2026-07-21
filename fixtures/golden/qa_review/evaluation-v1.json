@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_version": "qa-eval-v1",
+  "thresholds": {
+    "max_false_positive_rate": 0.0,
+    "max_false_negative_rate": 0.0,
+    "max_needs_review_rate": 0.34
+  },
+  "base_request": {
+    "schema_version": "1.0.0",
+    "criteria_version": "qa-criteria-v1",
+    "evaluation_set_version": "qa-eval-v1",
+    "command": "review-asset",
+    "task_id": "task-evaluation",
+    "execution_id": "exec-evaluation",
+    "subject": {
+      "artifact_id": "asset-evaluation",
+      "artifact_type": "image",
+      "schema_version": "1.0.0",
+      "revision": 1,
+      "contract_valid": true,
+      "assets": [{"role": "primary", "approved": true}],
+      "product_id": "product-001",
+      "sku_id": "sku-001",
+      "continuity": {"hero_color": "navy"},
+      "drift": {"layout": 0.02},
+      "quality": {"sharpness": 0.92, "artifact_score": 0.04}
+    },
+    "criteria": {
+      "expected_revision": 1,
+      "required_asset_roles": ["primary"],
+      "expected_product_id": "product-001",
+      "expected_sku_id": "sku-001",
+      "continuity": {"hero_color": "navy"},
+      "max_drift": {"layout": 0.1},
+      "quality": {
+        "sharpness": {"min": 0.8},
+        "artifact_score": {"max": 0.1}
+      }
+    },
+    "context": {
+      "product_context_revision": 1,
+      "expected_product_context_revision": 1
+    },
+    "evidence_refs": ["fixture:qa/evaluation-v1"]
+  },
+  "cases": [
+    {
+      "case_id": "true-pass",
+      "expected_outcome": "pass",
+      "overrides": {"execution_id": "exec-eval-pass"}
+    },
+    {
+      "case_id": "true-fail-contract",
+      "expected_outcome": "fail",
+      "overrides": {
+        "execution_id": "exec-eval-contract-fail",
+        "subject": {"contract_valid": false}
+      }
+    },
+    {
+      "case_id": "true-fail-quality",
+      "expected_outcome": "fail",
+      "overrides": {
+        "execution_id": "exec-eval-quality-fail",
+        "subject": {"quality": {"artifact_score": 0.5}}
+      }
+    },
+    {
+      "case_id": "human-review-missing-evidence",
+      "expected_outcome": "needs-review",
+      "overrides": {
+        "execution_id": "exec-eval-review",
+        "subject": {"quality": {"sharpness": "missing"}}
+      }
+    }
+  ]
+}
