@@ -23,6 +23,9 @@ class AdapterFailure(RuntimeError):
 class FakeVideoProviderAdapter:
     """Deterministic in-memory fake; it never imports or touches networking."""
 
+    execution_mode = "offline_adapter"
+    network_performed = False
+
     def __init__(
         self,
         *,
@@ -97,6 +100,8 @@ class FakeVideoProviderAdapter:
 
 
 class RejectingVideoProviderAdapter:
+    execution_mode = "offline_adapter"
+    network_performed = False
     network_calls = 0
 
     def submit(self, request: Mapping[str, object]) -> str:
@@ -113,6 +118,8 @@ class RejectingVideoProviderAdapter:
 
 
 class NetworkBlockedVideoProviderAdapter:
+    execution_mode = "offline_adapter"
+    network_performed = False
     network_calls = 0
 
     def submit(self, request: Mapping[str, object]) -> str:

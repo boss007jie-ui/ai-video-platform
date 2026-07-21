@@ -173,8 +173,51 @@ class VideoGenerationInterface:
         if state not in {"running", "succeeded", "failed", "cancelled"}:
             ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned an unsupported state")
-        ledger_state = "polling" if state == "running" else str(state)
-        return self._result(ledger.transition(job_id, expected_states=ACTIVE_STATES, state=ledger_state, at=self._format_time(evaluated_at), poll_attempts=poll_attempts))
+        changes: dict[str, object] = {"poll_attempts": poll_attempts}
+        cost_units = provider_result.get("cost_units")
+        if cost_units is not None:
+            if isinstance(cost_units, bool) or not isinstance(cost_units, (int, float)) or cost_units < 0:
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned invalid cost data")
+            changes["provider_cost_units"] = cost_units
+            if cost_units > float(record["budget"]["max_cost_units"]):
+                ledger.transition(
+                    job_id,
+                    expected_states=ACTIVE_STATES,
+                    state="failed",
+                    at=self._format_time(evaluated_at),
+                    error_code=GenerationErrorCode.BUDGET_EXCEEDED.value,
+                    **changes,
+                )
+                raise GenerationError(
+                    GenerationErrorCode.BUDGET_EXCEEDED,
+                    "Provider actual cost exceeds the approved budget",
+                )
+        if record["state"] != "polling":
+            record = ledger.transition(
+                job_id,
+                expected_states=ACTIVE_STATES,
+                state="polling",
+                at=self._format_time(evaluated_at),
+                **changes,
+            )
+        elif state == "running":
+            record = ledger.transition(
+                job_id,
+                expected_states={"polling"},
+                state="polling",
+                at=self._format_time(evaluated_at),
+                **changes,
+            )
+        if state == "running":
+            return self._result(record)
+        return self._result(ledger.transition(
+            job_id,
+            expected_states={"polling"},
+            state=str(state),
+            at=self._format_time(evaluated_at),
+            **changes,
+        ))
 
     def cancel_video(self, job_id: str, *, now: datetime | None = None) -> dict[str, object]:
         adapter, ledger = self._dependencies()
@@ -209,7 +252,7 @@ class VideoGenerationInterface:
         expected = artifact.get("sha256")
         uri = artifact.get("uri")
         content_type = artifact.get("content_type")
-        if not isinstance(content, bytes) or not isinstance(expected, str) or not isinstance(uri, str) or contains_sensitive_text(uri) or re.fullmatch(r"memory://[A-Za-z0-9._/-]+", uri) is None or content_type != "video/mp4":
+        if not isinstance(content, bytes) or not isinstance(expected, str) or not isinstance(uri, str) or contains_sensitive_text(uri) or re.fullmatch(r"(?:memory|kie)://[A-Za-z0-9._/-]+", uri) is None or content_type != "video/mp4":
             raise GenerationError(GenerationErrorCode.DOWNLOAD_INTEGRITY_FAILED, "Downloaded artifact metadata is invalid")
         actual = "sha256:" + hashlib.sha256(content).hexdigest()
         if actual != expected:
@@ -223,7 +266,7 @@ class VideoGenerationInterface:
             "sha256": actual,
             "media_type": content_type,
             "size_bytes": len(content),
-            "provenance": {"source_job_id": job_id, "execution_mode": "offline_adapter"},
+            "provenance": {"source_job_id": job_id, "execution_mode": self._execution_mode()},
             "library_write_performed": False,
         }
         evaluated_at = self._now(now)
@@ -259,8 +302,11 @@ class VideoGenerationInterface:
     def _format_time(value: datetime) -> str:
         return value.isoformat().replace("+00:00", "Z")
 
-    @staticmethod
-    def _result(record: Mapping[str, object], *, replayed: bool = False, recovered: bool = False) -> dict[str, object]:
+    def _execution_mode(self) -> str:
+        value = getattr(self._adapter, "execution_mode", "offline_adapter")
+        return value if value in {"offline_adapter", "kie_production"} else "offline_adapter"
+
+    def _result(self, record: Mapping[str, object], *, replayed: bool = False, recovered: bool = False) -> dict[str, object]:
         public = {
             key: value for key, value in record.items()
             if key not in {"provider_job_id", "budget", "output", "request_hash", "idempotency_key"}
@@ -268,7 +314,7 @@ class VideoGenerationInterface:
         public.update({
             "replayed": replayed,
             "recovered": recovered,
-            "provider_network_performed": False,
-            "provider_execution_mode": "offline_adapter",
+            "provider_network_performed": bool(getattr(self._adapter, "network_performed", False)),
+            "provider_execution_mode": self._execution_mode(),
         })
         return snapshot(public)

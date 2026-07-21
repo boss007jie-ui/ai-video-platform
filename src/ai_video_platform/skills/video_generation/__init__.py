@@ -3,6 +3,7 @@
 from .errors import GenerationError, GenerationErrorCode
 from .interface import VideoGenerationInterface
 from .adapters import FakeVideoProviderAdapter, NetworkBlockedVideoProviderAdapter, RejectingVideoProviderAdapter
+from .kie_adapter import KieCredentialResolver, KieVideoProviderAdapter
 from .ledger import InMemoryVideoExecutionLedger
 
 __all__ = [
@@ -10,6 +11,8 @@ __all__ = [
     "GenerationError",
     "GenerationErrorCode",
     "InMemoryVideoExecutionLedger",
+    "KieCredentialResolver",
+    "KieVideoProviderAdapter",
     "NetworkBlockedVideoProviderAdapter",
     "RejectingVideoProviderAdapter",
     "VideoGenerationInterface",
