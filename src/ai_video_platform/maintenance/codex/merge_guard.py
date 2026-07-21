@@ -149,7 +149,27 @@ def _skill_for_path(path: Path) -> str | None:
     return parts[index + 1] if len(parts) > index + 1 else None
 
 
-def _cross_skill_imports(tree: ast.AST, owner_skill: str | None) -> bool:
+def _package_public_exports(source_root: Path, skill_name: str) -> frozenset[str]:
+    package_init = source_root / "ai_video_platform" / "skills" / skill_name / "__init__.py"
+    if not package_init.is_file():
+        return frozenset()
+    package_tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=package_init.as_posix())
+    exports: set[str] = set()
+    for node in package_tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+            continue
+        try:
+            declared = ast.literal_eval(node.value)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(declared, (list, tuple)):
+            exports.update(item for item in declared if isinstance(item, str))
+    return frozenset(exports)
+
+
+def _cross_skill_imports(tree: ast.AST, owner_skill: str | None, source_root: Path) -> bool:
     if owner_skill is None:
         return False
     for node in ast.walk(tree):
@@ -157,9 +177,25 @@ def _cross_skill_imports(tree: ast.AST, owner_skill: str | None) -> bool:
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            first = node.module.split(".")[0]
-            if node.level >= 2 and first in _SKILL_NAMES and first != owner_skill:
-                return True
+            relative_parts = node.module.split(".")
+            if relative_parts[0] == "skills" and len(relative_parts) > 1:
+                relative_parts = relative_parts[1:]
+            first = relative_parts[0]
+            relative_seam = relative_parts[1] if len(relative_parts) > 1 else ""
+            if (
+                node.level >= 2
+                and first in _SKILL_NAMES
+                and first != owner_skill
+            ):
+                if relative_seam not in _PUBLIC_SKILL_SEAMS:
+                    return True
+                if relative_seam == "":
+                    public_exports = _package_public_exports(source_root, first)
+                    if any(
+                        alias.name not in public_exports and alias.name not in _PUBLIC_SKILL_SEAMS
+                        for alias in node.names
+                    ):
+                        return True
             modules.append(node.module)
         for module in modules:
             parts = module.split(".")
@@ -167,8 +203,15 @@ def _cross_skill_imports(tree: ast.AST, owner_skill: str | None) -> bool:
                 continue
             target_skill = parts[2]
             exposed_area = parts[3] if len(parts) > 3 else ""
-            if target_skill != owner_skill and exposed_area not in {"public_api", "cli"}:
+            if target_skill != owner_skill and exposed_area not in _PUBLIC_SKILL_SEAMS:
                 return True
+            if target_skill != owner_skill and exposed_area == "" and isinstance(node, ast.ImportFrom):
+                public_exports = _package_public_exports(source_root, target_skill)
+                if any(
+                    alias.name not in public_exports and alias.name not in _PUBLIC_SKILL_SEAMS
+                    for alias in node.names
+                ):
+                    return True
     return False
 
 
@@ -179,13 +222,27 @@ _LIBRARY_MARKERS = {
 _PATH_WRITE_METHODS = {"write_text", "write_bytes", "mkdir", "touch", "unlink"}
 _PATH_RELOCATION_METHODS = {"rename", "replace"}
 _COPY_MOVE_FUNCTIONS = {"copy", "copy2", "copyfile", "copytree", "move"}
+_PUBLIC_SKILL_SEAMS = {"", "interface", "public_api", "cli"}
 
 
 class _ScopeCollector(ast.NodeVisitor):
     def __init__(self) -> None:
         self.assignments: list[tuple[ast.expr, ast.expr]] = []
         self.calls: list[ast.Call] = []
-        self.children: list[ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef] = []
+        self.children: list[ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda] = []
+        self.module_aliases: dict[str, str] = {}
+        self.function_aliases: dict[str, tuple[str, str]] = {}
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            if alias.name in {"os", "shutil"}:
+                self.module_aliases[alias.asname or alias.name] = alias.name
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module not in {"os", "shutil"}:
+            return
+        for alias in node.names:
+            self.function_aliases[alias.asname or alias.name] = (node.module, alias.name)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         self.assignments.extend((target, node.value) for target in node.targets)
@@ -205,21 +262,40 @@ class _ScopeCollector(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        for expression in (*node.decorator_list, *node.args.defaults, *node.args.kw_defaults):
+            if expression is not None:
+                self.visit(expression)
         self.children.append(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        for expression in (*node.decorator_list, *node.args.defaults, *node.args.kw_defaults):
+            if expression is not None:
+                self.visit(expression)
         self.children.append(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.children.append(node)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
-        return
+        for expression in (*node.args.defaults, *node.args.kw_defaults):
+            if expression is not None:
+                self.visit(expression)
+        self.children.append(node)
+
+
+def _binding_key(target: ast.expr) -> str | None:
+    if isinstance(target, ast.Name):
+        return target.id
+    if isinstance(target, ast.Attribute):
+        owner = _binding_key(target.value)
+        return f"{owner}.{target.attr}" if owner else None
+    return None
 
 
 def _assigned_names(target: ast.expr) -> tuple[str, ...]:
-    if isinstance(target, ast.Name):
-        return (target.id,)
+    binding_key = _binding_key(target)
+    if binding_key is not None:
+        return (binding_key,)
     if isinstance(target, (ast.Tuple, ast.List)):
         return tuple(name for item in target.elts for name in _assigned_names(item))
     return ()
@@ -234,8 +310,14 @@ def _expression_library_markers(
     if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
         lowered = expression.value.lower()
         return frozenset(kind for kind, marker in _LIBRARY_MARKERS.items() if marker in lowered)
-    if isinstance(expression, ast.Name):
-        return bindings.get(expression.id, frozenset())
+    binding_key = _binding_key(expression) if isinstance(expression, (ast.Name, ast.Attribute)) else None
+    if binding_key is not None:
+        bound = bindings.get(binding_key, frozenset())
+        if isinstance(expression, ast.Attribute):
+            return bound | _expression_library_markers(expression.value, bindings)
+        return bound
+    if isinstance(expression, ast.Attribute):
+        return _expression_library_markers(expression.value, bindings)
     if isinstance(expression, ast.BinOp):
         return _expression_library_markers(expression.left, bindings) | _expression_library_markers(
             expression.right,
@@ -249,7 +331,9 @@ def _expression_library_markers(
         return _expression_library_markers(expression.value, bindings)
     if isinstance(expression, ast.Call):
         return frozenset().union(
-            *(_expression_library_markers(argument, bindings) for argument in expression.args)
+            _expression_library_markers(expression.func, bindings),
+            *(_expression_library_markers(argument, bindings) for argument in expression.args),
+            *(_expression_library_markers(item.value, bindings) for item in expression.keywords),
         )
     return frozenset()
 
@@ -267,9 +351,89 @@ def _write_mode(call: ast.Call, positional_index: int) -> bool:
     )
 
 
-def _write_target_markers(call: ast.Call, bindings: dict[str, frozenset[str]]) -> frozenset[str]:
+def _module_write_target_markers(
+    module_name: str,
+    function_name: str,
+    call: ast.Call,
+    bindings: dict[str, frozenset[str]],
+) -> frozenset[str] | None:
+    if module_name == "os":
+        if function_name in {"mkdir", "makedirs", "remove", "unlink", "rmdir", "removedirs"}:
+            targets = [
+                *call.args[:1],
+                *[item.value for item in call.keywords if item.arg in {"path", "name"}],
+            ]
+            return frozenset().union(
+                *(_expression_library_markers(target, bindings) for target in targets)
+            )
+        if function_name in _PATH_RELOCATION_METHODS:
+            targets = [
+                *call.args[:2],
+                *[item.value for item in call.keywords if item.arg in {"src", "dst"}],
+            ]
+            return frozenset().union(
+                *(_expression_library_markers(target, bindings) for target in targets)
+            )
+    if module_name == "shutil" and function_name in _COPY_MOVE_FUNCTIONS:
+        destinations = [
+            *call.args[1:2],
+            *[item.value for item in call.keywords if item.arg in {"dst", "destination"}],
+        ]
+        return frozenset().union(
+            *(_expression_library_markers(target, bindings) for target in destinations)
+        )
+    return None
+
+
+def _summary_target_markers(
+    summary: tuple[tuple[str, ...], frozenset[str]],
+    call: ast.Call,
+    bindings: dict[str, frozenset[str]],
+    *,
+    bound_method: bool = False,
+) -> frozenset[str]:
+    parameters, written_parameters = summary
+    positional_parameters = parameters[1:] if bound_method else parameters
+    targets = [
+        argument
+        for parameter, argument in zip(positional_parameters, call.args)
+        if parameter in written_parameters
+    ]
+    targets.extend(
+        keyword.value
+        for keyword in call.keywords
+        if keyword.arg in written_parameters
+    )
+    return frozenset().union(
+        *(_expression_library_markers(target, bindings) for target in targets)
+    )
+
+
+def _write_target_markers(
+    call: ast.Call,
+    bindings: dict[str, frozenset[str]],
+    module_aliases: dict[str, str],
+    function_aliases: dict[str, tuple[str, str]],
+    callable_summaries: dict[str, tuple[tuple[str, ...], frozenset[str]]],
+) -> frozenset[str]:
     function = call.func
     if isinstance(function, ast.Attribute):
+        if (
+            isinstance(function.value, ast.Name)
+            and function.value.id in {"self", "cls"}
+            and function.attr in callable_summaries
+        ):
+            return _summary_target_markers(
+                callable_summaries[function.attr],
+                call,
+                bindings,
+                bound_method=True,
+            )
+        supplied_module_name = function.value.id if isinstance(function.value, ast.Name) else None
+        module_name = module_aliases.get(supplied_module_name, supplied_module_name)
+        module_markers = _module_write_target_markers(module_name or "", function.attr, call, bindings)
+        if module_markers is not None:
+            return module_markers
         if function.attr in _PATH_WRITE_METHODS:
             return _expression_library_markers(function.value, bindings)
         if function.attr in _PATH_RELOCATION_METHODS:
@@ -288,6 +452,14 @@ def _write_target_markers(call: ast.Call, bindings: dict[str, frozenset[str]]) -
                 *(_expression_library_markers(target, bindings) for target in destinations)
             )
     if isinstance(function, ast.Name):
+        aliased_function = function_aliases.get(function.id)
+        if aliased_function is not None:
+            module_markers = _module_write_target_markers(*aliased_function, call, bindings)
+            if module_markers is not None:
+                return module_markers
+        summary = callable_summaries.get(function.id)
+        if summary is not None:
+            return _summary_target_markers(summary, call, bindings)
         if function.id == "open" and _write_mode(call, 1):
             targets = [*call.args[:1], *[item.value for item in call.keywords if item.arg == "file"]]
             return frozenset().union(
@@ -304,17 +476,25 @@ def _write_target_markers(call: ast.Call, bindings: dict[str, frozenset[str]]) -
     return frozenset()
 
 
-def _scope_library_writes(
-    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+def _resolved_scope_bindings(
+    assignments: Iterable[tuple[ast.expr, ast.expr]],
     inherited_bindings: dict[str, frozenset[str]],
-) -> frozenset[str]:
-    collector = _ScopeCollector()
-    for statement in scope.body:
-        collector.visit(statement)
-    bindings = dict(inherited_bindings)
-    for _ in range(len(collector.assignments) + 1):
+) -> dict[str, frozenset[str]]:
+    assignment_list = tuple(assignments)
+    local_names = {
+        name
+        for target, _ in assignment_list
+        for name in _assigned_names(target)
+    }
+    bindings = {
+        name: markers
+        for name, markers in inherited_bindings.items()
+        if name not in local_names
+    }
+    bindings.update((name, frozenset()) for name in local_names)
+    for _ in range(len(assignment_list) + 1):
         changed = False
-        for target, value in collector.assignments:
+        for target, value in assignment_list:
             markers = _expression_library_markers(value, bindings)
             for name in _assigned_names(target):
                 combined = bindings.get(name, frozenset()) | markers
@@ -323,14 +503,207 @@ def _scope_library_writes(
                     changed = True
         if not changed:
             break
-    writes = frozenset().union(*(_write_target_markers(call, bindings) for call in collector.calls))
+    return bindings
+
+
+def _callable_scope_bindings(
+    scope: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+    inherited_bindings: dict[str, frozenset[str]],
+) -> dict[str, frozenset[str]]:
+    bindings = dict(inherited_bindings)
+    positional = [*scope.args.posonlyargs, *scope.args.args]
+    parameters = [*positional, *scope.args.kwonlyargs]
+    if scope.args.vararg is not None:
+        parameters.append(scope.args.vararg)
+    if scope.args.kwarg is not None:
+        parameters.append(scope.args.kwarg)
+    bindings.update((parameter.arg, frozenset()) for parameter in parameters)
+
+    positional_defaults = zip(positional[-len(scope.args.defaults) :], scope.args.defaults)
+    keyword_defaults = (
+        (parameter, default)
+        for parameter, default in zip(scope.args.kwonlyargs, scope.args.kw_defaults)
+        if default is not None
+    )
+    for parameter, default in (*positional_defaults, *keyword_defaults):
+        bindings[parameter.arg] = _expression_library_markers(default, inherited_bindings)
+    return bindings
+
+
+def _callable_write_summary(
+    scope: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+    inherited_module_aliases: dict[str, str],
+    inherited_function_aliases: dict[str, tuple[str, str]],
+    callable_summaries: dict[str, tuple[tuple[str, ...], frozenset[str]]],
+) -> tuple[tuple[str, ...], frozenset[str]]:
+    collector = _ScopeCollector()
+    if isinstance(scope, ast.Lambda):
+        collector.visit(scope.body)
+    else:
+        for statement in scope.body:
+            collector.visit(statement)
+    positional = [*scope.args.posonlyargs, *scope.args.args]
+    parameters = [*positional, *scope.args.kwonlyargs]
+    if scope.args.vararg is not None:
+        parameters.append(scope.args.vararg)
+    if scope.args.kwarg is not None:
+        parameters.append(scope.args.kwarg)
+    parameter_names = tuple(parameter.arg for parameter in parameters)
+    symbolic_bindings = {
+        name: frozenset({f"parameter:{name}"})
+        for name in parameter_names
+    }
+    bindings = _resolved_scope_bindings(collector.assignments, symbolic_bindings)
+    local_names = {
+        name
+        for target, _ in collector.assignments
+        for name in _assigned_names(target)
+    }
+    module_aliases = {
+        name: module
+        for name, module in inherited_module_aliases.items()
+        if name not in local_names
+    }
+    module_aliases.update(collector.module_aliases)
+    function_aliases = {
+        name: target
+        for name, target in inherited_function_aliases.items()
+        if name not in local_names
+    }
+    function_aliases.update(collector.function_aliases)
+    writes = frozenset().union(
+        *(
+            _write_target_markers(
+                call,
+                bindings,
+                module_aliases,
+                function_aliases,
+                callable_summaries,
+            )
+            for call in collector.calls
+        )
+    )
+    written_parameters = frozenset(
+        marker.removeprefix("parameter:")
+        for marker in writes
+        if marker.startswith("parameter:")
+    )
+    return parameter_names, written_parameters
+
+
+def _callable_write_summaries(
+    collector: _ScopeCollector,
+    module_aliases: dict[str, str],
+    function_aliases: dict[str, tuple[str, str]],
+) -> dict[str, tuple[tuple[str, ...], frozenset[str]]]:
+    candidates: dict[str, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda] = {
+        child.name: child
+        for child in collector.children
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    candidates.update(
+        (name, value)
+        for target, value in collector.assignments
+        if isinstance(value, ast.Lambda)
+        for name in _assigned_names(target)
+        if "." not in name
+    )
+    summaries: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {}
+    for _ in range(len(candidates) + 1):
+        updated = {
+            name: _callable_write_summary(
+                candidate,
+                module_aliases,
+                function_aliases,
+                summaries,
+            )
+            for name, candidate in candidates.items()
+        }
+        if updated == summaries:
+            break
+        summaries = updated
+    return summaries
+
+
+def _scope_library_writes(
+    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda,
+    inherited_bindings: dict[str, frozenset[str]],
+    inherited_module_aliases: dict[str, str],
+    inherited_function_aliases: dict[str, tuple[str, str]],
+) -> frozenset[str]:
+    collector = _ScopeCollector()
+    if isinstance(scope, ast.Lambda):
+        collector.visit(scope.body)
+    else:
+        for statement in scope.body:
+            collector.visit(statement)
+    scope_bindings = (
+        _callable_scope_bindings(scope, inherited_bindings)
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+        else inherited_bindings
+    )
+    bindings = _resolved_scope_bindings(collector.assignments, scope_bindings)
+    local_names = {
+        name
+        for target, _ in collector.assignments
+        for name in _assigned_names(target)
+    }
+    module_aliases = {
+        name: module
+        for name, module in inherited_module_aliases.items()
+        if name not in local_names
+    }
+    module_aliases.update(collector.module_aliases)
+    function_aliases = {
+        name: target
+        for name, target in inherited_function_aliases.items()
+        if name not in local_names
+    }
+    function_aliases.update(collector.function_aliases)
+    callable_summaries = _callable_write_summaries(
+        collector,
+        module_aliases,
+        function_aliases,
+    )
+    writes = frozenset().union(
+        *(
+            _write_target_markers(
+                call,
+                bindings,
+                module_aliases,
+                function_aliases,
+                callable_summaries,
+            )
+            for call in collector.calls
+        )
+    )
+    child_bindings = bindings
+    if isinstance(scope, ast.ClassDef):
+        instance_assignments: list[tuple[ast.expr, ast.expr]] = []
+        for child in collector.children:
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            child_collector = _ScopeCollector()
+            for statement in child.body:
+                child_collector.visit(statement)
+            instance_assignments.extend(
+                (target, value)
+                for target, value in child_collector.assignments
+                if any("." in name for name in _assigned_names(target))
+            )
+        child_bindings = _resolved_scope_bindings(instance_assignments, bindings)
     for child in collector.children:
-        writes |= _scope_library_writes(child, bindings)
+        writes |= _scope_library_writes(
+            child,
+            child_bindings,
+            module_aliases,
+            function_aliases,
+        )
     return writes
 
 
 def _library_writes(tree: ast.Module) -> frozenset[str]:
-    return _scope_library_writes(tree, {})
+    return _scope_library_writes(tree, {}, {}, {})
 
 
 def _forbidden_runtime_import(tree: ast.AST, relative: Path) -> str | None:
@@ -359,7 +732,7 @@ def scan_runtime_boundaries(project_root: Path) -> tuple[MergeViolation, ...]:
         text = path.read_text(encoding="utf-8")
         tree = ast.parse(text, filename=relative.as_posix())
         owner_skill = _skill_for_path(relative)
-        if _cross_skill_imports(tree, owner_skill):
+        if _cross_skill_imports(tree, owner_skill, source_root):
             violations.append(MergeViolation("CROSS_SKILL_PRIVATE_IMPORT", relative.as_posix(), "Use public_api or cli"))
         forbidden_import = _forbidden_runtime_import(tree, relative)
         if forbidden_import:
