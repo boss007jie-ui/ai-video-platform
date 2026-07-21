@@ -11,6 +11,64 @@ from ai_video_platform.maintenance.codex.merge_guard import (
 
 
 class MergeGuardTests(unittest.TestCase):
+    def test_runtime_scan_allows_library_rejection_guard_with_unrelated_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qa = root / "src" / "ai_video_platform" / "skills" / "qa_review"
+            qa.mkdir(parents=True)
+            (qa / "guard.py").write_text(
+                "from pathlib import Path\n"
+                "PRODUCT_LIBRARY = 'AI Video Product Library'\n"
+                "def reject_product_library(path):\n"
+                "    if PRODUCT_LIBRARY in str(path):\n"
+                "        raise PermissionError('library writes are forbidden')\n"
+                "def write_local_report():\n"
+                "    Path('local-review-report.json').write_text('ok')\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(scan_runtime_boundaries(root), ())
+
+    def test_runtime_scan_blocks_function_literal_library_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qa = root / "src" / "ai_video_platform" / "skills" / "qa_review"
+            qa.mkdir(parents=True)
+            (qa / "writer.py").write_text(
+                "from pathlib import Path\n"
+                "def write_review():\n"
+                "    Path('AI Video Product Library/item.json').write_text('x')\n",
+                encoding="utf-8",
+            )
+
+            violations = scan_runtime_boundaries(root)
+
+        self.assertEqual(
+            [violation.rule_id for violation in violations],
+            ["PRODUCT_LIBRARY_WRITER_FORBIDDEN"],
+        )
+
+    def test_runtime_scan_blocks_module_constant_library_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qa = root / "src" / "ai_video_platform" / "skills" / "qa_review"
+            qa.mkdir(parents=True)
+            (qa / "writer.py").write_text(
+                "from pathlib import Path\n"
+                "RESEARCH_LIBRARY = 'AI Video Research Library'\n"
+                "def write_review():\n"
+                "    target = Path(RESEARCH_LIBRARY) / 'item.json'\n"
+                "    target.write_text('x')\n",
+                encoding="utf-8",
+            )
+
+            violations = scan_runtime_boundaries(root)
+
+        self.assertEqual(
+            [violation.rule_id for violation in violations],
+            ["RESEARCH_LIBRARY_WRITER_FORBIDDEN"],
+        )
+
     def test_runtime_scan_allows_ft1_skill_implementation_layout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

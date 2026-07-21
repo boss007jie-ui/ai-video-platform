@@ -172,31 +172,165 @@ def _cross_skill_imports(tree: ast.AST, owner_skill: str | None) -> bool:
     return False
 
 
-def _write_call_text(tree: ast.AST) -> tuple[str, ...]:
-    calls: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        function = node.func
-        is_write = isinstance(function, ast.Attribute) and function.attr in {
-            "write_text", "write_bytes", "mkdir", "touch", "unlink", "rename", "replace"
-        }
-        if isinstance(function, ast.Attribute) and function.attr == "open":
-            mode_nodes = [*node.args[:1], *[item.value for item in node.keywords if item.arg == "mode"]]
-            is_write = any(
-                isinstance(item, ast.Constant) and any(flag in str(item.value) for flag in "wax+")
-                for item in mode_nodes
+_LIBRARY_MARKERS = {
+    "product": "ai video product library",
+    "research": "ai video research library",
+}
+_PATH_WRITE_METHODS = {"write_text", "write_bytes", "mkdir", "touch", "unlink"}
+_PATH_RELOCATION_METHODS = {"rename", "replace"}
+_COPY_MOVE_FUNCTIONS = {"copy", "copy2", "copyfile", "copytree", "move"}
+
+
+class _ScopeCollector(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.assignments: list[tuple[ast.expr, ast.expr]] = []
+        self.calls: list[ast.Call] = []
+        self.children: list[ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef] = []
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.assignments.extend((target, node.value) for target in node.targets)
+        self.visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if node.value is not None:
+            self.assignments.append((node.target, node.value))
+            self.visit(node.value)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self.assignments.append((node.target, node.value))
+        self.visit(node.value)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        self.calls.append(node)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.children.append(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.children.append(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.children.append(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _assigned_names(target: ast.expr) -> tuple[str, ...]:
+    if isinstance(target, ast.Name):
+        return (target.id,)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return tuple(name for item in target.elts for name in _assigned_names(item))
+    return ()
+
+
+def _expression_library_markers(
+    expression: ast.AST | None,
+    bindings: dict[str, frozenset[str]],
+) -> frozenset[str]:
+    if expression is None:
+        return frozenset()
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        lowered = expression.value.lower()
+        return frozenset(kind for kind, marker in _LIBRARY_MARKERS.items() if marker in lowered)
+    if isinstance(expression, ast.Name):
+        return bindings.get(expression.id, frozenset())
+    if isinstance(expression, ast.BinOp):
+        return _expression_library_markers(expression.left, bindings) | _expression_library_markers(
+            expression.right,
+            bindings,
+        )
+    if isinstance(expression, ast.JoinedStr):
+        return frozenset().union(
+            *(_expression_library_markers(value, bindings) for value in expression.values)
+        )
+    if isinstance(expression, ast.FormattedValue):
+        return _expression_library_markers(expression.value, bindings)
+    if isinstance(expression, ast.Call):
+        return frozenset().union(
+            *(_expression_library_markers(argument, bindings) for argument in expression.args)
+        )
+    return frozenset()
+
+
+def _write_mode(call: ast.Call, positional_index: int) -> bool:
+    mode_nodes = [
+        *call.args[positional_index : positional_index + 1],
+        *[item.value for item in call.keywords if item.arg == "mode"],
+    ]
+    return any(
+        isinstance(item, ast.Constant)
+        and isinstance(item.value, str)
+        and any(flag in item.value for flag in "wax+")
+        for item in mode_nodes
+    )
+
+
+def _write_target_markers(call: ast.Call, bindings: dict[str, frozenset[str]]) -> frozenset[str]:
+    function = call.func
+    if isinstance(function, ast.Attribute):
+        if function.attr in _PATH_WRITE_METHODS:
+            return _expression_library_markers(function.value, bindings)
+        if function.attr in _PATH_RELOCATION_METHODS:
+            targets = [function.value, *call.args[:1]]
+            return frozenset().union(
+                *(_expression_library_markers(target, bindings) for target in targets)
             )
-        if isinstance(function, ast.Attribute) and function.attr in {
-            "copy", "copy2", "copyfile", "copytree", "move"
-        }:
-            is_write = True
-        if isinstance(function, ast.Name) and function.id == "open":
-            mode_nodes = [*node.args[1:2], *[item.value for item in node.keywords if item.arg == "mode"]]
-            is_write = any(isinstance(item, ast.Constant) and any(flag in str(item.value) for flag in "wax+") for item in mode_nodes)
-        if is_write:
-            calls.append(ast.unparse(node))
-    return tuple(calls)
+        if function.attr == "open" and _write_mode(call, 0):
+            return _expression_library_markers(function.value, bindings)
+        if function.attr in _COPY_MOVE_FUNCTIONS:
+            destinations = [
+                *call.args[1:2],
+                *[item.value for item in call.keywords if item.arg in {"dst", "destination"}],
+            ]
+            return frozenset().union(
+                *(_expression_library_markers(target, bindings) for target in destinations)
+            )
+    if isinstance(function, ast.Name):
+        if function.id == "open" and _write_mode(call, 1):
+            targets = [*call.args[:1], *[item.value for item in call.keywords if item.arg == "file"]]
+            return frozenset().union(
+                *(_expression_library_markers(target, bindings) for target in targets)
+            )
+        if function.id in _COPY_MOVE_FUNCTIONS:
+            destinations = [
+                *call.args[1:2],
+                *[item.value for item in call.keywords if item.arg in {"dst", "destination"}],
+            ]
+            return frozenset().union(
+                *(_expression_library_markers(target, bindings) for target in destinations)
+            )
+    return frozenset()
+
+
+def _scope_library_writes(
+    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+    inherited_bindings: dict[str, frozenset[str]],
+) -> frozenset[str]:
+    collector = _ScopeCollector()
+    for statement in scope.body:
+        collector.visit(statement)
+    bindings = dict(inherited_bindings)
+    for _ in range(len(collector.assignments) + 1):
+        changed = False
+        for target, value in collector.assignments:
+            markers = _expression_library_markers(value, bindings)
+            for name in _assigned_names(target):
+                combined = bindings.get(name, frozenset()) | markers
+                if combined != bindings.get(name, frozenset()):
+                    bindings[name] = combined
+                    changed = True
+        if not changed:
+            break
+    writes = frozenset().union(*(_write_target_markers(call, bindings) for call in collector.calls))
+    for child in collector.children:
+        writes |= _scope_library_writes(child, bindings)
+    return writes
+
+
+def _library_writes(tree: ast.Module) -> frozenset[str]:
+    return _scope_library_writes(tree, {})
 
 
 def _forbidden_runtime_import(tree: ast.AST, relative: Path) -> str | None:
@@ -233,10 +367,10 @@ def scan_runtime_boundaries(project_root: Path) -> tuple[MergeViolation, ...]:
         lowered = text.lower()
         if path.name != "merge_guard.py" and any(marker.lower() in lowered for marker in _LEGACY_MARKERS):
             violations.append(MergeViolation("LEGACY_RUNTIME_PATH_FORBIDDEN", relative.as_posix(), "Legacy runtime dependency detected"))
-        write_calls = _write_call_text(tree)
+        library_writes = _library_writes(tree)
         policy_source = path.name == "merge_guard.py"
-        if not policy_source and write_calls and "ai video product library" in lowered and owner_skill != "product_knowledge":
+        if not policy_source and "product" in library_writes and owner_skill != "product_knowledge":
             violations.append(MergeViolation("PRODUCT_LIBRARY_WRITER_FORBIDDEN", relative.as_posix(), "Only Product Knowledge may write Product Library"))
-        if not policy_source and write_calls and "ai video research library" in lowered and owner_skill != "viral_research_asset_collection":
+        if not policy_source and "research" in library_writes and owner_skill != "viral_research_asset_collection":
             violations.append(MergeViolation("RESEARCH_LIBRARY_WRITER_FORBIDDEN", relative.as_posix(), "Only Viral Research may write Research Library"))
     return tuple(violations)
