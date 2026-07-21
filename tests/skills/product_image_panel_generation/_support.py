@@ -17,7 +17,8 @@ from ai_video_platform.skills.product_image_panel_generation import (
 
 
 NOW = datetime(2026, 7, 20, 10, 0, tzinfo=timezone.utc)
-NOW_TEXT = "2026-07-20T10:00:00Z"
+NOW_TEXT = NOW.isoformat(timespec="seconds").replace("+00:00", "Z")
+NOMINAL_VALID_UNTIL = "2099-01-01T00:00:00Z"
 PRODUCT_ID = "product-synthetic-004"
 TASK_ID = "task-synthetic-004"
 ASSET_ID = "asset-approved-004"
@@ -51,7 +52,7 @@ def make_request(
     width: int = 1024,
     height: int = 1024,
     request_hash_override: str | None = None,
-    valid_until: str | None = "2026-07-21T10:00:00Z",
+    valid_until: str | None = NOMINAL_VALID_UNTIL,
 ) -> GenerationRequest:
     task_spec = _envelope(
         "avp.contract.task-spec",
