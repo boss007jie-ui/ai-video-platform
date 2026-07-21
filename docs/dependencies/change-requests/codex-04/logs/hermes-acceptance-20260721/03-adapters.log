@@ -1,0 +1,16 @@
+test_concurrency_limit_rejects_second_distinct_request (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_concurrency_limit_rejects_second_distinct_request) ... ok
+test_exact_idempotent_replay_does_not_repeat_provider_side_effect (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_exact_idempotent_replay_does_not_repeat_provider_side_effect) ... ok
+test_fake_adapter_success_emits_auditable_foundation_outputs (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_fake_adapter_success_emits_auditable_foundation_outputs) ... ok
+test_idempotency_key_reuse_with_changed_request_fails (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_idempotency_key_reuse_with_changed_request_fails) ... ok
+test_mixed_item_outcomes_are_reported_as_partial_failure (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_mixed_item_outcomes_are_reported_as_partial_failure) ... ok
+test_non_retryable_failure_is_not_retried (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_non_retryable_failure_is_not_retried) ... ok
+test_pre_cancelled_request_never_reaches_provider (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_pre_cancelled_request_never_reaches_provider) ... ok
+test_product_image_command_is_independently_callable (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_product_image_command_is_independently_callable) ... ok
+test_prompt_compilation_is_deterministic_and_product_bound (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_prompt_compilation_is_deterministic_and_product_bound) ... ok
+test_retryable_failure_retries_with_injected_backoff_then_succeeds (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_retryable_failure_retries_with_injected_backoff_then_succeeds) ... ok
+test_timeout_is_terminal_and_redacted (tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_timeout_is_terminal_and_redacted) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.020s
+
+OK
