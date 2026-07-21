@@ -107,7 +107,7 @@ class ImagePanelInterfaceTests(unittest.TestCase):
     def test_expired_approval_fails_closed(self) -> None:
         self.assert_error(
             ImagePanelErrorCode.APPROVAL_NOT_EFFECTIVE,
-            make_request(valid_until="2026-07-20T09:59:59Z"),
+            make_request(valid_until="2000-01-01T00:00:00Z"),
         )
 
     def test_wrong_active_skill_fails_closed(self) -> None:
