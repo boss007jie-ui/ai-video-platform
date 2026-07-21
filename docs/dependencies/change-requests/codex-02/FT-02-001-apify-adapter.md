@@ -1,30 +1,29 @@
-# FT-02-001 Apify Adapter Dependency Request
+# FT-02-001 Apify Adapter Decision and Media Follow-up
 
 - Requester: `codex-02`
-- Authorization: `FTG-0-20260720-001`
+- Authorization: `FTG-P-RESEARCH-001`
 - Work item: `FT-02-001`
 - Owner requested: `codex-00`
-- Status: `REQUESTED_NOT_APPLIED`
-- Provider gate: `FTG-P NOT_AUTHORIZED`
+- Status: `COLLECTION_RESOLVED_MEDIA_PENDING`
+- Provider gate: metadata-only collection authorized; media download not authorized
 
 ## Decision requested
 
-Decide whether an Apify production adapter and dependency may be introduced behind the Viral Research Provider Seam. Codex-02 added no package, lockfile, credential integration, network call, actor binding, or production adapter.
+Hermes selected `apidojo/tiktok-scraper` for the bounded metadata-only research smoke. Codex-02 implemented the collection adapter with the Python standard library, so no package or lockfile dependency is introduced. Default CLI behavior remains rejecting and the real path requires explicit authorization, explicit controlled storage root and an environment credential.
 
-Before implementation, Codex-00 should approve:
+The remaining media-download decision requires a separate authorization and must define:
 
-- the exact package and pinned version;
-- actor IDs/versions, input and output schemas, supported locales and platform scope;
-- request, concurrency, duration and cost budgets;
-- credential-reference handling without exposing values;
-- retry, timeout, cancellation, kill-switch and rejecting-fallback behavior;
-- metadata-only defaults, rights/PII/retention handling and log redaction;
-- SBOM/license review and rollback procedure.
+- the authorized media URL/receipt fields, which are not part of the current safe research candidate;
+- whether bytes come from an Apify dataset field or a separate Provider endpoint;
+- content-type, byte-size, redirect, host and checksum constraints;
+- download count/cost budgets, timeout, cancellation and kill-switch behavior;
+- rights eligibility and quarantine behavior before any byte transfer;
+- the exact future authorization ID accepted by the downloader gate.
 
 ## Mandatory runtime gate
 
-Even after a dependency decision, every real Provider smoke or download remains blocked until a separate, bounded `FTG-P` approval records provider/actor, credential reference, budgets, observation window and cleanup. Fake and rejecting adapters remain the only executable adapters on this branch.
+The collection adapter accepts only `FTG-P-RESEARCH-001` and is single-use. The staged downloader always rejects; implementing and enabling real media transfer remains blocked until the follow-up authorization defines the above contract. No current CLI path can select a real downloader.
 
 ## Acceptance and rollback
 
-Acceptance requires offline contract tests, deterministic fake fixtures, fail-closed network guards and no import-time side effects. Rollback removes the separately owned production adapter/dependency while preserving the current rejecting seam; no Codex-02 schema or stored-artifact migration is required.
+Collection acceptance requires mocked HTTP tests, environment-only credential resolution, fixed-origin/no-redirect transport, capped cost/results, stable redaction and no import-time network side effect. Rollback reverts the final Codex-02 provider commit while preserving fake/rejecting seams; no schema or stored-artifact migration is required.

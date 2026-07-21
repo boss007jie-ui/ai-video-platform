@@ -1,16 +1,18 @@
 # Viral Research & Asset Collection
 
-Version: `0.1.0-rc.offline`
+Version: `0.1.0-rc.provider-pending`
 
-This Skill validates viral-research requests, expands queries, normalizes and deduplicates fake Provider results, produces explainable rankings, enforces rights/PII/expiry policy, plans selected-reference collection, and writes controlled Research Library metadata. It does not write Product Library, analyze selected references, call a real Provider, download real media, publish unregistered business artifacts, or read Legacy paths.
+This Skill validates viral-research requests, expands queries, normalizes and deduplicates Provider results, produces explainable rankings, enforces rights/PII/expiry policy, plans selected-reference collection, and writes controlled Research Library metadata. Under `FTG-P-RESEARCH-001`, an Apify TikTok collection adapter is available only by explicit injection for the authorized metadata-only smoke. It does not write Product Library, analyze selected references, download real media, publish unregistered business artifacts, or read Legacy paths.
 
 ## Public commands
 
 - `inspect-research-request`: validates all inputs without side effects.
-- `research-viral`: performs the offline research flow using only the exact built-in fake or rejecting Provider type.
+- `research-viral`: defaults to the rejecting Provider; the authorized Apify path requires every explicit flag described below.
 - `collect-reference-assets`: collects selected metadata using only the exact built-in fake or rejecting downloader type.
 
-Each command accepts `--input <json-file>` and optional `--now <UTC-Z>`, prints one JSON result, and returns `0` on success or `2` for a stable redacted error.
+Each command accepts `--input <json-file>` and optional `--now <UTC-Z>`, prints one JSON result, and returns `0` on success or `2` for a stable redacted error. No command silently selects a real adapter.
+
+The authorized Provider invocation is `research-viral --provider apify --authorization-id FTG-P-RESEARCH-001 --library-root <explicit-controlled-root>`. It resolves the credential only from the `APIFY_API_KEY` process environment variable. The request must be TikTok/US, metadata-only, use two or three seed queries, zero retries, one Provider call, and 10–20 results. The adapter starts exactly one Actor run, refuses redirects, caps charged results at 20 and total charge at USD 0.01, then reads metadata once. Default and inspect/collection behavior remain fail-closed.
 
 ## Inputs, outputs, and boundaries
 
@@ -22,10 +24,10 @@ Only this Skill's controlled storage seam may write Research Library metadata. T
 
 ## Failure, retry, cancellation, and safety
 
-Validation precedes external side effects. A request claim is recorded before Provider or download work; exact completed replays return the stored result without repeating calls, conflicting or concurrent key reuse fails closed, and failed attempts release their claim. Provider retries are limited to two and remain inside the request's total provider-call budget. Cancellation is checked before and during work. Errors are stable and redact secret-like fields. Real Provider/network/media/credential paths are unavailable; exact built-in fake and rejecting adapter types are the only adapters accepted in this release candidate.
+Validation precedes external side effects. A request claim is recorded before Provider or download work; exact completed replays return the stored result without repeating calls, conflicting or concurrent key reuse fails closed, and failed attempts release their claim. Provider retries are limited to two and remain inside the request's total provider-call budget; the authorized Apify smoke requires zero retries and a single-use adapter. Cancellation is checked before and during work. Errors are stable and recursively redact secret-like fields. The Apify bearer credential never appears in URLs, outputs, receipts, errors, or `repr`, and redirects are refused. Real media download remains unavailable pending a separate authorization.
 
 Stable codes include validation, budget, expiry, cancellation, idempotency conflict, Provider forbidden/failure, download forbidden, path forbidden, rights forbidden, storage conflict, and retention-extension forbidden. Example Hermes call: `python -m ai_video_platform.skills.viral_research_asset_collection inspect-research-request --input request.json`; consume the JSON status and never import an adapter.
 
 ## Tests and operations
 
-Run the three owned unittest modules from the task card, then `python tools\run_offline_tests.py`. Rollback is the owning branch commit revert; real seams remain fail-closed. Hermes may call only the three public commands and must not import adapters. Maintainer: `codex-02`; authorization: `FTG-0-20260720-001`; Provider smoke: `NOT_AUTHORIZED`.
+Run the four owned unittest modules, including `test_apify_adapters`, then `python tools\run_offline_tests.py`. Rollback is the owning branch commit revert; default Provider and all media seams remain fail-closed. Hermes may call only the three public commands and must not import adapters. Maintainer: `codex-02`; implementation authorization: `FTG-P-RESEARCH-001`; Provider smoke status is recorded in `RC_EVIDENCE.md`.

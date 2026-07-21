@@ -13,6 +13,7 @@ from typing import Protocol
 from .adapters import (
     FakeCollectionAdapter, FakeDownloadAdapter, RejectingCollectionAdapter, RejectingDownloadAdapter,
 )
+from .apify import ApifyCollectionAdapter
 from .errors import ErrorCode, SkillError
 from .models import CollectionItem, CollectionResult, ResearchCandidate, ResearchInspection, ResearchResult, ResearchScore
 
@@ -50,10 +51,14 @@ _SCORE_FACTORS = (
 
 
 def _assert_offline_provider(provider: CollectionProvider) -> None:
-    if type(provider) not in (FakeCollectionAdapter, RejectingCollectionAdapter):
+    if type(provider) in (FakeCollectionAdapter, RejectingCollectionAdapter):
+        return
+    if type(provider) is ApifyCollectionAdapter and provider.is_authorized:
+        return
+    else:
         raise SkillError(
             ErrorCode.PROVIDER_FORBIDDEN,
-            "Only built-in fake or rejecting Providers are enabled before FTG-P",
+            "Only built-in offline Providers or the explicitly authorized Apify adapter are enabled",
         )
 
 
