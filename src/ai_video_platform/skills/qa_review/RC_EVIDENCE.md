@@ -1,9 +1,9 @@
 # FT-06-001 QA / Review RC Evidence
 
-Status: `REVIEW_BLOCKED_DEPENDENCY`
+Status: `REVIEW`
 Authorization: `FTG-0-20260720-001`
 Workline: `codex-06`
-Provider smoke: `NOT_REQUIRED`
+Provider smoke: `NOT_AUTHORIZED`
 
 ## Implemented evidence
 
@@ -39,15 +39,13 @@ needs-review across four synthetic cases.
 | QA evaluation | 2 tests, OK |
 | Integration acceptance | 2 tests, OK |
 | Golden | 2 tests, OK |
-| Full offline | 75 run; 74 pass; 1 Codex-00-owned baseline guard failure |
+| Full offline | 87 tests, OK after merging `ft/codex-00-integration@79354a0` |
 | Foundation registry | exact 1 Envelope + 11 payload IDs, PASS |
 | Secret/network/legacy/provider guards | PASS |
 | Offline reproducible wheel | PASS |
 
-The full-suite failure is `test_business_namespaces_are_placeholders_only`, which still
-requires every business Skill directory to contain only `__init__.py`. This contradicts
-the later Fast Track authorization and can only be changed by Codex-00. The implementation
-does not modify or suppress that test.
+The former placeholder-only architecture guard is resolved by Codex-00 commit `79354a0`.
+The synchronized worktree passes the complete offline suite without `PYTHONPATH` injection.
 
 ## Integration scope
 
@@ -58,10 +56,11 @@ and RC bundles are not present on this branch.
 
 ## Pending gates
 
-- Codex-00 baseline guard update and shared eighth-Skill registration request.
+- Shared eighth-Skill registration request `CR-FT-06-001-A`.
 - Actual RC bundles from the seven peer Skills before per-Skill acceptance verdicts.
 - V-07 relative-path allowlist/CatPaw evidence before T0-T3 Direct Verification.
-- Codex-00 coverage, SBOM/license, release packaging, and rollback evidence.
+- Actual, non-synthetic coverage, performance-budget, SBOM/license, release, and rollback
+  evidence for the assembled eight-Skill candidate.
 - FTG-3, FTG-4, and FTG-5 decisions remain external gates.
 
 Rollback is by reverting the eventual Codex-06 merge commit; no migration, schema change,
