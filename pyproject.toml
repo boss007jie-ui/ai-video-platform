@@ -11,6 +11,6 @@ requires-python = ">=3.12"
 dependencies = []
 
 [tool.ai-video-platform]
-authorization = "IR-1_IR-2_ONLY"
+authorization = "FTG-0-20260720-001"
 network = "DENY_BY_DEFAULT"
 foundation-registry = "IR-2 Foundation Registry V1"
