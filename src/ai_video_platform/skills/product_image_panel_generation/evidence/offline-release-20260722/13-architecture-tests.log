@@ -1,0 +1,8 @@
+test_production_source_has_no_non_allowed_internal_generate_calls (tests.skills.product_image_panel_generation.test_image_panel_architecture.ImagePanelArchitectureTests.test_production_source_has_no_non_allowed_internal_generate_calls) ... ok
+test_synthetic_non_allowed_module_alias_access_is_detected (tests.skills.product_image_panel_generation.test_image_panel_architecture.ImagePanelArchitectureTests.test_synthetic_non_allowed_module_alias_access_is_detected) ... ok
+test_synthetic_non_allowed_module_direct_call_is_detected (tests.skills.product_image_panel_generation.test_image_panel_architecture.ImagePanelArchitectureTests.test_synthetic_non_allowed_module_direct_call_is_detected) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.110s
+
+OK

@@ -4,8 +4,11 @@ Output: Python 3.14.0
 Result: PASS
 
 Command: py -0p
-Output: -V:3.14 *        C:\Python314\python.exe
-Result: Python 3.14 is the only locally detected runtime.
+Output:
+- -V:3.14 *        C:\Python314\python.exe
+- -V:3.13          C:\Users\boss0\AppData\Local\Programs\Python\Python313\python.exe
+- -V:3.11          C:\Users\boss0\AppData\Local\Programs\Python\Python311\python.exe
+Result: Python 3.12 is not locally detected; Python 3.14 is the user-directed verification runtime.
 
 Command: py -3.12 --version
 Output: No suitable Python runtime found.

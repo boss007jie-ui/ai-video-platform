@@ -1,0 +1,16 @@
+Python 3.14.0
+ -V:3.14 *        C:\Python314\python.exe
+ -V:3.13          C:\Users\boss0\AppData\Local\Programs\Python\Python313\python.exe
+ -V:3.11          C:\Users\boss0\AppData\Local\Programs\Python\Python311\python.exe
+py : No suitable Python runtime found
+At line:2 char:157
++ ... time.log'; & { py -3.14 --version; py -0p; py -3.12 --version; if ($L ...
++                                                ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (No suitable Python runtime found:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Pass --list (-0) to see all detected environments on your machine
+or set environment variable PYLAUNCHER_ALLOW_INSTALL to use winget
+or open the Microsoft Store to the requested version.
+PYTHON_3_12_RESULT: NOT_RUN_ENVIRONMENT_UNAVAILABLE_USER_DIRECTED_LOCAL_3_14
+NO_RUNTIME_OR_PACKAGE_INSTALLED

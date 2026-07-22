@@ -155,7 +155,7 @@ py -3.14 -m unittest -v tests.skills.product_image_panel_generation.test_image_p
 py -3.14 tools\run_offline_tests.py
 ```
 
-The project metadata remains Python `>=3.12` compatible. This closeout is verified on the only locally installed runtime, Python `3.14.0`. Python 3.12 smoke is recorded as `NOT_RUN_ENVIRONMENT_UNAVAILABLE_USER_DIRECTED_LOCAL_3_14`; no runtime was installed or downloaded. The owned suite uses synthetic contracts and in-memory content only.
+The project metadata remains Python `>=3.12` compatible. This closeout is verified on the user-directed local runtime, Python `3.14.0`. Python 3.12 is not locally installed, so its smoke is recorded as `NOT_RUN_ENVIRONMENT_UNAVAILABLE_USER_DIRECTED_LOCAL_3_14`; no runtime was installed or downloaded. The owned suite uses synthetic contracts and in-memory content only.
 
 ## Operations and rollback
 

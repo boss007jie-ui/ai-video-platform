@@ -23,7 +23,7 @@ def _find_forbidden_generate_calls(sources: Mapping[str, str]) -> tuple[str, ...
         if relative_path in ALLOWED_INTERNAL_GENERATE_CALLERS:
             continue
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "_generate":
+            if isinstance(node, ast.Attribute) and node.attr == "_generate":
                 violations.append(f"{relative_path}:{node.lineno}")
     return tuple(sorted(violations))
 
@@ -37,6 +37,20 @@ class ImagePanelArchitectureTests(unittest.TestCase):
         self.assertEqual(
             violations,
             ("ai_video_platform/skills/product_image_panel_generation/rogue.py:1",),
+        )
+
+    def test_synthetic_non_allowed_module_alias_access_is_detected(self) -> None:
+        violations = _find_forbidden_generate_calls(
+            {
+                "ai_video_platform/skills/product_image_panel_generation/alias.py": (
+                    "invoke = adapter._generate\ninvoke(invocation)\n"
+                )
+            }
+        )
+
+        self.assertEqual(
+            violations,
+            ("ai_video_platform/skills/product_image_panel_generation/alias.py:1",),
         )
 
     def test_production_source_has_no_non_allowed_internal_generate_calls(self) -> None:

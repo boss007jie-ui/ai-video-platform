@@ -1,7 +1,7 @@
 {
   "authorization_id": "FTG-0-20260720-001",
   "work_item_id": "FT-04-001",
-  "captured_at": "2026-07-22T08:47:17Z",
+  "captured_at": "2026-07-22T08:56:14Z",
   "runtime": "Python 3.14 (local machine)",
   "provider_smoke": "NOT_AUTHORIZED",
   "network_used": false,
@@ -22,7 +22,7 @@
       "pythonpath": "src",
       "exit_code": 0,
       "stdout": "02-fake.stdout.json",
-      "stdout_sha256": "c8eef973c374a92c1dd1dd40a482bd7cb6f6ab9db258ac9b2c27a625639e7ae3"
+      "stdout_sha256": "ce52c79ac8500ed017c652ae71425aa2e35ea3b7a0f00093b43a49458ebc8e19"
     },
     {
       "sequence": 3,
@@ -30,7 +30,7 @@
       "pythonpath": "src",
       "exit_code": 0,
       "stdout": "03-replay.stdout.json",
-      "stdout_sha256": "dd1da05edd2edbdf977ff2e70eef79cedeccc761970a3e03a3dda2fa5bf31082"
+      "stdout_sha256": "71e80456f59fa622be8d4fa5493dc9df3395616797a5f5daacdea69ed5327388"
     },
     {
       "sequence": 4,
@@ -38,7 +38,7 @@
       "pythonpath": "src",
       "exit_code": 3,
       "stdout": "04-rejecting.stdout.json",
-      "stdout_sha256": "40b11d4b190dbe6e29d61e210c503a3ff62c7b58889c45892808289a301511bf"
+      "stdout_sha256": "a870eba894004952abfb7b13067525a6cd11ceec6cdba0f435ab1225f3e6f1e4"
     }
   ],
   "adapter_invocation_count": {
@@ -57,7 +57,7 @@
   },
   "ledger": {
     "path": "ledger-receipt.json",
-    "sha256": "bd1a996a6884bd640d6cdc0c618899b428159b807c4166af3a5f1062b04cd8e8",
+    "sha256": "b05fddb75bd98584eaf43a4d8246ac73637a925ad7074f2d5b20202917dafbc5",
     "record_count": 2
   }
 }
