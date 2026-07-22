@@ -1,0 +1,15 @@
+{
+  "business_sample_id": "sanitized-video-enhancement-001",
+  "input": {
+    "file_name": "synthetic-owned-fixture.mp4",
+    "rights_basis": "SYNTHETIC",
+    "sha256": "sha256:b57c3ea21f0f0b2be46e881d56a81d1a6a8220882dad2ab09eb6e9073126d7e8",
+    "size_bytes": 43
+  },
+  "operations": [
+    "upscale",
+    "frame_interpolation",
+    "denoise_restore"
+  ],
+  "provider_network_performed": false
+}
