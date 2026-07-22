@@ -22,7 +22,7 @@ from ai_video_platform.skills.video_generation.adapters import AdapterFailure
 from ai_video_platform.skills.video_generation.kie_adapter import BROWSER_HEADERS, UrllibKieHttpTransport
 from ai_video_platform.skills.video_generation.kie_smoke import build_smoke_request, run_smoke, validate_reference_digests
 from ai_video_platform.skills.video_generation.ledger import InMemoryVideoExecutionLedger
-from tests.skills.video_generation.test_video_generation_interface import generation_request
+from tests.skills.video_generation.test_video_generation_interface import digest, generation_request
 
 
 NOW = datetime(2026, 7, 21, 4, 0, tzinfo=timezone.utc)
@@ -32,6 +32,7 @@ class RecordingTransport:
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
         self.downloads: list[str] = []
+        self.http_status_chain: list[int] = []
         self.poll_responses: list[dict[str, object]] = [{
             "code": 200,
             "msg": "success",
@@ -61,6 +62,7 @@ class RecordingTransport:
         payload: dict[str, object] | None = None,
         query: dict[str, str] | None = None,
     ) -> dict[str, object]:
+        self.http_status_chain.append(200)
         self.requests.append({
             "method": method,
             "path": path,
@@ -73,6 +75,7 @@ class RecordingTransport:
         return self.poll_responses.pop(0)
 
     def download(self, uri: str) -> bytes:
+        self.http_status_chain.append(200)
         self.downloads.append(uri)
         self.requests.append({"method": "DOWNLOAD"})
         return b"synthetic-kie-video"
@@ -86,6 +89,7 @@ class RecordingTransport:
         media_type: str,
         upload_path: str,
     ) -> dict[str, object]:
+        self.http_status_chain.append(200)
         self.requests.append({
             "method": "UPLOAD",
             "api_key_present": bool(credential),
@@ -140,7 +144,7 @@ def kie_request() -> dict[str, object]:
 
 
 class KieAdapterTests(unittest.TestCase):
-    def test_smoke_request_is_fixed_to_revision_b_envelope(self) -> None:
+    def test_smoke_request_is_fixed_to_revision_c_envelope(self) -> None:
         package = generation_request()["execution_package"]
         digest = package["asset_mapping"][0]["sha256"]
         package["asset_mapping"].append({
@@ -168,8 +172,114 @@ class KieAdapterTests(unittest.TestCase):
         self.assertEqual(request["output"]["duration"], 5)
         self.assertEqual(request["output"]["resolution"], "480p")
         self.assertEqual(request["provider_binding"]["model_id"], "bytedance/seedance-2-fast")
+        self.assertEqual(request["approval_record"]["approval_id"], "ftg-p-video-001-revision-c")
+        self.assertEqual(request["approval_record"]["decision_ref"], "FTG-P-VIDEO-001-REVISION-C")
+        self.assertEqual(request["provider_binding"]["binding_ref"], "ftg-p-video-001-revision-c")
+        self.assertEqual(request["idempotency_key"], "ftg-p-video-001-revision-c-20260722")
         self.assertFalse(request["output"]["generate_audio"])
         self.assertFalse(request["output"]["web_search"])
+
+    def test_revision_c_success_receipt_keeps_hex_task_id_and_records_scan(self) -> None:
+        import hashlib
+        import json
+        import tempfile
+
+        task_id = "c" * 32
+        credential = "d" * 32
+
+        class HexTaskTransport(RecordingTransport):
+            def __init__(self) -> None:
+                super().__init__()
+                self.poll_responses[0]["data"]["taskId"] = task_id
+
+            def request_json(self, method, path, api_key, *, payload=None, query=None):
+                if method == "POST":
+                    self.http_status_chain.append(200)
+                    self.requests.append({
+                        "method": method,
+                        "path": path,
+                        "api_key_present": bool(api_key),
+                        "payload": payload,
+                        "query": query,
+                    })
+                    return {"code": 200, "msg": "success", "data": {"taskId": task_id}}
+                return super().request_json(method, path, api_key, payload=payload, query=query)
+
+        package = generation_request()["execution_package"]
+        first_content = b"revision-c-reference-one"
+        second_content = b"revision-c-reference-two"
+        first_digest = "sha256:" + hashlib.sha256(first_content).hexdigest()
+        second_digest = "sha256:" + hashlib.sha256(second_content).hexdigest()
+        asset_mapping = [
+            {
+                "shot_id": "shot-001",
+                "role": "hero",
+                "asset_id": "asset-001",
+                "uri": "memory://one.jpg",
+                "sha256": first_digest,
+            },
+            {
+                "shot_id": "shot-001",
+                "role": "detail",
+                "asset_id": "asset-002",
+                "uri": "memory://two.jpg",
+                "sha256": second_digest,
+            },
+        ]
+        master = package["storyboard_master"]
+        master["shots"][0]["required_asset_roles"] = ["hero", "detail"]
+        master["asset_mapping"] = asset_mapping
+        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
+        package["asset_mapping"] = asset_mapping
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        transport = HexTaskTransport()
+        resolver = KieCredentialResolver(environ={"KIE_API_KEY": credential})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package_path = root / "package.json"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            first_path = root / "one.jpg"
+            second_path = root / "two.jpg"
+            first_path.write_bytes(first_content)
+            second_path.write_bytes(second_content)
+            evidence_dir = root / "evidence"
+            with (
+                patch("ai_video_platform.skills.video_generation.kie_smoke.UrllibKieHttpTransport", return_value=transport),
+                patch("ai_video_platform.skills.video_generation.kie_smoke.KieCredentialResolver", return_value=resolver),
+                patch(
+                    "ai_video_platform.skills.video_generation.kie_smoke._default_reservation_path",
+                    return_value=root / "revision-c-reservation.json",
+                ),
+            ):
+                receipt = run_smoke(
+                    package_path=package_path,
+                    reference_paths=[first_path, second_path],
+                    reference_sha256=[first_digest, second_digest],
+                    evidence_dir=evidence_dir,
+                    poll_interval_seconds=0,
+                )
+
+                persisted = json.loads((evidence_dir / "provider-result.json").read_text(encoding="utf-8"))
+
+                post_count = sum(item.get("method") == "POST" for item in transport.requests)
+                with self.assertRaises(FileExistsError):
+                    run_smoke(
+                        package_path=package_path,
+                        reference_paths=[first_path, second_path],
+                        reference_sha256=[first_digest, second_digest],
+                        evidence_dir=root / "different-evidence-directory",
+                        poll_interval_seconds=0,
+                    )
+                self.assertEqual(sum(item.get("method") == "POST" for item in transport.requests), post_count)
+
+        self.assertEqual(receipt["revision"], "C")
+        self.assertEqual(receipt["task_id"], task_id)
+        self.assertEqual(receipt["http_status"], 200)
+        self.assertEqual(receipt["http_status_chain"], [200, 200, 200, 200, 200])
+        self.assertEqual(receipt["secret_scan_matches"], 0)
+        self.assertEqual(receipt["secret_scan_status"], "PASS")
+        self.assertEqual(persisted, receipt)
+        self.assertNotIn(credential, json.dumps(receipt))
 
     def test_reference_uploader_verifies_local_digest_and_returns_safe_https_url(self) -> None:
         import hashlib
@@ -338,7 +448,7 @@ class KieAdapterTests(unittest.TestCase):
         self.assertIn("stored without URL", captured.exception.provider_error_summary)
         self.assertNotIn("synthetic-value", str(captured.exception))
 
-    def test_revision_b_failure_receipt_records_http_status_and_provider_summary(self) -> None:
+    def test_revision_c_failure_receipt_records_http_status_and_redacts_credential(self) -> None:
         import json
         import tempfile
 
@@ -357,15 +467,24 @@ class KieAdapterTests(unittest.TestCase):
             package_path = root / "package.json"
             package_path.write_text(json.dumps(package), encoding="utf-8")
             evidence_dir = root / "evidence"
-            with patch.object(
-                KieReferenceImageUploader,
-                "upload",
-                side_effect=AdapterFailure(
-                    "KIE_UPLOAD_ERROR",
-                    "KIE reference upload failed",
-                    retryable=False,
-                    http_status=403,
-                    provider_error_summary="Cloudflare request denied",
+            credential = "e" * 32
+            resolver = KieCredentialResolver(environ={"KIE_API_KEY": credential})
+            with (
+                patch.object(
+                    KieReferenceImageUploader,
+                    "upload",
+                    side_effect=AdapterFailure(
+                        "KIE_UPLOAD_ERROR",
+                        "KIE reference upload failed",
+                        retryable=False,
+                        http_status=403,
+                        provider_error_summary="Cloudflare request denied " + credential,
+                    ),
+                ),
+                patch("ai_video_platform.skills.video_generation.kie_smoke.KieCredentialResolver", return_value=resolver),
+                patch(
+                    "ai_video_platform.skills.video_generation.kie_smoke._default_reservation_path",
+                    return_value=root / "revision-c-reservation.json",
                 ),
             ):
                 with self.assertRaises(AdapterFailure):
@@ -379,9 +498,55 @@ class KieAdapterTests(unittest.TestCase):
             receipt = json.loads((evidence_dir / "provider-result.json").read_text(encoding="utf-8"))
 
         self.assertEqual(receipt["http_status"], 403)
-        self.assertEqual(receipt["provider_error_summary"], "Cloudflare request denied")
+        self.assertEqual(receipt["provider_error_summary"], "Cloudflare request denied [REDACTED]")
+        self.assertEqual(receipt["secret_scan_failure_code"], "CREDENTIAL_MATERIAL_DETECTED")
         self.assertEqual(receipt["generation_submissions"], 0)
         self.assertEqual(receipt["ledger_state_chain"], [])
+        self.assertEqual(receipt["secret_scan_status"], "PASS")
+        self.assertEqual(receipt["secret_scan_matches"], 0)
+        self.assertNotIn(credential, json.dumps(receipt))
+
+    def test_revision_c_missing_credential_does_not_consume_reservation(self) -> None:
+        import json
+        import tempfile
+
+        package = generation_request()["execution_package"]
+        first_digest = package["asset_mapping"][0]["sha256"]
+        second_digest = "sha256:" + "4" * 64
+        package["asset_mapping"].append({
+            "shot_id": "shot-001",
+            "role": "detail",
+            "asset_id": "asset-002",
+            "uri": "memory://detail.png",
+            "sha256": second_digest,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package_path = root / "package.json"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            reservation = root / "revision-c-reservation.json"
+            with (
+                patch(
+                    "ai_video_platform.skills.video_generation.kie_smoke.KieCredentialResolver",
+                    return_value=KieCredentialResolver(environ={}),
+                ),
+                patch(
+                    "ai_video_platform.skills.video_generation.kie_smoke._default_reservation_path",
+                    return_value=reservation,
+                ),
+            ):
+                with self.assertRaises(AdapterFailure) as captured:
+                    run_smoke(
+                        package_path=package_path,
+                        reference_paths=[root / "one.jpg", root / "two.jpg"],
+                        reference_sha256=[first_digest, second_digest],
+                        evidence_dir=root / "evidence",
+                        poll_interval_seconds=0,
+                    )
+
+            self.assertEqual(captured.exception.code, "CREDENTIAL_UNAVAILABLE")
+            self.assertFalse(reservation.exists())
+            self.assertFalse((root / "evidence" / "provider-attempt.json").exists())
 
     def test_reference_uploader_rejects_tampering_and_oversize_before_http(self) -> None:
         import hashlib

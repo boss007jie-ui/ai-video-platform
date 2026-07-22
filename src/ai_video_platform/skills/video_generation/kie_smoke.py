@@ -1,4 +1,4 @@
-"""One-shot controller for the explicitly authorized KIE Revision B smoke."""
+"""One-shot controller for the explicitly authorized KIE Revision C smoke."""
 
 from __future__ import annotations
 
@@ -44,6 +44,75 @@ def _append_event(path: Path, *, event: str, at: datetime, **details: object) ->
         stream.write(json.dumps(safe, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _redact_exact_credential(value: object, credential: str) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _redact_exact_credential(nested, credential) for key, nested in value.items()}
+    if isinstance(value, list):
+        return [_redact_exact_credential(item, credential) for item in value]
+    if isinstance(value, str):
+        return value.replace(credential, "[REDACTED]")
+    return value
+
+
+def _finalize_secret_scan(
+    evidence_dir: Path,
+    pending_result: Mapping[str, object],
+    resolver: KieCredentialResolver,
+) -> dict[str, object]:
+    """Redact exact credential material and fail closed unless the final scan is zero."""
+    try:
+        credential = resolver.resolve()
+    except AdapterFailure:
+        safe = dict(pending_result)
+        safe["secret_scan_status"] = "NOT_RUN"
+        safe["secret_scan_matches"] = None
+        if safe.get("provider_smoke") == "PASS":
+            safe["provider_smoke"] = "FAIL"
+            safe["error_type"] = "SecretScanFailure"
+            safe["provider_error_summary"] = "Credential scan was unavailable and failed closed"
+        return safe
+    needle = credential.encode("utf-8")
+    serialized = json.dumps(pending_result, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    detected = serialized.count(needle)
+    safe_value = _redact_exact_credential(pending_result, credential)
+    safe = dict(safe_value) if isinstance(safe_value, Mapping) else {}
+    scan_error = False
+    for path in evidence_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_bytes()
+            found = content.count(needle)
+            detected += found
+            if found:
+                path.write_bytes(content.replace(needle, b"[REDACTED]"))
+        except OSError:
+            scan_error = True
+    remaining = json.dumps(safe, ensure_ascii=False, sort_keys=True).encode("utf-8").count(needle)
+    if not scan_error:
+        for path in evidence_dir.rglob("*"):
+            if path.is_file():
+                try:
+                    remaining += path.read_bytes().count(needle)
+                except OSError:
+                    scan_error = True
+                    break
+    safe["secret_scan_status"] = "ERROR" if scan_error else ("PASS" if remaining == 0 else "FAIL")
+    safe["secret_scan_matches"] = None if scan_error else remaining
+    if detected or scan_error or remaining:
+        safe["provider_smoke"] = "FAIL"
+        safe["error_type"] = "SecretScanFailure"
+        safe["secret_scan_failure_code"] = (
+            "SCAN_ERROR" if scan_error else "CREDENTIAL_MATERIAL_DETECTED"
+        )
+        safe.setdefault("provider_error_summary", "Credential evidence scan failed closed")
+    return safe
+
+
+def _default_reservation_path() -> Path:
+    return Path(__file__).resolve().parent / "evidence" / "ftg-p-video-001-revision-c-reservation.json"
+
+
 def load_execution_package(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8-sig"))
     if isinstance(value, Mapping) and value.get("ok") is True and isinstance(value.get("result"), Mapping):
@@ -80,12 +149,12 @@ def build_smoke_request(
     return {
         "execution_package": dict(package),
         "approval_record": {
-            "approval_id": "ftg-p-video-001-revision-b",
+            "approval_id": "ftg-p-video-001-revision-c",
             "approval_type": "video_generation",
             "outcome": "approved",
             "authority": {"authority_id": "authorized-approval-boundary"},
             "decided_at": _timestamp(decided_at),
-            "decision_ref": "FTG-P-VIDEO-001-REVISION-B",
+            "decision_ref": "FTG-P-VIDEO-001-REVISION-C",
             "subject_ref": {"digest": package["package_digest"]},
             "valid_until": _timestamp(decided_at + timedelta(minutes=15)),
         },
@@ -98,7 +167,7 @@ def build_smoke_request(
             "timeout_seconds": 600,
         },
         "provider_binding": {
-            "binding_ref": "ftg-p-video-001-revision-b",
+            "binding_ref": "ftg-p-video-001-revision-c",
             "provider_id": "kie",
             "model_id": MODEL_ID,
             "credential_ref": "env://KIE_API_KEY",
@@ -114,7 +183,7 @@ def build_smoke_request(
             "generate_audio": False,
             "web_search": False,
         },
-        "idempotency_key": "ftg-p-video-001-revision-b-20260722",
+        "idempotency_key": "ftg-p-video-001-revision-c-20260722",
     }
 
 
@@ -130,13 +199,27 @@ def run_smoke(
         raise ValueError("reference paths and digests must have equal length")
     package = load_execution_package(package_path)
     validate_reference_digests(package, reference_sha256)
+    resolver = KieCredentialResolver()
+    resolver.resolve()
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    attempt_path = evidence_dir / "provider-attempt.json"
     started_at = _utc_now()
+    global_reservation = _default_reservation_path()
+    global_reservation.parent.mkdir(parents=True, exist_ok=True)
+    with global_reservation.open("x", encoding="utf-8") as stream:
+        json.dump({
+            "authorization_id": AUTHORIZATION_ID,
+            "work_item_id": WORK_ITEM_ID,
+            "revision": "C",
+            "started_at": _timestamp(started_at),
+            "state": "ATTEMPT_RESERVED",
+        }, stream, ensure_ascii=False, indent=2, sort_keys=True)
+        stream.write("\n")
+    attempt_path = evidence_dir / "provider-attempt.json"
     with attempt_path.open("x", encoding="utf-8") as stream:
         json.dump({
             "authorization_id": AUTHORIZATION_ID,
             "work_item_id": WORK_ITEM_ID,
+            "revision": "C",
             "started_at": _timestamp(started_at),
             "state": "ATTEMPT_RESERVED",
         }, stream, ensure_ascii=False, indent=2, sort_keys=True)
@@ -144,7 +227,6 @@ def run_smoke(
     events_path = evidence_dir / "provider-events.jsonl"
     result_path = evidence_dir / "provider-result.json"
     transport = UrllibKieHttpTransport(timeout_seconds=30.0)
-    resolver = KieCredentialResolver()
     uploader = KieReferenceImageUploader(transport=transport, credential_resolver=resolver)
     ledger = InMemoryVideoExecutionLedger()
     adapter = KieVideoProviderAdapter(transport=transport, credential_resolver=resolver)
@@ -190,6 +272,7 @@ def run_smoke(
         result = {
             "authorization_id": AUTHORIZATION_ID,
             "work_item_id": WORK_ITEM_ID,
+            "revision": "C",
             "provider_smoke": "PASS",
             "task_id": task_id,
             "generation_submissions": generation_submissions,
@@ -198,12 +281,23 @@ def run_smoke(
             "size_bytes": manifest["size_bytes"],
             "sha256": manifest["sha256"],
             "credits_consumed": record.get("provider_cost_units"),
+            "http_status": transport.http_status_chain[-1] if transport.http_status_chain else None,
+            "http_status_chain": list(transport.http_status_chain),
             "contract_status": manifest["contract_status"],
             "finished_at": _timestamp(_utc_now()),
         }
+        result = _finalize_secret_scan(evidence_dir, result, resolver)
         _write_json(result_path, result)
+        if result["provider_smoke"] != "PASS":
+            raise AdapterFailure(
+                "SECRET_SCAN_FAILED",
+                "Credential evidence scan failed closed",
+                retryable=False,
+            )
         return result
     except Exception as error:
+        if result_path.exists():
+            raise
         record = ledger.get(submitted_job_id) if submitted_job_id is not None else None
         http_status = getattr(error, "http_status", None)
         provider_error_summary = getattr(error, "provider_error_summary", None)
@@ -214,6 +308,7 @@ def run_smoke(
         result = {
             "authorization_id": AUTHORIZATION_ID,
             "work_item_id": WORK_ITEM_ID,
+            "revision": "C",
             "provider_smoke": "FAIL",
             "task_id": task_id,
             "generation_submissions": generation_submissions,
@@ -225,6 +320,7 @@ def run_smoke(
             "artifact_uri_valid": False,
             "finished_at": _timestamp(_utc_now()),
         }
+        result = _finalize_secret_scan(evidence_dir, result, resolver)
         _write_json(result_path, result)
         raise
 

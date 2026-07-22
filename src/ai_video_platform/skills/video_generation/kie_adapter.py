@@ -125,6 +125,7 @@ class UrllibKieHttpTransport:
         self._timeout_seconds = timeout_seconds
         self._api_opener = build_opener(_NoRedirectHandler())
         self._upload_opener = build_opener(_NoRedirectHandler())
+        self.http_status_chain: list[int] = []
 
     def request_json(
         self,
@@ -151,8 +152,10 @@ class UrllibKieHttpTransport:
         )
         try:
             with self._api_opener.open(request, timeout=self._timeout_seconds) as response:
+                self.http_status_chain.append(int(getattr(response, "status", 200)))
                 raw = response.read()
         except HTTPError as error:
+            self.http_status_chain.append(error.code)
             retryable = error.code == 429 or error.code >= 500
             summary = self._provider_error_summary(error.read(), credential)
             raise AdapterFailure(
@@ -191,8 +194,10 @@ class UrllibKieHttpTransport:
         request = Request(uri, method="GET", headers={"Accept": "video/mp4,application/octet-stream"})
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:
+                self.http_status_chain.append(int(getattr(response, "status", 200)))
                 return response.read()
         except HTTPError as error:
+            self.http_status_chain.append(error.code)
             retryable = error.code == 429 or error.code >= 500
             raise AdapterFailure(
                 "KIE_DOWNLOAD_ERROR",
@@ -231,8 +236,10 @@ class UrllibKieHttpTransport:
         )
         try:
             with self._upload_opener.open(request, timeout=self._timeout_seconds) as response:
+                self.http_status_chain.append(int(getattr(response, "status", 200)))
                 raw = response.read()
         except HTTPError as error:
+            self.http_status_chain.append(error.code)
             retryable = error.code == 429 or error.code >= 500
             summary = self._provider_error_summary(error.read(), credential)
             raise AdapterFailure(
