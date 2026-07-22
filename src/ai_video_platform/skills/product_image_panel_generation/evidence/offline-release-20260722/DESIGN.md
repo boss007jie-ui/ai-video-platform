@@ -80,7 +80,7 @@ TDD adds Adapter contract tests before implementation:
 - the existing scripted Fake and default Rejecting behavior remains unchanged;
 - CLI adapter selection stays an explicit two-value allowlist.
 
-`pyproject.toml` remains authoritative at `requires-python = ">=3.12"`; Codex-04 does not edit that shared file. Final verification clears `PYTHONPATH` and uses Python 3.14 for all owned test modules and the full offline suite. A single minimal Python 3.12 CLI/interface smoke is also required; the full suite is not duplicated on 3.12. The release record names both runtime commands and results. Static scans confirm no Provider SDK, network endpoint, credential material, real media, or non-owner path change.
+`pyproject.toml` remains authoritative at `requires-python = ">=3.12"`; Codex-04 does not edit that shared file. Final verification clears `PYTHONPATH` and uses the locally installed Python 3.14 for all owned test modules and the full offline suite. No Python 3.12 interpreter exists in the launcher, registry, or local uv-managed installations; on 2026-07-22 the user directed Codex-04 to continue with the local runtime. The 3.12 smoke is therefore recorded as `NOT_RUN_ENVIRONMENT_UNAVAILABLE_USER_DIRECTED_LOCAL_3_14`, not presented as a compatibility pass. The release record names the runtime command and result. Static scans confirm no Provider SDK, network endpoint, credential material, real media, or non-owner path change.
 
 ## Commit and rollback design
 
