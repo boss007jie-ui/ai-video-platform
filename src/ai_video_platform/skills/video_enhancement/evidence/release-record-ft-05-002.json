@@ -1,0 +1,36 @@
+{
+  "authorization_id": "FTG-0-20260720-001",
+  "work_item_id": "FT-05-002",
+  "release_status": "RC_OFFLINE",
+  "release_candidate_commit": "a572a36",
+  "contract_status": "DRAFT_UNREGISTERED",
+  "provider_smoke": "NOT_AUTHORIZED",
+  "provider_network_performed": false,
+  "owned_tests": {
+    "outcome": "PASS",
+    "ran": 29,
+    "log": "evidence/ft-05-002-final/owned-tests.log"
+  },
+  "offline_acceptance": {
+    "outcome": "PASS",
+    "receipt": "evidence/offline-acceptance-ft-05-002-final/offline-acceptance-receipt.json"
+  },
+  "repository_secret_scan": {
+    "outcome": "PASS",
+    "findings": 0,
+    "log": "evidence/ft-05-002-final/secret-scan.log"
+  },
+  "full_offline_suite": {
+    "outcome": "BLOCKED_SHARED_ALLOWLIST",
+    "ran": 361,
+    "failures": 1,
+    "skipped": 3,
+    "log": "evidence/ft-05-002-final/offline-suite.log",
+    "change_request": "CODEX-00-INTEGRATION-CHANGE-REQUEST.md"
+  },
+  "rollback": {
+    "command": "git revert a572a36",
+    "provider_side_effect_note": "No Provider, credential, remote task, or remote asset was used by FT-05-002."
+  },
+  "next_gate": "Codex-00 merges the owner commit, adds video_enhancement to the shared architecture allowlist, and reruns the full offline suite."
+}
