@@ -15,6 +15,7 @@ from .adapters import (
 )
 from .apify import ApifyCollectionAdapter
 from .errors import ErrorCode, SkillError
+from .media import DirectMediaDownloadAdapter, MEDIA_DOWNLOAD_AUTHORIZATION_ID
 from .models import CollectionItem, CollectionResult, ResearchCandidate, ResearchInspection, ResearchResult, ResearchScore
 
 
@@ -64,9 +65,11 @@ def _assert_offline_provider(provider: CollectionProvider) -> None:
 
 def _assert_offline_downloader(downloader: DownloadAdapter) -> None:
     if type(downloader) not in (FakeDownloadAdapter, RejectingDownloadAdapter):
+        if type(downloader) is DirectMediaDownloadAdapter and downloader.authorization_id == MEDIA_DOWNLOAD_AUTHORIZATION_ID:
+            return
         raise SkillError(
             ErrorCode.DOWNLOAD_FORBIDDEN,
-            "Only built-in fake or rejecting download adapters are enabled before FTG-P",
+            "Only the authorized direct-public media adapter or offline adapters are enabled",
         )
 
 
@@ -452,8 +455,10 @@ def _collect_reference_assets_claimed(
     idempotency_key = request.get("idempotency_key")
     if not isinstance(selected, Sequence) or isinstance(selected, (str, bytes)) or not selected:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "selected_candidates must be a non-empty array")
-    if policy not in {"METADATA_ONLY", "FREE_FIRST"} or not isinstance(idempotency_key, str) or not idempotency_key:
+    if policy not in {"METADATA_ONLY", "FREE_FIRST", "INTERNAL_ANALYSIS_ONLY"} or not isinstance(idempotency_key, str) or not idempotency_key:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "Collection policy or idempotency key is invalid")
+    if policy == "INTERNAL_ANALYSIS_ONLY" and type(downloader) is not DirectMediaDownloadAdapter:
+        raise SkillError(ErrorCode.DOWNLOAD_FORBIDDEN, "Internal-analysis media policy requires the authorized adapter")
     normalized: list[dict[str, object]] = []
     for raw in selected:
         if not isinstance(raw, Mapping):
@@ -470,6 +475,8 @@ def _collect_reference_assets_claimed(
         expired = _parse_z(expires_at, "expires_at") <= current
         if policy == "FREE_FIRST" and not expired and raw.get("pii_detected") is not True and float(brand_safety) >= 0.5 and rights not in {"PUBLIC", "AUTHORIZED"}:
             raise SkillError(ErrorCode.RIGHTS_FORBIDDEN, "FREE_FIRST requires public or authorized rights")
+        if policy == "INTERNAL_ANALYSIS_ONLY" and rights != "UNKNOWN":
+            raise SkillError(ErrorCode.RIGHTS_FORBIDDEN, "Internal-analysis media must preserve UNKNOWN rights")
         normalized.append({
             "raw": raw, "source_id": source_id, "source_url": source_url, "rights": rights,
             "expires_at": expires_at, "expired": expired, "brand_safety": float(brand_safety),
@@ -486,7 +493,7 @@ def _collect_reference_assets_claimed(
         rights = str(selected_item["rights"])
         expires_at = str(selected_item["expires_at"])
         expired = bool(selected_item["expired"])
-        if expired:
+        if expired and policy != "INTERNAL_ANALYSIS_ONLY":
             state, object_digest = "expired", None
         elif bool(selected_item["pii_detected"]) or float(selected_item["brand_safety"]) < 0.5:
             state, object_digest = "quarantined", None
@@ -496,14 +503,25 @@ def _collect_reference_assets_claimed(
             try:
                 receipt = downloader.download(raw)
             except SkillError:
+                if (
+                    policy == "INTERNAL_ANALYSIS_ONLY"
+                    and type(downloader) is DirectMediaDownloadAdapter
+                    and downloader.recorded_failure_for(raw)
+                ):
+                    continue
                 raise
             except Exception as exc:
                 raise SkillError(ErrorCode.DOWNLOAD_FORBIDDEN, "Download adapter failed") from exc
             digest = receipt.get("sha256")
             if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise SkillError(ErrorCode.VALIDATION_FAILED, "Download receipt digest is invalid")
-            state, object_digest = "collected", digest
-        item = CollectionItem(source_id=source_id, lifecycle_state=state, rights_status=rights, object_digest=object_digest)
+            state = "collected"
+            object_digest = digest
+        result_state = "internal_analysis_only" if policy == "INTERNAL_ANALYSIS_ONLY" and state == "collected" else state
+        item = CollectionItem(source_id=source_id, lifecycle_state=result_state, rights_status=rights, object_digest=object_digest)
+        if policy == "INTERNAL_ANALYSIS_ONLY":
+            items.append(item)
+            continue
         try:
             storage.write_record(
                 {

@@ -13,6 +13,7 @@ from .adapters import RejectingCollectionAdapter, RejectingDownloadAdapter
 from .apify import ApifyCollectionAdapter
 from .errors import ErrorCode, SkillError
 from .interface import collect_reference_assets, inspect_research_request, research_viral
+from .media import DirectMediaDownloadAdapter
 from .storage import InMemoryResearchLibraryAdapter, ResearchLibraryAdapter
 
 
@@ -41,10 +42,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--authorization-id")
     parser.add_argument("--library-root")
     arguments = parser.parse_args(argv)
+    apify_adapter = None
+    media_adapter = None
     try:
         request = json.loads(Path(arguments.input).read_text(encoding="utf-8"))
         now = _utc(arguments.now)
-        apify_adapter = None
         if arguments.command == "inspect-research-request":
             result = inspect_research_request(request, now=now)
         elif arguments.command == "research-viral":
@@ -92,10 +94,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 now=now,
             )
         else:
+            downloader = RejectingDownloadAdapter()
+            storage = InMemoryResearchLibraryAdapter()
+            if arguments.authorization_id:
+                if not arguments.library_root:
+                    raise SkillError(ErrorCode.PATH_FORBIDDEN, "Media download requires an explicit Research Library root")
+                media_adapter = DirectMediaDownloadAdapter(
+                    Path(arguments.library_root), authorization_id=arguments.authorization_id,
+                    now=(lambda: now) if now is not None else None,
+                )
+                downloader = media_adapter
+                storage = ResearchLibraryAdapter(Path(arguments.library_root))
             result = collect_reference_assets(
                 request,
-                downloader=RejectingDownloadAdapter(),
-                storage=InMemoryResearchLibraryAdapter(),
+                downloader=downloader,
+                storage=storage,
                 now=now,
             )
     except (SkillError, ValueError, OSError, json.JSONDecodeError) as exc:
@@ -106,6 +119,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"status": "ERROR", "error": error}, ensure_ascii=False, sort_keys=True))
         return 2
     payload = result.to_dict()
+    if media_adapter is not None:
+        payload["download_receipts"] = list(media_adapter.receipts)
+        payload["provider_calls"] = 0
+        payload["download_attempts"] = media_adapter.attempt_count
     if apify_adapter is not None:
         if apify_adapter.attempt_count:
             payload["provider_receipt"] = apify_adapter.receipt.to_dict()
