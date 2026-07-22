@@ -47,7 +47,9 @@ The skips are Windows environments where symlink creation is unavailable; the im
 ## Security, dependency and operations evidence
 
 - Real Apify metadata smoke: one authorized single-call attempt was executed under `FTG-P-RESEARCH-001` with three TikTok US seeds, `max_provider_calls=1`, `max_results=20`, `maxTotalChargeUsd=0.01`, zero retries and `METADATA_ONLY`. The Research Library request ledger proves `COMPLETED`, `provider_calls=1`, `partial=true`, 19 deduplicated metadata candidates, zero media downloads and zero Product Library writes.
-- The CLI process failed while serializing non-ASCII Provider output to the Windows console after the Provider work completed; `smoke-output.log` is empty, so the receipt's Actor run ID, exact actual cost, charged-event counts and per-seed hit counts are unavailable. They are intentionally not inferred or fabricated. The UTF-8 stdout fix and regression test are included in this commit.
+- The CLI process failed while serializing non-ASCII Provider output to the Windows console after the Provider work completed; `smoke-output.log` is empty. The receipt was subsequently reconciled with read-only Apify GET requests, without rerunning the Actor. The UTF-8 stdout fix and regression test are included in this commit.
+- Reconciled receipt: actor run `PLpc5eSso79mdBouE`, status `SUCCEEDED`, dataset `tbKOF4BafGbvUzkBC`, started `2026-07-22T02:42:59.436Z`, finished `2026-07-22T02:43:35.987Z`, `usageTotalUsd=0.005999999999999999` (USD 0.006), `chargedEventCounts={"apify-default-dataset-item":20}`. Dataset GET returned 20 items.
+- Reconciled per-seed hit counts: `laser pointer tactical EDC=19`, `laser pointer gear review=1`, `laser pointer everyday carry=0`, `unattributed=0`.
 - Idempotent replay was run locally without a second Provider call: `status=IDEMPOTENT_REPLAY`, `provider_call_performed=false`, `deduped_count=19`; full ranking decomposition is retained in `C:\tmp\FT-02-001-apify-smoke-20260722\idempotent-replay.json`.
 - Research Library contents after smoke: 19 `metadata/*.json`, 0 quarantine files, 1 request ledger, `audit/idempotency.json`, `audit/lifecycle.jsonl`, and `audit/lifecycle-index.json`; all candidates are `metadata_only` with `rights_status=UNKNOWN`.
 - Credential presence evidence is only `APIFY_API_KEY_PRESENT=True`; a scan of smoke artifacts and the Research Library found `SECRET_PATTERN_HIT_COUNT=0`. No credential value was printed or persisted.
@@ -61,8 +63,7 @@ The skips are Windows environments where symlink creation is unavailable; the im
 
 ## Open gates
 
-1. Reconcile the missing Provider receipt fields (Actor run ID, exact actual cost, charged-event counts and per-seed hit counts) from the authorized run's external control-plane record; do not retry the Provider under this authorization.
-2. Issue a separate media-download authorization and define the permitted media receipt/input contract before enabling the staged Apify downloader.
-3. Windows/link-capable CI execution of the skipped symlink/junction cases.
+1. Issue a separate media-download authorization and define the permitted media receipt/input contract before enabling the staged Apify downloader.
+2. Windows/link-capable CI execution of the skipped symlink/junction cases.
 
-Next gate requested: receipt reconciliation and review of the single `FTG-P-RESEARCH-001` Provider smoke; status remains `RC_PROVIDER_PENDING` until the receipt gap is closed.
+Next gate requested: media-download authorization and shared-contract/adoption review; Provider smoke is reconciled and PASS, while overall status remains `RC_PROVIDER_PENDING`.
