@@ -7,7 +7,7 @@ Provider execution: `NOT_AUTHORIZED`
 
 ## Goal and non-goals
 
-This change makes the existing offline Image/Panel capability independently demonstrable and prevents an incomplete future real Provider Adapter from being silently instantiated or passed into orchestration.
+This change makes the existing offline Image/Panel capability independently demonstrable and prevents an incomplete future real Provider Adapter from being silently instantiated or passed into orchestration. The completed offline capability may report `INTERNAL_PRODUCTION_READY_OFFLINE`; the real image Provider path remains `RC_PROVIDER_PENDING`.
 
 It does not select a Provider, define a real endpoint, request or read credentials, download media, make a network call, run a real image generation, or claim Production Ready.
 
@@ -16,13 +16,15 @@ It does not select a Provider, define a real endpoint, request or read credentia
 Add an `ImageProviderAdapter` abstract base class in `adapters.py`:
 
 - an abstract `provider_id` property is required;
-- an abstract private `_generate(invocation, cancellation=...)` method is required;
+- an abstract internal `_generate(invocation, cancellation=...)` method is required;
 - the concrete public `generate(...)` method is shared by every Adapter and always raises `IMAGE_PANEL_PROVIDER_BYPASS_FORBIDDEN`;
 - `FakeImageProviderAdapter` and `RejectingImageProviderAdapter` inherit the ABC and implement both abstract members;
 - `ImagePanelService` requires an `ImageProviderAdapter` instance and rejects duck-typed objects before preflight or execution;
 - no real Adapter class is added.
 
-This gives two fail-closed layers: an incomplete subclass cannot be instantiated, and a non-ABC object cannot enter the service.
+The leading underscore is a Python naming convention, not a security or authentication boundary. Fail-closed enforcement comes from four independently tested controls: incomplete subclasses cannot instantiate, non-ABC objects cannot enter the service, public `generate()` always rejects, and a production-source AST guard permits `_generate(...)` call sites only in `service.py` and `adapters.py`.
+
+The AST guard scans every Python module under `src/ai_video_platform`. It reports the relative path and line for each disallowed `_generate` call. Its tests exercise both the clean repository and a synthetic forbidden module so a future bypass makes the owned architecture suite fail.
 
 ## CLI behavior and evidence flow
 
@@ -41,6 +43,8 @@ Actual Python 3.14 module CLI processes produce:
 4. Rejecting output proving default-deny Provider behavior and `provider_smoke=NOT_AUTHORIZED`;
 5. a sanitized copy of the task-workspace ledger as the receipt of immutable request-hash/outcome binding.
 
+The Adapter contract receipt records invocation counts of `1` after the first Fake execution and `1` after exact replay. Tests independently assert the same invariant.
+
 The evidence bundle contains JSON and Markdown only. It contains no image bytes, encoded binary, secret, credential, real URL, real Provider identifier, or real product/customer data.
 
 ## Evidence artifact set
@@ -54,6 +58,9 @@ The directory containing this design will contain:
 - `03-replay.stdout.json`
 - `04-rejecting.stdout.json`
 - `ledger-receipt.json`
+- `receipt-manifest.json`
+- `python-runtime.txt`
+- `static-scan.txt`
 - `OFFLINE_RELEASE_RECORD.md`
 - `FTG-P-003-PROVIDER-AUTHORIZATION-SKELETON.md`
 
@@ -67,10 +74,13 @@ TDD adds Adapter contract tests before implementation:
 - a duck-typed object is rejected by `ImagePanelService`;
 - Fake and Rejecting are concrete ABC implementations;
 - the inherited public direct-call surface remains fail-closed;
+- a normal service execution calls the internal Adapter implementation once;
+- exact replay leaves the internal invocation count at one;
+- the AST guard rejects a direct `_generate` call outside `service.py` and `adapters.py`;
 - the existing scripted Fake and default Rejecting behavior remains unchanged;
 - CLI adapter selection stays an explicit two-value allowlist.
 
-Final verification clears `PYTHONPATH` and uses `py -3.14` for all owned test modules and the full offline suite. Static scans confirm no Provider SDK, network endpoint, credential material, real media, or non-owner path change.
+`pyproject.toml` remains authoritative at `requires-python = ">=3.12"`; Codex-04 does not edit that shared file. Final verification clears `PYTHONPATH` and uses Python 3.14 for all owned test modules and the full offline suite. A single minimal Python 3.12 CLI/interface smoke is also required; the full suite is not duplicated on 3.12. The release record names both runtime commands and results. Static scans confirm no Provider SDK, network endpoint, credential material, real media, or non-owner path change.
 
 ## Commit and rollback design
 
