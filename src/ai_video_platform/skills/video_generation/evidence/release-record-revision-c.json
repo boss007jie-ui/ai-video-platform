@@ -1,0 +1,29 @@
+{
+  "authorization_id": "FTG-0-20260720-001",
+  "work_item_id": "FT-05-001",
+  "workline": "Codex-05 Planning & Video",
+  "release_status": "RC_PROVIDER_PENDING",
+  "release_candidate_commit": "78d1914f87a7f8d2c5300388051d13d2be1a6410",
+  "revision_c_control_commit": "399f620670bf2ddd7a5238b88dd19757c9fadcc1",
+  "offline_acceptance": {
+    "status": "PASS",
+    "provider_network_performed": false,
+    "evidence": "src/ai_video_platform/skills/video_generation/evidence/offline-acceptance-revision-c/offline-acceptance-receipt.json"
+  },
+  "provider_smoke": {
+    "status": "FAIL",
+    "task_id": "1449f0e53408fb5bbe5d2928cf330187",
+    "credits_consumed": 77.5,
+    "http_status": 403,
+    "failure_stage": "artifact_download",
+    "artifact_registered": false,
+    "evidence": "src/ai_video_platform/skills/video_generation/evidence/ftg-p-video-001-revision-c-real/provider-result.json"
+  },
+  "production_ready": false,
+  "rollback": {
+    "command": "git revert --no-edit 78d1914f87a7f8d2c5300388051d13d2be1a6410 399f620670bf2ddd7a5238b88dd19757c9fadcc1",
+    "scope": "Reverts the Revision C controller, offline acceptance implementation, tests, and repository evidence.",
+    "provider_side_effect_note": "Git rollback cannot undo the consumed KIE task; remote cancellation was waived and no further Provider attempt is authorized."
+  },
+  "gate_request": "Hermes review of RC_PROVIDER_PENDING failure evidence and offline release closeout"
+}
