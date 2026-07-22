@@ -1,0 +1,55 @@
+﻿py.exe : test_concurrency_and_request_limits_fail_closed (tests.skills.video_generation.test_video_generation_adapters.
+VideoGenerationAdapterTests.test_concurrency_and_request_limits_fail_closed) ... ok
+At line:2 char:1160
++ ... g = Join-Path $logDir $entry[0]; & py -3.14 @($entry[1]) *>&1 | Out-F ...
++                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (test_concurrenc..._closed) ... ok:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+test_concurrency_reservation_is_atomic_across_threads (tests.skills.video_generation.test_video_generation_adapters.Vid
+eoGenerationAdapterTests.test_concurrency_reservation_is_atomic_across_threads) ... ok
+test_concurrent_exact_replay_waits_for_submission_result (tests.skills.video_generation.test_video_generation_adapters.
+VideoGenerationAdapterTests.test_concurrent_exact_replay_waits_for_submission_result) ... ok
+test_download_digest_mismatch_fails_closed (tests.skills.video_generation.test_video_generation_adapters.VideoGeneratio
+nAdapterTests.test_download_digest_mismatch_fails_closed) ... ok
+test_exact_idempotent_replay_and_mismatch (tests.skills.video_generation.test_video_generation_adapters.VideoGeneration
+AdapterTests.test_exact_idempotent_replay_and_mismatch) ... ok
+test_execution_cli_uses_explicit_injected_offline_context (tests.skills.video_generation.test_video_generation_adapters
+.VideoGenerationAdapterTests.test_execution_cli_uses_explicit_injected_offline_context) ... ok
+test_failed_submission_is_idempotently_replayed_as_the_same_error (tests.skills.video_generation.test_video_generation_
+adapters.VideoGenerationAdapterTests.test_failed_submission_is_idempotently_replayed_as_the_same_error) ... ok
+test_fake_provider_job_identity_includes_idempotency_key (tests.skills.video_generation.test_video_generation_adapters.
+VideoGenerationAdapterTests.test_fake_provider_job_identity_includes_idempotency_key) ... ok
+test_ledger_reads_are_snapshots (tests.skills.video_generation.test_video_generation_adapters.VideoGenerationAdapterTes
+ts.test_ledger_reads_are_snapshots) ... ok
+test_ledger_rejects_illegal_transition_and_lists_recoverable_jobs (tests.skills.video_generation.test_video_generation_
+adapters.VideoGenerationAdapterTests.test_ledger_rejects_illegal_transition_and_lists_recoverable_jobs) ... ok
+test_malformed_adapter_results_fail_closed (tests.skills.video_generation.test_video_generation_adapters.VideoGeneratio
+nAdapterTests.test_malformed_adapter_results_fail_closed) ... ok
+test_malformed_or_sensitive_submit_identity_fails_closed (tests.skills.video_generation.test_video_generation_adapters.
+VideoGenerationAdapterTests.test_malformed_or_sensitive_submit_identity_fails_closed) ... ok
+test_network_blocked_code_is_stable_after_submission (tests.skills.video_generation.test_video_generation_adapters.Vide
+oGenerationAdapterTests.test_network_blocked_code_is_stable_after_submission) ... ok
+test_poll_retries_and_uncertain_exhaustion_retains_active_capacity (tests.skills.video_generation.test_video_generation
+_adapters.VideoGenerationAdapterTests.test_poll_retries_and_uncertain_exhaustion_retains_active_capacity) ... ok
+test_recovery_uses_shared_ledger_without_resubmission (tests.skills.video_generation.test_video_generation_adapters.Vid
+eoGenerationAdapterTests.test_recovery_uses_shared_ledger_without_resubmission) ... ok
+test_rejecting_and_network_blocked_adapters_never_touch_network (tests.skills.video_generation.test_video_generation_ad
+apters.VideoGenerationAdapterTests.test_rejecting_and_network_blocked_adapters_never_touch_network) ... ok
+test_retry_then_success_and_retry_exhaustion (tests.skills.video_generation.test_video_generation_adapters.VideoGenerat
+ionAdapterTests.test_retry_then_success_and_retry_exhaustion) ... ok
+test_same_idempotency_key_is_atomic_across_threads (tests.skills.video_generation.test_video_generation_adapters.VideoG
+enerationAdapterTests.test_same_idempotency_key_is_atomic_across_threads) ... ok
+test_sensitive_adapter_uri_is_rejected_without_echo (tests.skills.video_generation.test_video_generation_adapters.Video
+GenerationAdapterTests.test_sensitive_adapter_uri_is_rejected_without_echo) ... ok
+test_submit_poll_download_happy_path_and_asset_manifest_request (tests.skills.video_generation.test_video_generation_ad
+apters.VideoGenerationAdapterTests.test_submit_poll_download_happy_path_and_asset_manifest_request) ... ok
+test_timeout_and_cancel_are_terminal (tests.skills.video_generation.test_video_generation_adapters.VideoGenerationAdapt
+erTests.test_timeout_and_cancel_are_terminal) ... ok
+test_unexpected_adapter_exception_is_suppressed_and_redacted (tests.skills.video_generation.test_video_generation_adapt
+ers.VideoGenerationAdapterTests.test_unexpected_adapter_exception_is_suppressed_and_redacted) ... ok
+
+----------------------------------------------------------------------
+Ran 22 tests in 0.058s
+
+OK

@@ -1,0 +1,21 @@
+﻿py.exe : test_build_video_plan_is_deterministic_versioned_and_provider_free (tests.skills.storyboard_master_video_plann
+ing.test_video_planning_interface.VideoPlanningInterfaceTests.test_build_video_plan_is_deterministic_versioned_and_prov
+ider_free) ... ok
+At line:2 char:1160
++ ... g = Join-Path $logDir $entry[0]; & py -3.14 @($entry[1]) *>&1 | Out-F ...
++                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (test_build_vide...er_free) ... ok:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+test_cli_returns_machine_readable_success (tests.skills.storyboard_master_video_planning.test_video_planning_interface.
+VideoPlanningInterfaceTests.test_cli_returns_machine_readable_success) ... ok
+test_compose_master_snapshots_input_and_freezes_continuity_anchor (tests.skills.storyboard_master_video_planning.test_v
+ideo_planning_interface.VideoPlanningInterfaceTests.test_compose_master_snapshots_input_and_freezes_continuity_anchor) 
+... ok
+test_validate_video_plan_accepts_untampered_package (tests.skills.storyboard_master_video_planning.test_video_planning_
+interface.VideoPlanningInterfaceTests.test_validate_video_plan_accepts_untampered_package) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.003s
+
+OK
