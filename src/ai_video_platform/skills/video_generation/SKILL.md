@@ -15,8 +15,11 @@ The injected Python interface also exposes `submit_video`, `poll_video`,
 explicit adapter and ledger. The shipped Fake adapter is deterministic and
 in-memory; Rejecting and NetworkBlocked adapters fail closed. The KIE production
 adapter is available only by explicit Python construction and reads `KIE_API_KEY`
-through its dedicated resolver. The generic module CLI never selects it. KIE
-execution results record `provider_network_performed: true`; offline adapters
+through its dedicated resolver. Approved local reference images use a separate,
+digest-verified Base64 uploader before generation; the current KIE response field
+is `data.downloadUrl`, with `data.fileUrl` accepted only as a legacy-compatible
+fallback. The generic module CLI never selects the production adapter or uploader.
+KIE execution results record `provider_network_performed: true`; offline adapters
 continue to record `false`.
 
 Preflight order is fixed and fail-closed: validate the execution package and its
@@ -59,7 +62,9 @@ results are queried through KIE's unified task endpoint; `creditsConsumed` is st
 as `provider_cost_units`, and downloaded bytes are digest-verified before producing
 an opaque `kie://...` AssetManifestRequest URI. The documented KIE Market API does
 not expose task cancellation, so the adapter rejects `cancel` explicitly instead of
-claiming that a remote task was cancelled.
+claiming that a remote task was cancelled. Under Revision A, the first polling
+transport or response anomaly is terminal: no automatic poll retry is permitted,
+all later polling stops, and any late artifact must not be downloaded or registered.
 
 Stable errors cover package identity/version/digest, ApprovalRecord effectiveness
 and subject binding, budgets, Provider binding, opaque credential reference, and

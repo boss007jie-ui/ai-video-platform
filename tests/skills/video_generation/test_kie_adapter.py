@@ -14,11 +14,13 @@ if str(SOURCE_ROOT) not in sys.path:
 
 from ai_video_platform.skills.video_generation import (
     KieCredentialResolver,
+    KieReferenceImageUploader,
     KieVideoProviderAdapter,
     VideoGenerationInterface,
 )
 from ai_video_platform.skills.video_generation.adapters import AdapterFailure
 from ai_video_platform.skills.video_generation.kie_adapter import UrllibKieHttpTransport
+from ai_video_platform.skills.video_generation.kie_smoke import build_smoke_request, validate_reference_digests
 from ai_video_platform.skills.video_generation.ledger import InMemoryVideoExecutionLedger
 from tests.skills.video_generation.test_video_generation_interface import generation_request
 
@@ -75,6 +77,29 @@ class RecordingTransport:
         self.requests.append({"method": "DOWNLOAD"})
         return b"synthetic-kie-video"
 
+    def upload_base64(
+        self,
+        credential: str,
+        *,
+        base64_data: str,
+        upload_path: str,
+        file_name: str,
+    ) -> dict[str, object]:
+        self.requests.append({
+            "method": "UPLOAD",
+            "api_key_present": bool(credential),
+            "base64_data": base64_data,
+            "upload_path": upload_path,
+            "file_name": file_name,
+        })
+        return {
+            "code": 200,
+            "msg": "success",
+            "data": {
+                "downloadUrl": "https://tempfile.redpandaai.co/ftg-p-video-001/reference.jpg",
+            },
+        }
+
 
 def kie_request() -> dict[str, object]:
     request = generation_request()
@@ -113,6 +138,79 @@ def kie_request() -> dict[str, object]:
 
 
 class KieAdapterTests(unittest.TestCase):
+    def test_smoke_request_is_fixed_to_revision_a_envelope(self) -> None:
+        package = generation_request()["execution_package"]
+        digest = package["asset_mapping"][0]["sha256"]
+        package["asset_mapping"].append({
+            "shot_id": "shot-001",
+            "role": "detail",
+            "asset_id": "asset-002",
+            "uri": "memory://detail.png",
+            "sha256": "sha256:" + "4" * 64,
+        })
+        validate_reference_digests(package, [digest, "sha256:" + "4" * 64])
+        request = build_smoke_request(
+            package,
+            ["https://assets.example.test/one.jpg", "https://assets.example.test/two.jpg"],
+            now=NOW,
+        )
+
+        self.assertEqual(request["budget"], {
+            "estimated_cost_units": 120,
+            "max_cost_units": 120,
+            "max_requests": 1,
+            "max_concurrency": 1,
+            "max_attempts": 2,
+            "timeout_seconds": 600,
+        })
+        self.assertEqual(request["output"]["duration"], 5)
+        self.assertEqual(request["output"]["resolution"], "480p")
+        self.assertFalse(request["output"]["generate_audio"])
+        self.assertFalse(request["output"]["web_search"])
+
+    def test_reference_uploader_verifies_local_digest_and_returns_safe_https_url(self) -> None:
+        import hashlib
+        import tempfile
+
+        content = b"synthetic-approved-reference"
+        expected = "sha256:" + hashlib.sha256(content).hexdigest()
+        transport = RecordingTransport()
+        uploader = KieReferenceImageUploader(
+            transport=transport,
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "approved-reference.jpg"
+            image.write_bytes(content)
+            uri = uploader.upload(image, expected_sha256=expected)
+
+        self.assertEqual(uri, "https://tempfile.redpandaai.co/ftg-p-video-001/reference.jpg")
+        sent = transport.requests[0]
+        self.assertEqual(sent["method"], "UPLOAD")
+        self.assertEqual(sent["upload_path"], "ftg-p-video-001")
+        self.assertTrue(str(sent["base64_data"]).startswith("data:image/jpeg;base64,"))
+        self.assertNotIn("synthetic-value", str(sent))
+
+    def test_reference_uploader_rejects_tampering_and_oversize_before_http(self) -> None:
+        import hashlib
+        import tempfile
+
+        transport = RecordingTransport()
+        uploader = KieReferenceImageUploader(
+            transport=transport,
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "approved-reference.jpg"
+            image.write_bytes(b"changed")
+            with self.assertRaises(AdapterFailure):
+                uploader.upload(image, expected_sha256="sha256:" + hashlib.sha256(b"approved").hexdigest())
+            image.write_bytes(b"x" * (1024 * 1024 + 1))
+            with self.assertRaises(AdapterFailure):
+                uploader.upload(image, expected_sha256="sha256:" + hashlib.sha256(image.read_bytes()).hexdigest())
+
+        self.assertEqual(transport.requests, [])
+
     def test_default_http_transport_disables_api_redirects(self) -> None:
         class Response:
             def __enter__(self):
@@ -242,6 +340,31 @@ class KieAdapterTests(unittest.TestCase):
         with self.assertRaises(Exception):
             interface.submit_video(kie_request(), now=NOW)
         self.assertEqual(transport.submit_count, 1)
+
+    def test_polling_anomaly_is_terminal_after_one_get_attempt(self) -> None:
+        class AnomalousPollTransport(RecordingTransport):
+            def __init__(self) -> None:
+                super().__init__()
+                self.poll_count = 0
+
+            def request_json(self, method, path, api_key, *, payload=None, query=None):
+                if method == "GET":
+                    self.poll_count += 1
+                    raise AdapterFailure("KIE_NETWORK_ERROR", "Synthetic polling anomaly", retryable=True)
+                return super().request_json(method, path, api_key, payload=payload, query=query)
+
+        transport = AnomalousPollTransport()
+        adapter = KieVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        interface = VideoGenerationInterface(adapter=adapter, ledger=InMemoryVideoExecutionLedger())
+        submitted = interface.submit_video(kie_request(), now=NOW)
+
+        with self.assertRaises(Exception):
+            interface.poll_video(submitted["job_id"], now=NOW)
+
+        self.assertEqual(transport.poll_count, 1)
 
     def test_actual_cost_over_budget_fails_closed_before_download(self) -> None:
         transport = RecordingTransport()

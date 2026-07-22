@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -60,6 +63,15 @@ class KieHttpTransport(Protocol):
 
     def download(self, uri: str) -> bytes: ...
 
+    def upload_base64(
+        self,
+        credential: str,
+        *,
+        base64_data: str,
+        upload_path: str,
+        file_name: str,
+    ) -> dict[str, object]: ...
+
 
 class _NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -71,12 +83,14 @@ class UrllibKieHttpTransport:
     """Small stdlib HTTP transport; authentication is sent only to api.kie.ai."""
 
     _BASE_URL = "https://api.kie.ai"
+    _UPLOAD_BASE_URL = "https://kieai.redpandaai.co"
 
     def __init__(self, *, timeout_seconds: float = 30.0) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self._timeout_seconds = timeout_seconds
         self._api_opener = build_opener(_NoRedirectHandler())
+        self._upload_opener = build_opener(_NoRedirectHandler())
 
     def request_json(
         self,
@@ -131,6 +145,103 @@ class UrllibKieHttpTransport:
         except (URLError, TimeoutError, OSError):
             raise AdapterFailure("KIE_DOWNLOAD_ERROR", "KIE artifact download failed", retryable=True) from None
 
+    def upload_base64(
+        self,
+        credential: str,
+        *,
+        base64_data: str,
+        upload_path: str,
+        file_name: str,
+    ) -> dict[str, object]:
+        body = json.dumps({
+            "base64Data": base64_data,
+            "uploadPath": upload_path,
+            "fileName": file_name,
+        }, separators=(",", ":")).encode("utf-8")
+        request = Request(
+            self._UPLOAD_BASE_URL + "/api/file-base64-upload",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + credential,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with self._upload_opener.open(request, timeout=self._timeout_seconds) as response:
+                raw = response.read()
+        except HTTPError as error:
+            retryable = error.code == 429 or error.code >= 500
+            raise AdapterFailure("KIE_UPLOAD_ERROR", "KIE reference upload failed", retryable=retryable) from None
+        except (URLError, TimeoutError, OSError):
+            raise AdapterFailure("KIE_UPLOAD_ERROR", "KIE reference upload failed", retryable=True) from None
+        try:
+            decoded = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference upload returned malformed JSON", retryable=False) from None
+        if not isinstance(decoded, dict):
+            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference upload returned malformed JSON", retryable=False)
+        return decoded
+
+
+class KieReferenceImageUploader:
+    """Upload approved small local images without exposing credential material."""
+
+    _MAX_BYTES = 1024 * 1024
+    _MIME_TYPES = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+
+    def __init__(
+        self,
+        *,
+        transport: KieHttpTransport | None = None,
+        credential_resolver: KieCredentialResolver | None = None,
+    ) -> None:
+        self._transport = transport or UrllibKieHttpTransport()
+        self._credential_resolver = credential_resolver or KieCredentialResolver()
+
+    def upload(self, path: str | Path, *, expected_sha256: str) -> str:
+        image_path = Path(path)
+        suffix = image_path.suffix.lower()
+        if suffix not in self._MIME_TYPES or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256) is None:
+            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference image metadata is invalid", retryable=False)
+        try:
+            content = image_path.read_bytes()
+        except OSError:
+            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference image is unavailable", retryable=False) from None
+        if not content or len(content) > self._MAX_BYTES:
+            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference image size is invalid", retryable=False)
+        actual_sha256 = "sha256:" + hashlib.sha256(content).hexdigest()
+        if actual_sha256 != expected_sha256:
+            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference image digest mismatch", retryable=False)
+        encoded = base64.b64encode(content).decode("ascii")
+        data_uri = f"data:{self._MIME_TYPES[suffix]};base64,{encoded}"
+        try:
+            response = self._transport.upload_base64(
+                self._credential_resolver.resolve(),
+                base64_data=data_uri,
+                upload_path="ftg-p-video-001",
+                file_name=actual_sha256.removeprefix("sha256:")[:24] + suffix,
+            )
+        except AdapterFailure:
+            raise
+        except Exception:
+            raise AdapterFailure("KIE_UPLOAD_ERROR", "KIE reference upload failed unexpectedly", retryable=False) from None
+        if response.get("code") != 200 or not isinstance(response.get("data"), Mapping):
+            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference upload returned an unsuccessful response", retryable=False)
+        uri = response["data"].get(
+            "downloadUrl",
+            response["data"].get("fileUrl"),
+        )
+        if not KieVideoProviderAdapter._safe_https_uri(uri):
+            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference upload returned an invalid URL", retryable=False)
+        return str(uri)
+
 
 class KieVideoProviderAdapter:
     """KIE adapter with FTG-P-VIDEO-001 limits enforced before network access."""
@@ -166,11 +277,18 @@ class KieVideoProviderAdapter:
 
     def poll(self, provider_job_id: str) -> Mapping[str, object]:
         task_id = self._validated_task_id(provider_job_id)
-        response = self._request_json(
-            "GET",
-            "/api/v1/jobs/recordInfo",
-            query={"taskId": task_id},
-        )
+        try:
+            response = self._request_json(
+                "GET",
+                "/api/v1/jobs/recordInfo",
+                query={"taskId": task_id},
+            )
+        except AdapterFailure as error:
+            raise AdapterFailure(
+                error.code,
+                "KIE polling stopped after the first anomaly",
+                retryable=False,
+            ) from None
         data = self._success_data(response)
         if data.get("taskId") != task_id or data.get("model") not in {None, KIE_MODEL_ID}:
             raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE task response identity is invalid", retryable=False)
@@ -211,8 +329,6 @@ class KieVideoProviderAdapter:
         content = self._download(str(completed["result_uri"]))
         if not content:
             raise AdapterFailure("KIE_DOWNLOAD_INVALID", "KIE artifact is empty", retryable=False)
-        import hashlib
-
         return {
             "content": content,
             "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
