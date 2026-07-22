@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Callable, Mapping
@@ -36,6 +37,38 @@ class ProviderAsset:
     content_type: str
 
 
+class ImageProviderAdapter(ABC):
+    """Provider-independent seam; direct public calls always fail closed.
+
+    ``_generate`` is an internal implementation convention enforced by the
+    repository architecture test, not a security or authorization boundary.
+    """
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        if "generate" in cls.__dict__:
+            raise TypeError("Image Provider adapters cannot override fail-closed generate()")
+
+    @property
+    @abstractmethod
+    def provider_id(self) -> str:
+        """Stable adapter identifier used to match an approved model profile."""
+
+    def generate(self, *_args, **_kwargs) -> ProviderAsset:
+        """Reject direct calls; orchestration owns validation and accounting."""
+
+        raise _bypass_error()
+
+    @abstractmethod
+    def _generate(
+        self,
+        invocation: ProviderInvocation,
+        *,
+        cancellation: CancellationToken,
+    ) -> ProviderAsset:
+        """Implement one Provider attempt behind the service-owned seam."""
+
+
 @dataclass(frozen=True, slots=True)
 class FakeProviderStep:
     kind: str
@@ -58,10 +91,8 @@ class FakeProviderStep:
         return cls("timeout", message="Synthetic Provider timeout", details=MappingProxyType(dict(details or {})))
 
 
-class FakeImageProviderAdapter:
+class FakeImageProviderAdapter(ImageProviderAdapter):
     """Deterministic offline adapter with per-item scripted outcomes."""
-
-    provider_id = "offline-fake"
 
     def __init__(
         self,
@@ -78,17 +109,16 @@ class FakeImageProviderAdapter:
     def total_attempts(self) -> int:
         return sum(self._attempts.values())
 
+    @property
+    def provider_id(self) -> str:
+        return "offline-fake"
+
     def attempts_for(self, item_id: str) -> int:
         return self._attempts.get(item_id, 0)
 
     @property
     def invocations(self) -> tuple[ProviderInvocation, ...]:
         return tuple(self._invocations)
-
-    def generate(self, *_args, **_kwargs) -> ProviderAsset:
-        """Public direct-call surface always rejects; orchestration uses the private seam."""
-
-        raise _bypass_error()
 
     def _generate(
         self,
@@ -129,15 +159,14 @@ class FakeImageProviderAdapter:
         )
 
 
-class RejectingImageProviderAdapter:
+class RejectingImageProviderAdapter(ImageProviderAdapter):
     """Default adapter for public use until a Provider-specific FTG-P exists."""
 
-    provider_id = "rejecting"
+    @property
+    def provider_id(self) -> str:
+        return "rejecting"
 
-    def generate(self, *_args, **_kwargs):
-        raise _bypass_error()
-
-    def _generate(self, *_args, **_kwargs):
+    def _generate(self, *_args, **_kwargs) -> ProviderAsset:
         raise ImagePanelError(
             ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED,
             "Real image Provider execution is not authorized",

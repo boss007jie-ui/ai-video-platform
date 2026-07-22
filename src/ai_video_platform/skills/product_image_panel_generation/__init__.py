@@ -1,6 +1,6 @@
 """Public interface for safe offline product image and panel generation."""
 
-from .adapters import FakeImageProviderAdapter, FakeProviderStep, RejectingImageProviderAdapter
+from .adapters import FakeImageProviderAdapter, FakeProviderStep, ImageProviderAdapter, RejectingImageProviderAdapter
 from .errors import ImagePanelError, ImagePanelErrorCode
 from .codec import generation_request_from_mapping, generation_request_to_mapping, model_profile_from_mapping, model_profile_to_mapping
 from .models import (
@@ -31,6 +31,7 @@ __all__ = [
     "ImagePanelError",
     "ImagePanelErrorCode",
     "ImagePanelService",
+    "ImageProviderAdapter",
     "ModelProfile",
     "PreflightInspection",
     "RejectingImageProviderAdapter",

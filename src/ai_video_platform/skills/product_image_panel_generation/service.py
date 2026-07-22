@@ -13,7 +13,7 @@ from typing import Callable, Iterable
 from ai_video_platform.contracts import ProducerIdentity, build_envelope, validate_envelope
 from ai_video_platform.contracts.serialization import freeze_json
 
-from .adapters import ProviderAsset, ProviderInvocation
+from .adapters import ImageProviderAdapter, ProviderAsset, ProviderInvocation
 from .errors import ImagePanelError, ImagePanelErrorCode
 from .models import (
     CancellationToken,
@@ -45,7 +45,7 @@ class ImagePanelService:
     def __init__(
         self,
         *,
-        provider: object,
+        provider: ImageProviderAdapter,
         profiles: Iterable[ModelProfile],
         now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] | None = None,
@@ -53,6 +53,8 @@ class ImagePanelService:
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be positive")
+        if not isinstance(provider, ImageProviderAdapter):
+            raise TypeError("provider must implement ImageProviderAdapter")
         self._provider = provider
         self._profiles = {profile.profile_id: profile for profile in profiles}
         self._now = now or (lambda: datetime.now(timezone.utc))
@@ -162,7 +164,7 @@ class ImagePanelService:
         budget = request.budget
         if budget is None:  # narrowed by preflight; keeps the Provider path fail closed
             raise ImagePanelError(ImagePanelErrorCode.BUDGET_REQUIRED, "Generation budget is required")
-        provider_id = getattr(self._provider, "provider_id", "unknown")
+        provider_id = self._provider.provider_id
         if provider_id != profile.provider_id:
             raise ImagePanelError(
                 ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED,
