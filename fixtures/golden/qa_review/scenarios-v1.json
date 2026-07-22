@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0.0",
+  "fixture_version": "qa-golden-v1",
+  "base_request": {
+    "schema_version": "1.0.0",
+    "criteria_version": "qa-criteria-v1",
+    "evaluation_set_version": "qa-eval-v1",
+    "command": "review-video-result",
+    "task_id": "task-golden",
+    "execution_id": "exec-golden",
+    "subject": {
+      "artifact_id": "video-golden",
+      "artifact_type": "video",
+      "schema_version": "1.0.0",
+      "revision": 2,
+      "contract_valid": true,
+      "assets": [{"role": "primary", "approved": true}],
+      "product_id": "product-001",
+      "sku_id": "sku-001",
+      "continuity": {"hero_color": "navy"},
+      "drift": {"layout": 0.02},
+      "quality": {"sharpness": 0.92, "artifact_score": 0.04}
+    },
+    "criteria": {
+      "expected_revision": 2,
+      "required_asset_roles": ["primary"],
+      "expected_product_id": "product-001",
+      "expected_sku_id": "sku-001",
+      "continuity": {"hero_color": "navy"},
+      "max_drift": {"layout": 0.1},
+      "quality": {
+        "sharpness": {"min": 0.8},
+        "artifact_score": {"max": 0.1}
+      }
+    },
+    "context": {
+      "product_context_revision": 3,
+      "expected_product_context_revision": 3
+    },
+    "evidence_refs": ["fixture:qa/golden-v1"]
+  },
+  "scenarios": [
+    {
+      "scenario_id": "standalone",
+      "expected_outcome": "pass",
+      "overrides": {"execution_id": "exec-standalone"}
+    },
+    {
+      "scenario_id": "optional-pairing",
+      "expected_outcome": "pass",
+      "overrides": {
+        "execution_id": "exec-optional",
+        "context": {"optional_reference_manifest_ref": "reference-manifest-synthetic"}
+      }
+    },
+    {
+      "scenario_id": "partial-failure",
+      "expected_outcome": "needs-review",
+      "overrides": {
+        "execution_id": "exec-partial",
+        "subject": {"partial_failure": true}
+      }
+    },
+    {
+      "scenario_id": "stale-contract",
+      "expected_outcome": "needs-review",
+      "overrides": {
+        "execution_id": "exec-stale",
+        "criteria": {"expected_revision": 3}
+      }
+    },
+    {
+      "scenario_id": "cancellation",
+      "expected_error": "QA_CANCELLED",
+      "overrides": {
+        "execution_id": "exec-cancelled",
+        "context": {"cancelled": true}
+      }
+    },
+    {
+      "scenario_id": "recovery",
+      "expected_outcome": "pass",
+      "expected_retry_of": "exec-failed-synthetic",
+      "overrides": {
+        "execution_id": "exec-recovery",
+        "context": {"recovery_from_execution_id": "exec-failed-synthetic"}
+      }
+    }
+  ]
+}
