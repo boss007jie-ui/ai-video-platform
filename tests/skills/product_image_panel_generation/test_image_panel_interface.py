@@ -288,6 +288,19 @@ class ImagePanelInterfaceTests(unittest.TestCase):
             ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED.value,
         )
 
+    def test_cli_rejects_unknown_adapter_without_loading_input(self) -> None:
+        output = StringIO()
+
+        exit_code = cli_main(
+            ["generate-panel", "--input", "not-loaded.json", "--adapter", "real"],
+            stdout=output,
+        )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["error"]["code"], ImagePanelErrorCode.CONTRACT_INVALID.value)
+        self.assertEqual(payload["error"]["field_paths"], ["argv"])
+
     def test_cli_malformed_input_uses_stable_sanitized_error_and_exit_two(self) -> None:
         output = StringIO()
         with tempfile.TemporaryDirectory() as directory:
