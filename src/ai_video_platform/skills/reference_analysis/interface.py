@@ -1,0 +1,313 @@
+"""Versioned public interfaces for selected-reference analysis and comparison."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+import hashlib
+import json
+from pathlib import Path
+import re
+from urllib.parse import urlparse
+
+from .analysis import ALGORITHM_VERSION, compare_metrics, summarize_segments, validate_metrics
+from .errors import ErrorCode, SkillError
+from .models import AnalysisResult, ComparisonResult
+from .storage import SafeArtifactWriter
+
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_FORBIDDEN_SCOPE = {"query", "queries", "search_budget", "provider", "download", "discovery", "product_library", "research_library"}
+_FORBIDDEN_TOKENS = ("query", "search", "provider", "download", "discovery", "library", "legacy")
+_ANALYZE_KEYS = {"analysis_version", "selected_reference"}
+_MANIFEST_REQUEST_KEYS = {"analysis_version", "reference_manifest", "selected_reference_id"}
+_COMPARE_KEYS = {"analysis_version", "analysis", "produced_result"}
+_REFERENCE_KEYS = {"reference_id", "source_uri", "sha256", "usage", "provenance", "segments"}
+_MANIFEST_KEYS = {
+    "reference_manifest_id", "revision", "task_id", "references", "created_at",
+    "analysis_contract_refs", "comparison_target_refs", "extraction_ranges", "rights_assertion",
+}
+_MANIFEST_REQUIRED = {"reference_manifest_id", "revision", "task_id", "references", "created_at"}
+_ANALYSIS_KEYS = {
+    "schema_version", "algorithm_version", "analysis_id", "reference_id", "source_uri",
+    "source_sha256", "source_provenance", "input_digest", "metrics", "artifact_digest",
+}
+
+
+def _key_segments(value: str) -> tuple[str, ...]:
+    return tuple(segment for segment in re.split(r"[^a-z0-9]+", value.casefold()) if segment)
+
+
+def _jsonable(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(nested) for key, nested in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(_jsonable(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _text(mapping: Mapping[str, object], field: str) -> str:
+    value = mapping.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Required field is missing", field_paths=(field,))
+    return value.strip()
+
+
+def _forbidden_paths(value: object, prefix: str = "") -> list[str]:
+    findings: list[str] = []
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            key_text = str(key).lower()
+            key_segments = set(_key_segments(key_text))
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key_text in _FORBIDDEN_SCOPE or key_segments.intersection(_FORBIDDEN_TOKENS):
+                findings.append(path)
+            findings.extend(_forbidden_paths(nested, path))
+    elif isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            findings.extend(_forbidden_paths(nested, f"{prefix}[{index}]"))
+    return findings
+
+
+def _forbidden_values(value: object, prefix: str = "", owner_key: str = "") -> list[str]:
+    findings: list[str] = []
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            findings.extend(_forbidden_values(nested, path, str(key).casefold()))
+    elif isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            findings.extend(_forbidden_values(nested, f"{prefix}[{index}]", owner_key))
+    elif isinstance(value, str):
+        lowered = value.casefold()
+        owner_segments = set(_key_segments(owner_key))
+        path_field = bool(owner_segments.intersection(("path", "uri", "root")))
+        path = Path(value)
+        location_like = (
+            path_field
+            or "://" in lowered
+            or lowered.startswith("file:")
+            or "/" in value
+            or "\\" in value
+            or path.is_absolute()
+            or ".." in path.parts
+        )
+        value_segments = _key_segments(lowered) if location_like else ()
+        forbidden_identity = (
+            "legacy" in value_segments
+            or any(
+                value_segments[index:index + 2] in (("product", "library"), ("research", "library"))
+                for index in range(max(0, len(value_segments) - 1))
+            )
+        )
+        unsafe_path = path_field and (lowered.startswith("file:") or path.is_absolute() or ".." in path.parts)
+        if forbidden_identity or unsafe_path:
+            findings.append(prefix)
+    return findings
+
+
+def _validate_scope(request: Mapping[str, object]) -> None:
+    forbidden = sorted(set([*_forbidden_paths(request), *_forbidden_values(request)]))
+    if forbidden:
+        raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Reference Analysis cannot discover, download, call Providers, or access Libraries", field_paths=tuple(forbidden))
+
+
+def _strict_keys(mapping: Mapping[str, object], allowed: set[str], field: str) -> None:
+    unexpected = sorted(set(mapping) - allowed)
+    missing = sorted(allowed - set(mapping))
+    if unexpected or missing:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "Object fields do not match the versioned schema",
+            field_paths=tuple([*(f"{field}.{name}" for name in missing), *(f"{field}.{name}" for name in unexpected)]),
+        )
+
+
+def _allowed_keys(mapping: Mapping[str, object], required: set[str], allowed: set[str], field: str) -> None:
+    unexpected = sorted(set(mapping) - allowed)
+    missing = sorted(required - set(mapping))
+    if unexpected or missing:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "Object fields do not match the versioned schema",
+            field_paths=tuple([*(f"{field}.{name}" for name in missing), *(f"{field}.{name}" for name in unexpected)]),
+        )
+
+
+def _validate_version(request: Mapping[str, object]) -> None:
+    if request.get("analysis_version") != ALGORITHM_VERSION:
+        raise SkillError(ErrorCode.VERSION_UNSUPPORTED, "Only analysis version 1.0.0 is supported", field_paths=("analysis_version",))
+
+
+def _selected_reference(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "selected_reference must be an object", field_paths=("selected_reference",))
+    _strict_keys(value, _REFERENCE_KEYS, "selected_reference")
+    reference_id = _text(value, "reference_id")
+    source_uri = _text(value, "source_uri")
+    parsed_uri = urlparse(source_uri)
+    lowered_uri = source_uri.casefold()
+    if (
+        parsed_uri.scheme.casefold() not in {"task", "https", "http", "urn"}
+        or (parsed_uri.scheme.casefold() in {"task", "https", "http"} and not parsed_uri.netloc)
+        or any(token in lowered_uri for token in ("legacy", "product-library", "research-library"))
+        or Path(source_uri).is_absolute()
+    ):
+        raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Reference Analysis does not read local or Library paths", field_paths=("source_uri",))
+    sha256 = _text(value, "sha256")
+    usage = _text(value, "usage")
+    if not _SHA256.fullmatch(sha256):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Selected reference SHA-256 is invalid", field_paths=("sha256",))
+    provenance = value.get("provenance")
+    if not isinstance(provenance, Mapping) or not provenance:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Selected reference provenance is required", field_paths=("provenance",))
+    metrics = summarize_segments(value.get("segments"))
+    return {
+        "reference_id": reference_id,
+        "source_uri": source_uri,
+        "sha256": sha256,
+        "usage": usage,
+        "provenance": dict(provenance),
+        "segments": value.get("segments"),
+        "metrics": metrics,
+    }
+
+
+def _selected_from_manifest(value: object, selected_reference_id: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "reference_manifest must be an object", field_paths=("reference_manifest",))
+    _allowed_keys(value, _MANIFEST_REQUIRED, _MANIFEST_KEYS, "reference_manifest")
+    manifest_id = _text(value, "reference_manifest_id")
+    task_id = _text(value, "task_id")
+    created_at = _text(value, "created_at")
+    revision = value.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "ReferenceManifest revision must be a positive integer")
+    if not isinstance(selected_reference_id, str) or not selected_reference_id:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "selected_reference_id is required")
+    references = value.get("references")
+    if not isinstance(references, (list, tuple)) or not references:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "ReferenceManifest references must be a non-empty array")
+    matches: list[Mapping[str, object]] = []
+    for index, reference in enumerate(references):
+        if not isinstance(reference, Mapping):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "ReferenceManifest entry must be an object", field_paths=(f"references[{index}]",))
+        _strict_keys(reference, _REFERENCE_KEYS | {"reference_type"}, f"references[{index}]")
+        if reference.get("reference_id") == selected_reference_id:
+            matches.append(reference)
+    if len(matches) != 1:
+        raise SkillError(ErrorCode.REFERENCE_MISMATCH, "selected_reference_id must match exactly one manifest entry")
+    selected_input = {key: matches[0][key] for key in _REFERENCE_KEYS}
+    selected = _selected_reference(selected_input)
+    selected["provenance"] = {
+        **dict(selected["provenance"]),
+        "reference_manifest_id": manifest_id,
+        "reference_manifest_revision": revision,
+        "task_id": task_id,
+        "manifest_created_at": created_at,
+        "fixture_status": "SYNTHETIC_FOUNDATION_SHAPE",
+    }
+    return selected
+
+
+def _validated_analysis(value: object) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "analysis must be an object", field_paths=("analysis",))
+    _strict_keys(value, _ANALYSIS_KEYS, "analysis")
+    if value.get("schema_version") != ALGORITHM_VERSION or value.get("algorithm_version") != ALGORITHM_VERSION:
+        raise SkillError(ErrorCode.VERSION_UNSUPPORTED, "Analysis artifact version is unsupported")
+    input_digest = _text(value, "input_digest")
+    artifact_digest = _text(value, "artifact_digest")
+    source_sha = _text(value, "source_sha256")
+    reference_id = _text(value, "reference_id")
+    if not _SHA256.fullmatch(input_digest) or not _SHA256.fullmatch(artifact_digest) or not _SHA256.fullmatch(source_sha):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Analysis digest is invalid")
+    if value.get("analysis_id") != f"analysis-{input_digest[:20]}":
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Analysis identity does not match its input digest")
+    core = {key: _jsonable(nested) for key, nested in value.items() if key != "artifact_digest"}
+    if _digest(core) != artifact_digest:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Analysis artifact digest does not match its content")
+    validate_metrics(value.get("metrics"))
+    if not reference_id:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Analysis reference identity is missing")
+    return value
+
+
+def analyze_reference(
+    request: Mapping[str, object], *, workspace: Path, output_path: str,
+    cancelled: Callable[[], bool] | None = None,
+) -> AnalysisResult:
+    if not isinstance(request, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Request must be an object")
+    _validate_scope(request)
+    _validate_version(request)
+    request_keys = set(request)
+    if request_keys == _ANALYZE_KEYS:
+        input_mode = "selected"
+    elif request_keys == _MANIFEST_REQUEST_KEYS:
+        input_mode = "manifest"
+    else:
+        _allowed_keys(request, {"analysis_version"}, _ANALYZE_KEYS | _MANIFEST_REQUEST_KEYS, "request")
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Analyze request must select exactly one supported input mode")
+    if cancelled and cancelled():
+        raise SkillError(ErrorCode.CANCELLED, "Reference analysis was cancelled")
+    selected = (
+        _selected_reference(request.get("selected_reference"))
+        if input_mode == "selected"
+        else _selected_from_manifest(request.get("reference_manifest"), request.get("selected_reference_id"))
+    )
+    input_digest = _digest(dict(request))
+    artifact: dict[str, object] = {
+        "schema_version": ALGORITHM_VERSION,
+        "algorithm_version": ALGORITHM_VERSION,
+        "analysis_id": f"analysis-{input_digest[:20]}",
+        "reference_id": selected["reference_id"],
+        "source_uri": selected["source_uri"],
+        "source_sha256": selected["sha256"],
+        "source_provenance": selected["provenance"],
+        "input_digest": input_digest,
+        "metrics": selected["metrics"],
+    }
+    artifact["artifact_digest"] = _digest(artifact)
+    written_path = SafeArtifactWriter(workspace).write(artifact, output_path=output_path, cancelled=cancelled)
+    return AnalysisResult(status="COMPLETED", output_path=written_path, artifact=artifact)
+
+
+def compare_result(
+    request: Mapping[str, object], *, workspace: Path, output_path: str,
+    cancelled: Callable[[], bool] | None = None,
+) -> ComparisonResult:
+    if not isinstance(request, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Request must be an object")
+    _validate_scope(request)
+    _validate_version(request)
+    _strict_keys(request, _COMPARE_KEYS, "request")
+    if cancelled and cancelled():
+        raise SkillError(ErrorCode.CANCELLED, "Reference comparison was cancelled")
+    analysis = _validated_analysis(request.get("analysis"))
+    reference_id = _text(analysis, "reference_id")
+    produced = _selected_reference(request.get("produced_result"))
+    if produced["reference_id"] != reference_id:
+        raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Produced result does not match the selected reference", field_paths=("produced_result.reference_id",))
+    if produced["sha256"] != analysis["source_sha256"]:
+        raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Produced result source digest does not match the selected reference", field_paths=("produced_result.sha256",))
+    differences = compare_metrics(analysis.get("metrics", {}), produced["metrics"])
+    input_digest = _digest(dict(request))
+    artifact: dict[str, object] = {
+        "schema_version": ALGORITHM_VERSION,
+        "algorithm_version": ALGORITHM_VERSION,
+        "comparison_id": f"comparison-{input_digest[:20]}",
+        "reference_id": reference_id,
+        "analysis_id": analysis.get("analysis_id"),
+        "input_digest": input_digest,
+        **differences,
+    }
+    written_path = SafeArtifactWriter(workspace).write(artifact, output_path=output_path, cancelled=cancelled)
+    return ComparisonResult(status="COMPLETED", output_path=written_path, artifact=artifact)
