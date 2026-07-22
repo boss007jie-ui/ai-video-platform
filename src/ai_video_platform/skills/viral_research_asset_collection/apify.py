@@ -68,6 +68,8 @@ class ApifyRunReceipt:
     returned_count: int
     actual_cost_usd: float
     charged_event_counts: Mapping[str, int]
+    query_hit_counts: Mapping[str, int]
+    unattributed_count: int
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -77,6 +79,8 @@ class ApifyRunReceipt:
             "returned_count": self.returned_count,
             "actual_cost_usd": self.actual_cost_usd,
             "charged_event_counts": dict(self.charged_event_counts),
+            "query_hit_counts": dict(self.query_hit_counts),
+            "unattributed_count": self.unattributed_count,
         }
 
 
@@ -275,7 +279,25 @@ class ApifyCollectionAdapter:
             retrieved_at = self._now()
             if retrieved_at.tzinfo is None:
                 raise ValueError("adapter clock must be timezone-aware")
-            rows = tuple(_normalized_post(item, retrieved_at=retrieved_at) for item in dataset[:limit])
+            selected_items = dataset[:limit]
+            rows = tuple(_normalized_post(item, retrieved_at=retrieved_at) for item in selected_items)
+            query_lookup = {query.casefold(): query for query in self._seed_queries}
+            query_hits = {query: 0 for query in self._seed_queries}
+            unattributed_count = 0
+            for item in selected_items:
+                raw_query = next(
+                    (
+                        item.get(field)
+                        for field in ("searchQuery", "searchKeyword", "keyword")
+                        if isinstance(item.get(field), str) and str(item.get(field)).strip()
+                    ),
+                    None,
+                )
+                canonical_query = query_lookup.get(str(raw_query).strip().casefold()) if raw_query is not None else None
+                if canonical_query is None:
+                    unattributed_count += 1
+                else:
+                    query_hits[canonical_query] += 1
             raw_events = run.get("chargedEventCounts", {})
             events = {
                 str(name): int(count) for name, count in raw_events.items()
@@ -288,6 +310,8 @@ class ApifyCollectionAdapter:
                 returned_count=len(rows),
                 actual_cost_usd=float(cost),
                 charged_event_counts=events,
+                query_hit_counts=query_hits,
+                unattributed_count=unattributed_count,
             )
             return rows
         except SkillError:

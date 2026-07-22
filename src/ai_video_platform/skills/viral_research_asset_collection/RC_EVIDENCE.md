@@ -6,7 +6,7 @@
 - Provider authorization: `FTG-P-RESEARCH-001`
 - Work item: `FT-02-001`
 - Branch: `ft/codex-02-research-reference`
-- Synchronized base head: `e4d5a4f7109ffde89dbc79a1f07880e80d964fc0`
+- Synchronized base head: `56bf2ab30f2048f9da8aa2c466de4e934fb99878`
 - Final implementation commit: reported in the Hermes handoff after commit
 - Status: `RC_PROVIDER_PENDING`
 - Production Ready: **not claimed**
@@ -24,7 +24,7 @@ The public local interfaces are `inspect_research_request`, `research_viral`, an
 - environment-only credential resolution, bearer-header authentication, fixed Apify origin and redirect refusal;
 - one Actor run per adapter, one dataset read, zero-retry smoke policy, 20-result and USD 0.01 charge caps;
 - safe TikTok metadata normalization with unknown rights, PII/title screening, brand-safety quarantine and seven-day expiry;
-- machine-readable run ID, returned count, actual cost, charged events, deduplicated count and ranking decomposition;
+- machine-readable run ID, returned count, actual cost, charged events, per-seed hit counts and ranking decomposition;
 - request claims before Provider/download work, durable completed replay and conflict rejection;
 - in-memory and filesystem Research Library metadata adapters;
 - atomic no-clobber writes, per-source cross-process locking across metadata/quarantine, immutable source IDs, durable audit/index repair, retention and deletion audit;
@@ -46,9 +46,13 @@ The skips are Windows environments where symlink creation is unavailable; the im
 
 ## Security, dependency and operations evidence
 
-- Real Apify metadata smoke: `AUTHORIZED_BUT_NOT_RUN`; current process reported only `APIFY_API_KEY_PRESENT=False`, without reading a value.
+- Real Apify metadata smoke: one authorized single-call attempt was executed under `FTG-P-RESEARCH-001` with three TikTok US seeds, `max_provider_calls=1`, `max_results=20`, `maxTotalChargeUsd=0.01`, zero retries and `METADATA_ONLY`. The Research Library request ledger proves `COMPLETED`, `provider_calls=1`, `partial=true`, 19 deduplicated metadata candidates, zero media downloads and zero Product Library writes.
+- The CLI process failed while serializing non-ASCII Provider output to the Windows console after the Provider work completed; `smoke-output.log` is empty, so the receipt's Actor run ID, exact actual cost, charged-event counts and per-seed hit counts are unavailable. They are intentionally not inferred or fabricated. The UTF-8 stdout fix and regression test are included in this commit.
+- Idempotent replay was run locally without a second Provider call: `status=IDEMPOTENT_REPLAY`, `provider_call_performed=false`, `deduped_count=19`; full ranking decomposition is retained in `C:\tmp\FT-02-001-apify-smoke-20260722\idempotent-replay.json`.
+- Research Library contents after smoke: 19 `metadata/*.json`, 0 quarantine files, 1 request ledger, `audit/idempotency.json`, `audit/lifecycle.jsonl`, and `audit/lifecycle-index.json`; all candidates are `metadata_only` with `rights_status=UNKNOWN`.
+- Credential presence evidence is only `APIFY_API_KEY_PRESENT=True`; a scan of smoke artifacts and the Research Library found `SECRET_PATTERN_HIT_COUNT=0`. No credential value was printed or persisted.
 - Real media download and `collect-reference-assets` Provider execution: `NOT_AUTHORIZED` and not run.
-- Credential values: never displayed, copied, stored in artifacts, or placed in URLs; owned tests use an explicitly synthetic value.
+- Credential values: never displayed, copied, stored in artifacts, or placed in URLs; owned tests use an explicitly synthetic value. The authorized smoke's presence-only artifact is `C:\tmp\FT-02-001-apify-smoke-20260722\credential-presence.log`.
 - Arbitrary Python adapter injection fails before calls; default CLI remains rejecting.
 - Runtime dependencies in this Skill: Python standard library and local Skill modules only; no package/lock change.
 - Repository secret scan, Legacy-root guard, network/subprocess guards and rejecting-provider baseline tests pass in the complete suite.
@@ -57,9 +61,8 @@ The skips are Windows environments where symlink creation is unavailable; the im
 
 ## Open gates
 
-1. Inject `APIFY_API_KEY` into the Codex-02 process environment without exposing its value, then execute the one authorized metadata-only smoke exactly once.
-2. Capture Actor run ID, returned/deduplicated counts, ranking decomposition, actual cost and controlled request-ledger evidence.
-3. Issue a separate media-download authorization and define the permitted media receipt/input contract before enabling the staged Apify downloader.
-4. Windows/link-capable CI execution of the skipped symlink/junction cases.
+1. Reconcile the missing Provider receipt fields (Actor run ID, exact actual cost, charged-event counts and per-seed hit counts) from the authorized run's external control-plane record; do not retry the Provider under this authorization.
+2. Issue a separate media-download authorization and define the permitted media receipt/input contract before enabling the staged Apify downloader.
+3. Windows/link-capable CI execution of the skipped symlink/junction cases.
 
-Next gate requested: credential injection and the single `FTG-P-RESEARCH-001` Provider smoke; status remains `RC_PROVIDER_PENDING` until that evidence exists.
+Next gate requested: receipt reconciliation and review of the single `FTG-P-RESEARCH-001` Provider smoke; status remains `RC_PROVIDER_PENDING` until the receipt gap is closed.

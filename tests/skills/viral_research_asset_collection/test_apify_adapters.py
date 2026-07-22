@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.request import Request
 
 from ai_video_platform.skills.viral_research_asset_collection import ErrorCode, SkillError, research_viral
@@ -66,12 +66,22 @@ def actor_row(**updates: object) -> dict[str, object]:
         "shares": 1_200,
         "uploadedAtFormatted": "2026-07-20T03:10:05.000Z",
         "postPage": "https://www.tiktok.com/@publiccreator/video/7353781970163272993",
+        "searchQuery": "laser pointer tactical gear",
     }
     row.update(updates)
     return row
 
 
 class ApifyAdapterTests(unittest.TestCase):
+    def test_cli_reconfigures_real_stdout_to_utf8_when_supported(self) -> None:
+        stream = Mock()
+        with patch("sys.stdout", stream):
+            with patch("ai_video_platform.skills.viral_research_asset_collection.cli.argparse.ArgumentParser") as parser:
+                parser.return_value.parse_args.side_effect = SystemExit(0)
+                with self.assertRaises(SystemExit):
+                    main([])
+        stream.reconfigure.assert_called_once_with(encoding="utf-8", errors="strict")
+
     def test_credential_resolver_only_accepts_named_environment_value(self) -> None:
         self.assertEqual(resolve_apify_api_key({"APIFY_API_KEY": TOKEN}), TOKEN)
         with self.assertRaises(SkillError) as caught:
@@ -98,6 +108,11 @@ class ApifyAdapterTests(unittest.TestCase):
             "returned_count": 1,
             "actual_cost_usd": 0.006,
             "charged_event_counts": {"dataset-item": 20},
+            "query_hit_counts": {
+                "laser pointer tactical gear": 1,
+                "laser pointer EDC tools": 0,
+            },
+            "unattributed_count": 0,
         })
         self.assertEqual(len(transport.requests), 2)
         run_request = transport.requests[0]

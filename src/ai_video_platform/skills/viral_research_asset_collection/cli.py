@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
+import sys
 from typing import Sequence
 
 from .adapters import RejectingCollectionAdapter, RejectingDownloadAdapter
@@ -13,6 +14,13 @@ from .apify import ApifyCollectionAdapter
 from .errors import ErrorCode, SkillError
 from .interface import collect_reference_assets, inspect_research_request, research_viral
 from .storage import InMemoryResearchLibraryAdapter, ResearchLibraryAdapter
+
+
+def _ensure_utf8_stdout() -> None:
+    """Keep machine-readable JSON printable on Windows with non-ASCII metadata."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="strict")
 
 
 def _utc(value: str | None) -> datetime | None:
@@ -24,6 +32,7 @@ def _utc(value: str | None) -> datetime | None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _ensure_utf8_stdout()
     parser = argparse.ArgumentParser(prog="viral-research-asset-collection")
     parser.add_argument("command", choices=("inspect-research-request", "research-viral", "collect-reference-assets"))
     parser.add_argument("--input", required=True)
