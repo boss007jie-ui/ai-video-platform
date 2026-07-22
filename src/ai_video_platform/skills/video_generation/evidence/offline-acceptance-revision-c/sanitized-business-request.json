@@ -1,0 +1,214 @@
+{
+  "approval_record": {
+    "approval_id": "offline-acceptance-approved",
+    "approval_type": "video_generation",
+    "authority": {
+      "authority_id": "authorized-approval-boundary"
+    },
+    "decided_at": "2026-07-22T08:18:25.273078Z",
+    "decision_ref": "FT-05-001-OFFLINE-ACCEPTANCE",
+    "outcome": "approved",
+    "subject_ref": {
+      "digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31"
+    },
+    "valid_until": "2026-07-22T09:19:25.273078Z"
+  },
+  "budget": {
+    "estimated_cost_units": 0,
+    "max_attempts": 3,
+    "max_concurrency": 1,
+    "max_cost_units": 1,
+    "max_requests": 1,
+    "timeout_seconds": 60
+  },
+  "business_sample_id": "sanitized-product-video-001",
+  "execution_package": {
+    "artifact_name": "VideoExecutionPackage",
+    "asset_mapping": [
+      {
+        "asset_id": "asset-hero-whole",
+        "role": "hero",
+        "sha256": "sha256:95d4ab15d5e799bae68c9d2154ce82eefb5ca3ea3d1413d35d8c2199ffbd5f73",
+        "shot_id": "shot-001",
+        "uri": "urn:avp:laser:reference_images/kuaizi_safe_refs_v1/01_whole_product.jpg"
+      },
+      {
+        "asset_id": "asset-tail-button",
+        "role": "tail-detail",
+        "sha256": "sha256:56dd8cc51e363c1e7061f7605a40ae7c14b1ced61aa6ec577d3ca0d3040b532c",
+        "shot_id": "shot-001",
+        "uri": "urn:avp:laser:reference_images/kuaizi_safe_refs_v1/05_tail_button.jpg"
+      },
+      {
+        "asset_id": "asset-emitter-front",
+        "role": "emitter-detail",
+        "sha256": "sha256:d65480b19b958b9bcef2ffebc16b4ffd0d16abcfa207ebec2deb5c7e27bc0d50",
+        "shot_id": "shot-002",
+        "uri": "urn:avp:laser:reference_images/kuaizi_safe_refs_v1/04_front_emitter.jpg"
+      }
+    ],
+    "contract_status": "DRAFT_UNREGISTERED",
+    "motion_plan": [
+      {
+        "motion": {
+          "duration_ms": 1500,
+          "kind": "hold"
+        },
+        "sequence": 1,
+        "shot_id": "shot-001"
+      },
+      {
+        "motion": {
+          "duration_ms": 1200,
+          "kind": "push-in"
+        },
+        "sequence": 2,
+        "shot_id": "shot-002"
+      }
+    ],
+    "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+    "package_id": "vep-33f621616c8eb04fd405",
+    "planning_provider_submission_performed": false,
+    "schema_version": "0.1.0",
+    "source": {
+      "asset_manifest_digest": "sha256:ad1755a3cbef30a91f042d0da94fa1886975e5965964c7ee661ef69606eb3cf4",
+      "asset_manifest_id": "manifest-task-laser-real-001",
+      "asset_manifest_revision": 1,
+      "storyboard_digest": "sha256:81f16d27f64d20df1016d30af128245090252db58bb28595685e976647a3f1d0",
+      "storyboard_id": "storyboard-e002b15d4fb45dc9-v1",
+      "storyboard_revision": 1
+    },
+    "storyboard_master": {
+      "artifact_name": "StoryboardMaster",
+      "asset_mapping": [
+        {
+          "asset_id": "asset-hero-whole",
+          "role": "hero",
+          "sha256": "sha256:95d4ab15d5e799bae68c9d2154ce82eefb5ca3ea3d1413d35d8c2199ffbd5f73",
+          "shot_id": "shot-001",
+          "uri": "urn:avp:laser:reference_images/kuaizi_safe_refs_v1/01_whole_product.jpg"
+        },
+        {
+          "asset_id": "asset-tail-button",
+          "role": "tail-detail",
+          "sha256": "sha256:56dd8cc51e363c1e7061f7605a40ae7c14b1ced61aa6ec577d3ca0d3040b532c",
+          "shot_id": "shot-001",
+          "uri": "urn:avp:laser:reference_images/kuaizi_safe_refs_v1/05_tail_button.jpg"
+        },
+        {
+          "asset_id": "asset-emitter-front",
+          "role": "emitter-detail",
+          "sha256": "sha256:d65480b19b958b9bcef2ffebc16b4ffd0d16abcfa207ebec2deb5c7e27bc0d50",
+          "shot_id": "shot-002",
+          "uri": "urn:avp:laser:reference_images/kuaizi_safe_refs_v1/04_front_emitter.jpg"
+        }
+      ],
+      "contract_status": "DRAFT_UNREGISTERED",
+      "master_digest": "sha256:10090b2e5fa3833a7297d3ff1be2295eaa36c61d807c6a9112429a7b8280f370",
+      "motion_plan": [
+        {
+          "motion": {
+            "duration_ms": 1500,
+            "kind": "hold"
+          },
+          "sequence": 1,
+          "shot_id": "shot-001"
+        },
+        {
+          "motion": {
+            "duration_ms": 1200,
+            "kind": "push-in"
+          },
+          "sequence": 2,
+          "shot_id": "shot-002"
+        }
+      ],
+      "planning_provider_submission_performed": false,
+      "schema_version": "0.1.0",
+      "shots": [
+        {
+          "continuity_group": "hand-scale-lock",
+          "motion": {
+            "duration_ms": 1500,
+            "kind": "hold"
+          },
+          "required_asset_roles": [
+            "hero",
+            "tail-detail"
+          ],
+          "sequence": 1,
+          "shot_id": "shot-001",
+          "visual_anchor": {
+            "product_angle": "side-profile"
+          }
+        },
+        {
+          "continuity_group": "beam-payoff-lock",
+          "motion": {
+            "duration_ms": 1200,
+            "kind": "push-in"
+          },
+          "required_asset_roles": [
+            "emitter-detail"
+          ],
+          "sequence": 2,
+          "shot_id": "shot-002",
+          "visual_anchor": {
+            "product_angle": "front-emitter"
+          }
+        }
+      ],
+      "source": {
+        "asset_manifest_digest": "sha256:ad1755a3cbef30a91f042d0da94fa1886975e5965964c7ee661ef69606eb3cf4",
+        "asset_manifest_id": "manifest-task-laser-real-001",
+        "asset_manifest_revision": 1,
+        "storyboard_digest": "sha256:81f16d27f64d20df1016d30af128245090252db58bb28595685e976647a3f1d0",
+        "storyboard_id": "storyboard-e002b15d4fb45dc9-v1",
+        "storyboard_revision": 1
+      },
+      "task_id": "task-laser-real-001",
+      "visual_anchors": [
+        {
+          "anchor": {
+            "product_angle": "front-emitter"
+          },
+          "continuity_group": "beam-payoff-lock"
+        },
+        {
+          "anchor": {
+            "product_angle": "side-profile"
+          },
+          "continuity_group": "hand-scale-lock"
+        }
+      ]
+    },
+    "task_id": "task-laser-real-001",
+    "visual_anchors": [
+      {
+        "anchor": {
+          "product_angle": "front-emitter"
+        },
+        "continuity_group": "beam-payoff-lock"
+      },
+      {
+        "anchor": {
+          "product_angle": "side-profile"
+        },
+        "continuity_group": "hand-scale-lock"
+      }
+    ]
+  },
+  "idempotency_key": "ft-05-001-offline-success",
+  "output": {
+    "duration_seconds": 5,
+    "format": "mp4",
+    "prompt": "Sanitized handheld product demonstration with a steady studio camera.",
+    "resolution": "480p"
+  },
+  "provider_binding": {
+    "binding_ref": "offline-fake-video",
+    "credential_ref": "env://OFFLINE_FAKE_VIDEO",
+    "model_id": "deterministic-offline-model",
+    "provider_id": "fake-video"
+  }
+}

@@ -17,7 +17,7 @@ in-memory; Rejecting and NetworkBlocked adapters fail closed. The KIE production
 adapter is available only by explicit Python construction and reads `KIE_API_KEY`
 through its dedicated resolver. Approved local reference images use a separate,
 digest-verified multipart uploader at KIE's `file-stream-upload` endpoint before
-generation. Uploads use the Revision B browser-header set and the exact `file`,
+generation. Uploads use the authorized browser-header set and the exact `file`,
 `uploadPath`, and `fileName` form fields. The current KIE response field is
 `data.downloadUrl`, with `data.fileUrl` or a URL derived from `data.filePath`
 accepted as fallbacks. The generic module CLI never selects the production adapter or uploader.
@@ -46,6 +46,7 @@ python -m ai_video_platform.skills.video_generation.cli poll-video <job-file|->
 python -m ai_video_platform.skills.video_generation.cli cancel-video <job-file|->
 python -m ai_video_platform.skills.video_generation.cli download-video <job-file|->
 python -m ai_video_platform.skills.video_generation.cli recover-video <job-file|->
+python -m ai_video_platform.skills.video_generation.offline_acceptance --package <package> --evidence-dir <new-dir>
 ```
 
 The CLI reads exactly the named local JSON file or stdin and writes one JSON result
@@ -56,19 +57,27 @@ execution ledger. `run_cli` accepts that explicit context for orchestration; the
 module CLI never silently selects an adapter and thus fails closed for execution
 commands unless the host supplies one.
 
+The independent `offline_acceptance` CLI is Provider-free. It writes a sanitized
+business request and a receipt demonstrating fake preflight/submit/poll/download,
+Rejecting-adapter fail-closed behavior, cancellation, and ledger-only recovery.
+It refuses to overwrite an existing evidence directory.
+
 The authorized KIE path is fixed to provider `kie`, model
 `bytedance/seedance-2-fast`, 480p, 16:9, no generated audio, no web search, at most
-6 seconds, exactly one request slot, one concurrent task, at most two attempts, and
+5 seconds, exactly one request slot, one concurrent task, at most two attempts, and
 at most 600 seconds. It requires two or more HTTPS reference images. Provider task
 results are queried through KIE's unified task endpoint; `creditsConsumed` is stored
 as `provider_cost_units`, and downloaded bytes are digest-verified before producing
 an opaque `kie://...` AssetManifestRequest URI. The documented KIE Market API does
 not expose task cancellation, so the adapter rejects `cancel` explicitly instead of
-claiming that a remote task was cancelled. Under Revision B, the first polling
+claiming that a remote task was cancelled. Under Revision C, a module-fixed atomic
+reservation prevents a second smoke across evidence directories. The first polling
 transport or response anomaly is terminal: no automatic poll retry is permitted,
 all later polling stops, and any late artifact must not be downloaded or registered.
 HTTP failures and Provider business-error responses preserve a redacted status and
 body summary for the smoke receipt; authorization and credential material remain excluded.
+Task identifiers are retained because they are not credentials. The receipt records
+the observed HTTP status chain and fails closed unless its exact-credential scan is zero.
 
 Stable errors cover package identity/version/digest, ApprovalRecord effectiveness
 and subject binding, budgets, Provider binding, opaque credential reference, and
@@ -97,6 +106,7 @@ python -m unittest -v tests.skills.video_generation.test_video_generation_interf
 python -m unittest -v tests.skills.video_generation.test_video_generation_adapters
 python -m unittest -v tests.skills.video_generation.test_video_generation_safety
 python -m unittest -v tests.skills.video_generation.test_kie_adapter
+python -m unittest -v tests.skills.video_generation.test_video_generation_offline_acceptance
 ```
 
 Rollback by reverting the owning commits. Preflight creates no Provider job, remote

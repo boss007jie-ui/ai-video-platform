@@ -1,0 +1,345 @@
+{
+  "authorization_id": "FTG-0-20260720-001",
+  "business_sample_id": "sanitized-product-video-001",
+  "cancel_recovery": {
+    "cancelled": {
+      "exit_code": 0,
+      "ok": true,
+      "result": {
+        "attempts": 1,
+        "history": [
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "submitting"
+          },
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "submitted"
+          },
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "cancelled"
+          }
+        ],
+        "job_id": "job-54bfc63f1f912956aa6e",
+        "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+        "package_id": "vep-33f621616c8eb04fd405",
+        "provider_execution_mode": "offline_adapter",
+        "provider_network_performed": false,
+        "recovered": false,
+        "replayed": false,
+        "state": "cancelled",
+        "submitted_at": "2026-07-22T08:19:25.273078Z"
+      }
+    },
+    "ledger_state_chain": [
+      "submitting",
+      "submitted",
+      "cancelled"
+    ],
+    "recovered": {
+      "exit_code": 0,
+      "ok": true,
+      "result": {
+        "attempts": 1,
+        "history": [
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "submitting"
+          },
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "submitted"
+          },
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "cancelled"
+          }
+        ],
+        "job_id": "job-54bfc63f1f912956aa6e",
+        "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+        "package_id": "vep-33f621616c8eb04fd405",
+        "provider_execution_mode": "offline_adapter",
+        "provider_network_performed": false,
+        "recovered": true,
+        "replayed": false,
+        "state": "cancelled",
+        "submitted_at": "2026-07-22T08:19:25.273078Z"
+      }
+    }
+  },
+  "checks": {
+    "adapter_network_zero": true,
+    "cancel_recovered": true,
+    "fake_commands_ok": true,
+    "fake_ledger_complete": true,
+    "poll_recovered": true,
+    "rejecting_failed_closed": true,
+    "socket_network_zero": true
+  },
+  "fake_success": {
+    "commands": [
+      {
+        "exit_code": 0,
+        "ok": true,
+        "result": {
+          "approval_id": "offline-acceptance-approved",
+          "budget": {
+            "estimated_cost_units": 0,
+            "max_attempts": 3,
+            "max_concurrency": 1,
+            "max_cost_units": 1,
+            "max_requests": 1,
+            "timeout_seconds": 60
+          },
+          "contract_status": "DRAFT_UNREGISTERED",
+          "idempotency_key": "ft-05-001-offline-success",
+          "output": {
+            "duration_seconds": 5,
+            "format": "mp4",
+            "prompt": "Sanitized handheld product demonstration with a steady studio camera.",
+            "resolution": "480p"
+          },
+          "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+          "package_id": "vep-33f621616c8eb04fd405",
+          "provider_binding": {
+            "binding_ref": "offline-fake-video",
+            "model_id": "deterministic-offline-model",
+            "provider_id": "fake-video"
+          },
+          "provider_execution_performed": false,
+          "request_hash": "sha256:ca1de901246478fc9454b92059cf287f8bb0a5d184ca7e01e09f281d8ed3895f",
+          "schema_version": "0.1.0",
+          "status": "ready"
+        }
+      },
+      {
+        "exit_code": 0,
+        "ok": true,
+        "result": {
+          "attempts": 1,
+          "history": [
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "submitting"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "submitted"
+            }
+          ],
+          "job_id": "job-a5116fabaca8e6697b90",
+          "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+          "package_id": "vep-33f621616c8eb04fd405",
+          "provider_execution_mode": "offline_adapter",
+          "provider_network_performed": false,
+          "recovered": false,
+          "replayed": false,
+          "state": "submitted",
+          "submitted_at": "2026-07-22T08:19:25.273078Z"
+        }
+      },
+      {
+        "exit_code": 0,
+        "ok": true,
+        "result": {
+          "attempts": 1,
+          "history": [
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "submitting"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "submitted"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "polling"
+            }
+          ],
+          "job_id": "job-a5116fabaca8e6697b90",
+          "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+          "package_id": "vep-33f621616c8eb04fd405",
+          "poll_attempts": 1,
+          "provider_execution_mode": "offline_adapter",
+          "provider_network_performed": false,
+          "recovered": false,
+          "replayed": false,
+          "state": "polling",
+          "submitted_at": "2026-07-22T08:19:25.273078Z"
+        }
+      },
+      {
+        "exit_code": 0,
+        "ok": true,
+        "result": {
+          "attempts": 1,
+          "history": [
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "submitting"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "submitted"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "polling"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "succeeded"
+            }
+          ],
+          "job_id": "job-a5116fabaca8e6697b90",
+          "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+          "package_id": "vep-33f621616c8eb04fd405",
+          "poll_attempts": 1,
+          "provider_execution_mode": "offline_adapter",
+          "provider_network_performed": false,
+          "recovered": false,
+          "replayed": false,
+          "state": "succeeded",
+          "submitted_at": "2026-07-22T08:19:25.273078Z"
+        }
+      },
+      {
+        "exit_code": 0,
+        "ok": true,
+        "result": {
+          "asset_manifest_request": {
+            "artifact_name": "AssetManifestRequest",
+            "contract_status": "DRAFT_UNREGISTERED",
+            "library_write_performed": false,
+            "media_type": "video/mp4",
+            "provenance": {
+              "execution_mode": "offline_adapter",
+              "source_job_id": "job-a5116fabaca8e6697b90"
+            },
+            "schema_version": "0.1.0",
+            "sha256": "sha256:3c98b6dff998de552444f48876c351aa50b88c4cb07992f175a9341d170790c3",
+            "size_bytes": 15,
+            "source_job_id": "job-a5116fabaca8e6697b90",
+            "uri": "memory://fake-369c15cd2ab05d03fbc5.mp4"
+          },
+          "attempts": 1,
+          "history": [
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "submitting"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "submitted"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "polling"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "succeeded"
+            },
+            {
+              "at": "2026-07-22T08:19:25.273078Z",
+              "state": "downloaded"
+            }
+          ],
+          "job_id": "job-a5116fabaca8e6697b90",
+          "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+          "package_id": "vep-33f621616c8eb04fd405",
+          "poll_attempts": 1,
+          "provider_execution_mode": "offline_adapter",
+          "provider_network_performed": false,
+          "recovered": false,
+          "replayed": false,
+          "state": "downloaded",
+          "submitted_at": "2026-07-22T08:19:25.273078Z"
+        }
+      }
+    ],
+    "ledger_state_chain": [
+      "submitting",
+      "submitted",
+      "polling",
+      "succeeded",
+      "downloaded"
+    ]
+  },
+  "finished_at": "2026-07-22T08:19:25.273078Z",
+  "poll_recovery": {
+    "failed_poll": {
+      "error": {
+        "category": "validation",
+        "code": "PROVIDER_RETRY_EXHAUSTED",
+        "details": {},
+        "field_paths": [],
+        "message": "Provider poll retry budget is exhausted",
+        "retryable": true
+      },
+      "exit_code": 2,
+      "ok": false
+    },
+    "ledger_state_chain": [
+      "submitting",
+      "submitted",
+      "recovery_required"
+    ],
+    "recovered": {
+      "exit_code": 0,
+      "ok": true,
+      "result": {
+        "attempts": 1,
+        "error_code": "PROVIDER_RETRY_EXHAUSTED",
+        "history": [
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "submitting"
+          },
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "submitted"
+          },
+          {
+            "at": "2026-07-22T08:19:25.273078Z",
+            "state": "recovery_required"
+          }
+        ],
+        "job_id": "job-ec45843a6645894f9c1a",
+        "package_digest": "sha256:f0f0c39a058182d177b16cff1a85ed19279bac7b345bcefe6ed710e0b7151b31",
+        "package_id": "vep-33f621616c8eb04fd405",
+        "poll_attempts": 3,
+        "provider_execution_mode": "offline_adapter",
+        "provider_network_performed": false,
+        "recovered": true,
+        "replayed": false,
+        "state": "recovery_required",
+        "submitted_at": "2026-07-22T08:19:25.273078Z"
+      }
+    }
+  },
+  "provider_network_performed": false,
+  "rejecting_fail_closed": {
+    "ledger_state_chain": [
+      "submitting",
+      "failed"
+    ],
+    "provider_network_performed": false,
+    "result": {
+      "error": {
+        "category": "validation",
+        "code": "PROVIDER_REJECTED",
+        "details": {},
+        "field_paths": [],
+        "message": "Provider execution is rejected by policy",
+        "retryable": false
+      },
+      "exit_code": 2,
+      "ok": false
+    }
+  },
+  "status": "PASS",
+  "work_item_id": "FT-05-001"
+}

@@ -502,6 +502,11 @@ class KieAdapterTests(unittest.TestCase):
         self.assertEqual(receipt["secret_scan_failure_code"], "CREDENTIAL_MATERIAL_DETECTED")
         self.assertEqual(receipt["generation_submissions"], 0)
         self.assertEqual(receipt["ledger_state_chain"], [])
+        self.assertIsNone(receipt["credits_consumed"])
+        self.assertIsNone(receipt["artifact_uri"])
+        self.assertIsNone(receipt["size_bytes"])
+        self.assertIsNone(receipt["sha256"])
+        self.assertEqual(receipt["http_status_chain"], [])
         self.assertEqual(receipt["secret_scan_status"], "PASS")
         self.assertEqual(receipt["secret_scan_matches"], 0)
         self.assertNotIn(credential, json.dumps(receipt))
@@ -547,6 +552,78 @@ class KieAdapterTests(unittest.TestCase):
             self.assertEqual(captured.exception.code, "CREDENTIAL_UNAVAILABLE")
             self.assertFalse(reservation.exists())
             self.assertFalse((root / "evidence" / "provider-attempt.json").exists())
+
+    def test_revision_c_download_403_receipt_keeps_cost_and_succeeded_ledger(self) -> None:
+        import hashlib
+        import json
+        import tempfile
+
+        class Download403Transport(RecordingTransport):
+            def download(self, uri: str) -> bytes:
+                del uri
+                self.http_status_chain.append(403)
+                raise AdapterFailure(
+                    "KIE_DOWNLOAD_ERROR",
+                    "KIE artifact download failed",
+                    retryable=False,
+                    http_status=403,
+                    provider_error_summary="Cloudflare access denied",
+                )
+
+        first_content = b"download-failure-reference-one"
+        second_content = b"download-failure-reference-two"
+        first_digest = "sha256:" + hashlib.sha256(first_content).hexdigest()
+        second_digest = "sha256:" + hashlib.sha256(second_content).hexdigest()
+        package = generation_request()["execution_package"]
+        asset_mapping = [
+            {"shot_id": "shot-001", "role": "hero", "asset_id": "asset-001", "uri": "memory://one.jpg", "sha256": first_digest},
+            {"shot_id": "shot-001", "role": "detail", "asset_id": "asset-002", "uri": "memory://two.jpg", "sha256": second_digest},
+        ]
+        master = package["storyboard_master"]
+        master["shots"][0]["required_asset_roles"] = ["hero", "detail"]
+        master["asset_mapping"] = asset_mapping
+        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
+        package["asset_mapping"] = asset_mapping
+        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+
+        transport = Download403Transport()
+        resolver = KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package_path = root / "package.json"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            first_path = root / "one.jpg"
+            second_path = root / "two.jpg"
+            first_path.write_bytes(first_content)
+            second_path.write_bytes(second_content)
+            evidence_dir = root / "evidence"
+            with (
+                patch("ai_video_platform.skills.video_generation.kie_smoke.UrllibKieHttpTransport", return_value=transport),
+                patch("ai_video_platform.skills.video_generation.kie_smoke.KieCredentialResolver", return_value=resolver),
+                patch(
+                    "ai_video_platform.skills.video_generation.kie_smoke._default_reservation_path",
+                    return_value=root / "revision-c-reservation.json",
+                ),
+            ):
+                with self.assertRaises(Exception):
+                    run_smoke(
+                        package_path=package_path,
+                        reference_paths=[first_path, second_path],
+                        reference_sha256=[first_digest, second_digest],
+                        evidence_dir=evidence_dir,
+                        poll_interval_seconds=0,
+                    )
+            receipt = json.loads((evidence_dir / "provider-result.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(receipt["task_id"], "task_bytedance_safe_001")
+        self.assertEqual(receipt["credits_consumed"], 3)
+        self.assertEqual(receipt["ledger_state_chain"][-1], "succeeded")
+        self.assertEqual(receipt["http_status"], 403)
+        self.assertEqual(receipt["http_status_chain"], [200, 200, 200, 200, 403])
+        self.assertIsNone(receipt["artifact_uri"])
+        self.assertIsNone(receipt["size_bytes"])
+        self.assertIsNone(receipt["sha256"])
+        self.assertFalse(receipt["late_artifact_download_performed"])
 
     def test_reference_uploader_rejects_tampering_and_oversize_before_http(self) -> None:
         import hashlib
