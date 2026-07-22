@@ -19,8 +19,8 @@ from ai_video_platform.skills.video_generation import (
     VideoGenerationInterface,
 )
 from ai_video_platform.skills.video_generation.adapters import AdapterFailure
-from ai_video_platform.skills.video_generation.kie_adapter import UrllibKieHttpTransport
-from ai_video_platform.skills.video_generation.kie_smoke import build_smoke_request, validate_reference_digests
+from ai_video_platform.skills.video_generation.kie_adapter import BROWSER_HEADERS, UrllibKieHttpTransport
+from ai_video_platform.skills.video_generation.kie_smoke import build_smoke_request, run_smoke, validate_reference_digests
 from ai_video_platform.skills.video_generation.ledger import InMemoryVideoExecutionLedger
 from tests.skills.video_generation.test_video_generation_interface import generation_request
 
@@ -37,7 +37,7 @@ class RecordingTransport:
             "msg": "success",
             "data": {
                 "taskId": "task_bytedance_safe_001",
-                "model": "bytedance/seedance-2-mini",
+                "model": "bytedance/seedance-2-fast",
                 "state": "success",
                 "param": "{}",
                 "resultJson": '{"resultUrls":["https://files.example.test/result.mp4"]}',
@@ -77,18 +77,20 @@ class RecordingTransport:
         self.requests.append({"method": "DOWNLOAD"})
         return b"synthetic-kie-video"
 
-    def upload_base64(
+    def upload_multipart(
         self,
         credential: str,
         *,
-        base64_data: str,
-        upload_path: str,
         file_name: str,
+        file_bytes: bytes,
+        media_type: str,
+        upload_path: str,
     ) -> dict[str, object]:
         self.requests.append({
             "method": "UPLOAD",
             "api_key_present": bool(credential),
-            "base64_data": base64_data,
+            "file_bytes": file_bytes,
+            "media_type": media_type,
             "upload_path": upload_path,
             "file_name": file_name,
         })
@@ -116,7 +118,7 @@ def kie_request() -> dict[str, object]:
     request["provider_binding"] = {
         "binding_ref": "ftg-p-video-001",
         "provider_id": "kie",
-        "model_id": "bytedance/seedance-2-mini",
+        "model_id": "bytedance/seedance-2-fast",
         "credential_ref": "env://KIE_API_KEY",
     }
     request["output"] = {
@@ -138,7 +140,7 @@ def kie_request() -> dict[str, object]:
 
 
 class KieAdapterTests(unittest.TestCase):
-    def test_smoke_request_is_fixed_to_revision_a_envelope(self) -> None:
+    def test_smoke_request_is_fixed_to_revision_b_envelope(self) -> None:
         package = generation_request()["execution_package"]
         digest = package["asset_mapping"][0]["sha256"]
         package["asset_mapping"].append({
@@ -165,6 +167,7 @@ class KieAdapterTests(unittest.TestCase):
         })
         self.assertEqual(request["output"]["duration"], 5)
         self.assertEqual(request["output"]["resolution"], "480p")
+        self.assertEqual(request["provider_binding"]["model_id"], "bytedance/seedance-2-fast")
         self.assertFalse(request["output"]["generate_audio"])
         self.assertFalse(request["output"]["web_search"])
 
@@ -188,8 +191,197 @@ class KieAdapterTests(unittest.TestCase):
         sent = transport.requests[0]
         self.assertEqual(sent["method"], "UPLOAD")
         self.assertEqual(sent["upload_path"], "ftg-p-video-001")
-        self.assertTrue(str(sent["base64_data"]).startswith("data:image/jpeg;base64,"))
+        self.assertEqual(sent["file_bytes"], content)
+        self.assertEqual(sent["media_type"], "image/jpeg")
         self.assertNotIn("synthetic-value", str(sent))
+
+    def test_reference_upload_uses_stream_multipart_browser_headers_and_fallback_path(self) -> None:
+        import hashlib
+        import tempfile
+
+        class MultipartTransport(RecordingTransport):
+            def upload_multipart(self, credential, *, file_name, file_bytes, media_type, upload_path):
+                self.requests.append({
+                    "method": "UPLOAD",
+                    "api_key_present": bool(credential),
+                    "file_name": file_name,
+                    "file_bytes": file_bytes,
+                    "media_type": media_type,
+                    "upload_path": upload_path,
+                })
+                return {"code": 200, "data": {"filePath": "smoke/ref.jpg"}}
+
+        content = b"multipart-reference"
+        expected = "sha256:" + hashlib.sha256(content).hexdigest()
+        transport = MultipartTransport()
+        uploader = KieReferenceImageUploader(
+            transport=transport,
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "approved-reference.jpg"
+            image.write_bytes(content)
+            uri = uploader.upload(image, expected_sha256=expected)
+
+        self.assertEqual(uri, "https://tempfile.redpandaai.co/smoke/ref.jpg")
+        self.assertEqual(transport.requests[0]["file_bytes"], content)
+        self.assertEqual(transport.requests[0]["upload_path"], "ftg-p-video-001")
+        self.assertEqual(transport.requests[0]["media_type"], "image/jpeg")
+        self.assertEqual(BROWSER_HEADERS["Accept-Encoding"], "identity")
+        self.assertIn("Chrome/126.0.0.0", BROWSER_HEADERS["User-Agent"])
+
+    def test_reference_upload_falls_back_from_invalid_preferred_urls(self) -> None:
+        import hashlib
+        import tempfile
+
+        class FallbackTransport(RecordingTransport):
+            def upload_multipart(self, *args, **kwargs):
+                return {
+                    "code": 200,
+                    "data": {
+                        "downloadUrl": "",
+                        "fileUrl": "ftp://unsafe.example.test/reference.jpg",
+                        "filePath": "/smoke/safe-reference.jpg",
+                    },
+                }
+
+        content = b"fallback-reference"
+        expected = "sha256:" + hashlib.sha256(content).hexdigest()
+        uploader = KieReferenceImageUploader(
+            transport=FallbackTransport(),
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "approved-reference.jpg"
+            image.write_bytes(content)
+            uri = uploader.upload(image, expected_sha256=expected)
+
+        self.assertEqual(uri, "https://tempfile.redpandaai.co/smoke/safe-reference.jpg")
+
+    def test_upload_failure_preserves_http_status_and_provider_summary(self) -> None:
+        class FailingTransport(RecordingTransport):
+            def upload_multipart(self, *args, **kwargs):
+                raise AdapterFailure(
+                    "KIE_UPLOAD_ERROR",
+                    "KIE reference upload failed",
+                    retryable=False,
+                    http_status=1010,
+                    provider_error_summary="Cloudflare browser_signature_banned",
+                )
+
+        import hashlib
+        import tempfile
+
+        content = b"diagnostic-reference"
+        expected = "sha256:" + hashlib.sha256(content).hexdigest()
+        uploader = KieReferenceImageUploader(
+            transport=FailingTransport(),
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "approved-reference.jpg"
+            image.write_bytes(content)
+            with self.assertRaises(AdapterFailure) as captured:
+                uploader.upload(image, expected_sha256=expected)
+        self.assertEqual(captured.exception.http_status, 1010)
+        self.assertEqual(captured.exception.provider_error_summary, "Cloudflare browser_signature_banned")
+
+    def test_upload_business_failure_preserves_redacted_provider_summary(self) -> None:
+        class BusinessFailureTransport(RecordingTransport):
+            def upload_multipart(self, *args, **kwargs):
+                return {
+                    "code": 422,
+                    "message": "unsupported file",
+                    "data": {"apiKey": "synthetic-secret"},
+                }
+
+        import hashlib
+        import tempfile
+
+        content = b"business-failure-reference"
+        expected = "sha256:" + hashlib.sha256(content).hexdigest()
+        uploader = KieReferenceImageUploader(
+            transport=BusinessFailureTransport(),
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "approved-reference.jpg"
+            image.write_bytes(content)
+            with self.assertRaises(AdapterFailure) as captured:
+                uploader.upload(image, expected_sha256=expected)
+
+        self.assertEqual(captured.exception.http_status, 200)
+        self.assertIn("unsupported file", captured.exception.provider_error_summary)
+        self.assertNotIn("synthetic-secret", captured.exception.provider_error_summary)
+
+    def test_upload_invalid_url_preserves_provider_response_diagnostics(self) -> None:
+        import hashlib
+        import tempfile
+
+        class InvalidUrlTransport(RecordingTransport):
+            def upload_multipart(self, *args, **kwargs):
+                return {"code": 200, "message": "stored without URL", "data": {}}
+
+        content = b"invalid-url-reference"
+        expected = "sha256:" + hashlib.sha256(content).hexdigest()
+        uploader = KieReferenceImageUploader(
+            transport=InvalidUrlTransport(),
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "approved-reference.jpg"
+            image.write_bytes(content)
+            with self.assertRaises(AdapterFailure) as captured:
+                uploader.upload(image, expected_sha256=expected)
+
+        self.assertEqual(captured.exception.http_status, 200)
+        self.assertIn("stored without URL", captured.exception.provider_error_summary)
+        self.assertNotIn("synthetic-value", str(captured.exception))
+
+    def test_revision_b_failure_receipt_records_http_status_and_provider_summary(self) -> None:
+        import json
+        import tempfile
+
+        package = generation_request()["execution_package"]
+        first_digest = package["asset_mapping"][0]["sha256"]
+        second_digest = "sha256:" + "4" * 64
+        package["asset_mapping"].append({
+            "shot_id": "shot-001",
+            "role": "detail",
+            "asset_id": "asset-002",
+            "uri": "memory://detail.png",
+            "sha256": second_digest,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package_path = root / "package.json"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            evidence_dir = root / "evidence"
+            with patch.object(
+                KieReferenceImageUploader,
+                "upload",
+                side_effect=AdapterFailure(
+                    "KIE_UPLOAD_ERROR",
+                    "KIE reference upload failed",
+                    retryable=False,
+                    http_status=403,
+                    provider_error_summary="Cloudflare request denied",
+                ),
+            ):
+                with self.assertRaises(AdapterFailure):
+                    run_smoke(
+                        package_path=package_path,
+                        reference_paths=[root / "one.jpg", root / "two.jpg"],
+                        reference_sha256=[first_digest, second_digest],
+                        evidence_dir=evidence_dir,
+                        poll_interval_seconds=0,
+                    )
+            receipt = json.loads((evidence_dir / "provider-result.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(receipt["http_status"], 403)
+        self.assertEqual(receipt["provider_error_summary"], "Cloudflare request denied")
+        self.assertEqual(receipt["generation_submissions"], 0)
+        self.assertEqual(receipt["ledger_state_chain"], [])
 
     def test_reference_uploader_rejects_tampering_and_oversize_before_http(self) -> None:
         import hashlib
@@ -231,6 +423,156 @@ class KieAdapterTests(unittest.TestCase):
         redirect_handler = build.call_args.args[0]
         self.assertIsNone(redirect_handler.redirect_request(None, None, 302, None, None, None))
 
+    def test_default_http_transport_builds_exact_stream_upload_request(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"code":200,"data":{"downloadUrl":"https://tempfile.redpandaai.co/ref.jpg"}}'
+
+        with patch("ai_video_platform.skills.video_generation.kie_adapter.build_opener") as build:
+            build.return_value.open.return_value = Response()
+            transport = UrllibKieHttpTransport()
+            transport.upload_multipart(
+                "synthetic-value",
+                file_name="reference.jpg",
+                file_bytes=b"image-bytes",
+                media_type="image/jpeg",
+                upload_path="ftg-p-video-001",
+            )
+
+        upload_request = build.return_value.open.call_args.args[0]
+        body = upload_request.data
+        self.assertEqual(upload_request.full_url, "https://kieai.redpandaai.co/api/file-stream-upload")
+        self.assertEqual(upload_request.method, "POST")
+        self.assertEqual(upload_request.get_header("Origin"), "https://kieai.redpandaai.co")
+        self.assertEqual(upload_request.get_header("Accept-encoding"), "identity")
+        self.assertIn("Chrome/126.0.0.0", upload_request.get_header("User-agent"))
+        self.assertTrue(upload_request.get_header("Content-type").startswith("multipart/form-data; boundary="))
+        self.assertIn(b'name="file"; filename="reference.jpg"', body)
+        self.assertIn(b'name="uploadPath"', body)
+        self.assertIn(b"ftg-p-video-001", body)
+        self.assertIn(b'name="fileName"', body)
+        self.assertNotIn(b"synthetic-value", body)
+
+    def test_http_error_summary_recursively_redacts_provider_credentials(self) -> None:
+        from io import BytesIO
+        from urllib.error import HTTPError
+
+        leaked_hex = "a" * 32
+        body = (
+            '{"message":"credential ' + leaked_hex + '",'
+            '"private_key":"provider-private-value","stack":"provider-stack"}'
+        ).encode("utf-8")
+        error = HTTPError(
+            "https://kieai.redpandaai.co/api/file-stream-upload",
+            403,
+            "Forbidden",
+            {},
+            BytesIO(body),
+        )
+        self.addCleanup(error.close)
+        with patch("ai_video_platform.skills.video_generation.kie_adapter.build_opener") as build:
+            build.return_value.open.side_effect = error
+            transport = UrllibKieHttpTransport()
+            with self.assertRaises(AdapterFailure) as captured:
+                transport.upload_multipart(
+                    leaked_hex,
+                    file_name="reference.jpg",
+                    file_bytes=b"image-bytes",
+                    media_type="image/jpeg",
+                    upload_path="ftg-p-video-001",
+                )
+
+        summary = captured.exception.provider_error_summary
+        self.assertEqual(captured.exception.http_status, 403)
+        self.assertNotIn(leaked_hex, summary)
+        self.assertNotIn("provider-private-value", summary)
+        self.assertNotIn("provider-stack", summary)
+        self.assertIn("[REDACTED]", summary)
+
+    def test_thirty_two_hex_task_id_is_allowed_unless_it_matches_the_credential(self) -> None:
+        class HexTaskTransport(RecordingTransport):
+            def __init__(self, task_id: str) -> None:
+                super().__init__()
+                self.task_id = task_id
+
+            def request_json(self, method, path, api_key, *, payload=None, query=None):
+                if method == "POST":
+                    return {"code": 200, "data": {"taskId": self.task_id}}
+                return super().request_json(method, path, api_key, payload=payload, query=query)
+
+        task_id = "c" * 32
+        credential = "d" * 32
+        adapter = KieVideoProviderAdapter(
+            transport=HexTaskTransport(task_id),
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": credential}),
+        )
+        inspected = VideoGenerationInterface().inspect_video_request(kie_request(), now=NOW)
+        self.assertEqual(adapter.submit(inspected), task_id)
+
+        rejecting = KieVideoProviderAdapter(
+            transport=HexTaskTransport(credential),
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": credential}),
+        )
+        with self.assertRaises(AdapterFailure):
+            rejecting.submit(inspected)
+
+        poll_transport = HexTaskTransport(task_id)
+        poll_rejecting = KieVideoProviderAdapter(
+            transport=poll_transport,
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": credential}),
+        )
+        with self.assertRaises(AdapterFailure):
+            poll_rejecting.poll(credential)
+        self.assertEqual(poll_transport.requests, [])
+
+    def test_malformed_json_and_download_http_errors_keep_safe_diagnostics(self) -> None:
+        from io import BytesIO
+        from urllib.error import HTTPError
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b"provider malformed body"
+
+        with patch("ai_video_platform.skills.video_generation.kie_adapter.build_opener") as build:
+            build.return_value.open.return_value = Response()
+            transport = UrllibKieHttpTransport()
+            with self.assertRaises(AdapterFailure) as malformed:
+                transport.upload_multipart(
+                    "synthetic-value",
+                    file_name="reference.jpg",
+                    file_bytes=b"image-bytes",
+                    media_type="image/jpeg",
+                    upload_path="ftg-p-video-001",
+                )
+        self.assertEqual(malformed.exception.http_status, 200)
+        self.assertIn("provider malformed body", malformed.exception.provider_error_summary)
+
+        download_error = HTTPError(
+            "https://files.example.test/result.mp4",
+            404,
+            "Not Found",
+            {},
+            BytesIO(b'{"message":"artifact expired"}'),
+        )
+        self.addCleanup(download_error.close)
+        with patch("ai_video_platform.skills.video_generation.kie_adapter.urlopen", side_effect=download_error):
+            with self.assertRaises(AdapterFailure) as download:
+                UrllibKieHttpTransport().download("https://files.example.test/result.mp4")
+        self.assertEqual(download.exception.http_status, 404)
+        self.assertIn("artifact expired", download.exception.provider_error_summary)
+
     def test_credential_resolver_reads_only_named_environment_entry(self) -> None:
         resolver = KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"})
         self.assertEqual(resolver.resolve(), "synthetic-value")
@@ -254,7 +596,7 @@ class KieAdapterTests(unittest.TestCase):
         self.assertEqual(submitted["provider_execution_mode"], "kie_production")
         sent = transport.requests[0]
         self.assertEqual(sent["path"], "/api/v1/jobs/createTask")
-        self.assertEqual(sent["payload"]["model"], "bytedance/seedance-2-mini")
+        self.assertEqual(sent["payload"]["model"], "bytedance/seedance-2-fast")
         self.assertEqual(sent["payload"]["input"]["resolution"], "480p")
         self.assertEqual(sent["payload"]["input"]["duration"], 6)
         self.assertEqual(len(sent["payload"]["input"]["reference_image_urls"]), 2)
@@ -285,6 +627,35 @@ class KieAdapterTests(unittest.TestCase):
         self.assertEqual(manifest["size_bytes"], len(b"synthetic-kie-video"))
         self.assertEqual(transport.downloads, ["https://files.example.test/result.mp4"])
         self.assertNotIn("synthetic-value", str(ledger.get(submitted["job_id"])))
+
+    def test_provider_terminal_failure_preserves_safe_diagnostics(self) -> None:
+        transport = RecordingTransport()
+        transport.poll_responses = [{
+            "code": 200,
+            "msg": "success",
+            "data": {
+                "taskId": "task_bytedance_safe_001",
+                "model": "bytedance/seedance-2-fast",
+                "state": "fail",
+                "failCode": "MODEL_REJECTED",
+                "failMsg": "model id rejected",
+                "apiKey": "b" * 32,
+                "creditsConsumed": 0,
+            },
+        }]
+        adapter = KieVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        interface = VideoGenerationInterface(adapter=adapter, ledger=InMemoryVideoExecutionLedger())
+        submitted = interface.submit_video(kie_request(), now=NOW)
+
+        failed = interface.poll_video(submitted["job_id"], now=NOW)
+
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(failed["provider_http_status"], 200)
+        self.assertIn("model id rejected", failed["provider_error_summary"])
+        self.assertNotIn("b" * 32, failed["provider_error_summary"])
 
     def test_production_guardrails_reject_before_http(self) -> None:
         for mutate in (

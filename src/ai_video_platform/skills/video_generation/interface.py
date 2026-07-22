@@ -8,7 +8,7 @@ import hashlib
 import re
 
 from .adapters import AdapterFailure, VideoProviderAdapter
-from .errors import GenerationError, GenerationErrorCode, contains_sensitive_text
+from .errors import GenerationError, GenerationErrorCode, contains_sensitive_text, sanitize_sensitive
 from .ledger import ACTIVE_STATES, InMemoryVideoExecutionLedger
 from .models import CONTRACT_STATUS, content_digest, parse_utc, snapshot
 from .preflight import GenerationPreflight
@@ -84,7 +84,12 @@ class VideoGenerationInterface:
                     code = self._adapter_error_code(exc)
                     terminal_rejection = exc.code in {"PROVIDER_REJECTED", "NETWORK_BLOCKED"}
                     ledger.transition(job_id, expected_states={"submitting"}, state="failed" if terminal_rejection else "recovery_required", at=self._format_time(evaluated_at), attempts=attempts, error_code=code.value, retryable=False)
-                    raise GenerationError(code, str(exc), retryable=False) from None
+                    raise GenerationError(
+                        code,
+                        str(exc),
+                        details=self._adapter_failure_details(exc),
+                        retryable=False,
+                    ) from None
             except GenerationError:
                 ledger.transition(job_id, expected_states={"submitting"}, state="recovery_required", at=self._format_time(evaluated_at), attempts=attempts, error_code=GenerationErrorCode.PROVIDER_REJECTED.value, retryable=False)
                 raise
@@ -140,7 +145,12 @@ class VideoGenerationInterface:
                 adapter.cancel(str(record["provider_job_id"]))
             except AdapterFailure as exc:
                 ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=self._adapter_error_code(exc).value)
-                raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
+                raise GenerationError(
+                    self._adapter_error_code(exc),
+                    str(exc),
+                    details=self._adapter_failure_details(exc),
+                    retryable=exc.retryable,
+                ) from None
             except Exception:
                 ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
                 raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
@@ -160,7 +170,12 @@ class VideoGenerationInterface:
                 if not exc.retryable:
                     code = self._adapter_error_code(exc)
                     ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=code.value)
-                    raise GenerationError(code, str(exc), retryable=False) from None
+                    raise GenerationError(
+                        code,
+                        str(exc),
+                        details=self._adapter_failure_details(exc),
+                        retryable=False,
+                    ) from None
             except GenerationError:
                 raise
             except Exception:
@@ -193,6 +208,19 @@ class VideoGenerationInterface:
                     GenerationErrorCode.BUDGET_EXCEEDED,
                     "Provider actual cost exceeds the approved budget",
                 )
+        provider_http_status = provider_result.get("http_status")
+        if provider_http_status is not None:
+            if isinstance(provider_http_status, bool) or not isinstance(provider_http_status, int):
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned invalid HTTP diagnostics")
+            changes["provider_http_status"] = provider_http_status
+        provider_error_summary = provider_result.get("provider_error_summary")
+        if provider_error_summary is not None:
+            safe_summary = sanitize_sensitive(provider_error_summary)
+            if not isinstance(safe_summary, str):
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned invalid error diagnostics")
+            changes["provider_error_summary"] = safe_summary[:1000]
         if record["state"] != "polling":
             record = ledger.transition(
                 job_id,
@@ -230,7 +258,12 @@ class VideoGenerationInterface:
         try:
             adapter.cancel(str(record["provider_job_id"]))
         except AdapterFailure as exc:
-            raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
+            raise GenerationError(
+                self._adapter_error_code(exc),
+                str(exc),
+                details=self._adapter_failure_details(exc),
+                retryable=exc.retryable,
+            ) from None
         except Exception:
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
         return self._result(ledger.transition(job_id, expected_states=ACTIVE_STATES, state="cancelled", at=self._format_time(evaluated_at)))
@@ -243,7 +276,12 @@ class VideoGenerationInterface:
         try:
             artifact = adapter.download(str(record["provider_job_id"]))
         except AdapterFailure as exc:
-            raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
+            raise GenerationError(
+                self._adapter_error_code(exc),
+                str(exc),
+                details=self._adapter_failure_details(exc),
+                retryable=exc.retryable,
+            ) from None
         except Exception:
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
         if not isinstance(artifact, Mapping):
@@ -290,6 +328,15 @@ class VideoGenerationInterface:
     @staticmethod
     def _adapter_error_code(error: AdapterFailure) -> GenerationErrorCode:
         return GenerationErrorCode.NETWORK_BLOCKED if error.code == "NETWORK_BLOCKED" else GenerationErrorCode.PROVIDER_REJECTED
+
+    @staticmethod
+    def _adapter_failure_details(error: AdapterFailure) -> dict[str, object]:
+        details: dict[str, object] = {}
+        if error.http_status is not None:
+            details["http_status"] = error.http_status
+        if error.provider_error_summary is not None:
+            details["provider_error_summary"] = error.provider_error_summary
+        return details
 
     @staticmethod
     def _now(value: datetime | None) -> datetime:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Mapping
 import hashlib
 import json
@@ -10,15 +9,49 @@ import os
 from pathlib import Path
 import re
 from typing import Protocol
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from .adapters import AdapterFailure
-from .errors import contains_sensitive_text
+from .errors import contains_sensitive_text, sanitize_sensitive
 
 
-KIE_MODEL_ID = "bytedance/seedance-2-mini"
+KIE_MODEL_ID = "bytedance/seedance-2-fast"
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+    "Accept-Encoding": "identity",
+    "Origin": "https://kieai.redpandaai.co",
+    "Referer": "https://kieai.redpandaai.co/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Ch-Ua": '"Chromium";v="126", "Not.A/Brand";v="24", "Google Chrome";v="126"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+}
+
+
+def _provider_diagnostic_summary(value: object, *, credential: str | None = None) -> str:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace").strip()
+    if isinstance(value, str):
+        text = value.replace(credential, "[REDACTED]") if credential else value
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            value = text
+    safe = sanitize_sensitive(value)
+    if isinstance(safe, str):
+        return safe[:1000] or "Provider returned an empty error body"
+    return json.dumps(safe, ensure_ascii=False, sort_keys=True)[:1000]
 _TASK_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _OUTPUT_FIELDS = {
     "format",
@@ -63,13 +96,14 @@ class KieHttpTransport(Protocol):
 
     def download(self, uri: str) -> bytes: ...
 
-    def upload_base64(
+    def upload_multipart(
         self,
         credential: str,
         *,
-        base64_data: str,
-        upload_path: str,
         file_name: str,
+        file_bytes: bytes,
+        media_type: str,
+        upload_path: str,
     ) -> dict[str, object]: ...
 
 
@@ -120,15 +154,34 @@ class UrllibKieHttpTransport:
                 raw = response.read()
         except HTTPError as error:
             retryable = error.code == 429 or error.code >= 500
-            raise AdapterFailure("KIE_HTTP_ERROR", "KIE API rejected the request", retryable=retryable) from None
+            summary = self._provider_error_summary(error.read(), credential)
+            raise AdapterFailure(
+                "KIE_HTTP_ERROR",
+                "KIE API rejected the request",
+                retryable=retryable,
+                http_status=error.code,
+                provider_error_summary=summary,
+            ) from None
         except (URLError, TimeoutError, OSError):
             raise AdapterFailure("KIE_NETWORK_ERROR", "KIE API network request failed", retryable=True) from None
         try:
             decoded = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE API returned malformed JSON", retryable=False) from None
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE API returned malformed JSON",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_error_summary(raw, credential),
+            ) from None
         if not isinstance(decoded, dict):
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE API returned malformed JSON", retryable=False)
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE API returned malformed JSON",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_error_summary(raw, credential),
+            )
         return decoded
 
     def download(self, uri: str) -> bytes:
@@ -141,31 +194,39 @@ class UrllibKieHttpTransport:
                 return response.read()
         except HTTPError as error:
             retryable = error.code == 429 or error.code >= 500
-            raise AdapterFailure("KIE_DOWNLOAD_ERROR", "KIE artifact download failed", retryable=retryable) from None
+            raise AdapterFailure(
+                "KIE_DOWNLOAD_ERROR",
+                "KIE artifact download failed",
+                retryable=retryable,
+                http_status=error.code,
+                provider_error_summary=_provider_diagnostic_summary(error.read()),
+            ) from None
         except (URLError, TimeoutError, OSError):
             raise AdapterFailure("KIE_DOWNLOAD_ERROR", "KIE artifact download failed", retryable=True) from None
 
-    def upload_base64(
+    def upload_multipart(
         self,
         credential: str,
         *,
-        base64_data: str,
-        upload_path: str,
         file_name: str,
+        file_bytes: bytes,
+        media_type: str,
+        upload_path: str,
     ) -> dict[str, object]:
-        body = json.dumps({
-            "base64Data": base64_data,
-            "uploadPath": upload_path,
-            "fileName": file_name,
-        }, separators=(",", ":")).encode("utf-8")
+        body, content_type = self._multipart_body(
+            file_name=file_name,
+            file_bytes=file_bytes,
+            media_type=media_type,
+            upload_path=upload_path,
+        )
         request = Request(
-            self._UPLOAD_BASE_URL + "/api/file-base64-upload",
+            self._UPLOAD_BASE_URL + "/api/file-stream-upload",
             data=body,
             method="POST",
             headers={
+                **BROWSER_HEADERS,
                 "Authorization": "Bearer " + credential,
-                "Accept": "application/json",
-                "Content-Type": "application/json",
+                "Content-Type": content_type,
             },
         )
         try:
@@ -173,16 +234,70 @@ class UrllibKieHttpTransport:
                 raw = response.read()
         except HTTPError as error:
             retryable = error.code == 429 or error.code >= 500
-            raise AdapterFailure("KIE_UPLOAD_ERROR", "KIE reference upload failed", retryable=retryable) from None
+            summary = self._provider_error_summary(error.read(), credential)
+            raise AdapterFailure(
+                "KIE_UPLOAD_ERROR",
+                "KIE reference upload failed",
+                retryable=retryable,
+                http_status=error.code,
+                provider_error_summary=summary,
+            ) from None
         except (URLError, TimeoutError, OSError):
             raise AdapterFailure("KIE_UPLOAD_ERROR", "KIE reference upload failed", retryable=True) from None
         try:
             decoded = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference upload returned malformed JSON", retryable=False) from None
+            raise AdapterFailure(
+                "KIE_UPLOAD_INVALID",
+                "KIE reference upload returned malformed JSON",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_error_summary(raw, credential),
+            ) from None
         if not isinstance(decoded, dict):
-            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference upload returned malformed JSON", retryable=False)
+            raise AdapterFailure(
+                "KIE_UPLOAD_INVALID",
+                "KIE reference upload returned malformed JSON",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_error_summary(raw, credential),
+            )
         return decoded
+
+    @staticmethod
+    def _multipart_body(
+        *,
+        file_name: str,
+        file_bytes: bytes,
+        media_type: str,
+        upload_path: str,
+    ) -> tuple[bytes, str]:
+        boundary = "----ai-video-platform-kie-" + uuid.uuid4().hex
+        body = bytearray()
+        fields = (
+            ("file", file_name, file_bytes, media_type),
+            ("uploadPath", None, upload_path.encode("utf-8"), None),
+            ("fileName", None, file_name.encode("utf-8"), None),
+        )
+        for name, filename, value, field_media_type in fields:
+            body.extend(f"--{boundary}\r\n".encode("ascii"))
+            if filename is None:
+                body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("ascii"))
+            else:
+                body.extend(
+                    (
+                        f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+                        f"Content-Type: {field_media_type}\r\n\r\n"
+                    ).encode("ascii")
+                )
+            body.extend(value)
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("ascii"))
+        return bytes(body), f"multipart/form-data; boundary={boundary}"
+
+    @staticmethod
+    def _provider_error_summary(raw: bytes, credential: str) -> str:
+        return _provider_diagnostic_summary(raw, credential=credential)
 
 
 class KieReferenceImageUploader:
@@ -219,27 +334,40 @@ class KieReferenceImageUploader:
         actual_sha256 = "sha256:" + hashlib.sha256(content).hexdigest()
         if actual_sha256 != expected_sha256:
             raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference image digest mismatch", retryable=False)
-        encoded = base64.b64encode(content).decode("ascii")
-        data_uri = f"data:{self._MIME_TYPES[suffix]};base64,{encoded}"
+        credential = self._credential_resolver.resolve()
         try:
-            response = self._transport.upload_base64(
-                self._credential_resolver.resolve(),
-                base64_data=data_uri,
-                upload_path="ftg-p-video-001",
+            response = self._transport.upload_multipart(
+                credential,
                 file_name=actual_sha256.removeprefix("sha256:")[:24] + suffix,
+                file_bytes=content,
+                media_type=self._MIME_TYPES[suffix],
+                upload_path="ftg-p-video-001",
             )
         except AdapterFailure:
             raise
         except Exception:
             raise AdapterFailure("KIE_UPLOAD_ERROR", "KIE reference upload failed unexpectedly", retryable=False) from None
         if response.get("code") != 200 or not isinstance(response.get("data"), Mapping):
-            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference upload returned an unsuccessful response", retryable=False)
-        uri = response["data"].get(
-            "downloadUrl",
-            response["data"].get("fileUrl"),
-        )
-        if not KieVideoProviderAdapter._safe_https_uri(uri):
-            raise AdapterFailure("KIE_UPLOAD_INVALID", "KIE reference upload returned an invalid URL", retryable=False)
+            raise AdapterFailure(
+                "KIE_UPLOAD_INVALID",
+                "KIE reference upload returned an unsuccessful response",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=_provider_diagnostic_summary(response, credential=credential),
+            )
+        data = response["data"]
+        candidates = [data.get("downloadUrl"), data.get("fileUrl")]
+        if isinstance(data.get("filePath"), str):
+            candidates.append("https://tempfile.redpandaai.co/" + data["filePath"].lstrip("/"))
+        uri = next((candidate for candidate in candidates if KieVideoProviderAdapter._safe_https_uri(candidate)), None)
+        if uri is None:
+            raise AdapterFailure(
+                "KIE_UPLOAD_INVALID",
+                "KIE reference upload returned an invalid URL",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=_provider_diagnostic_summary(response, credential=credential),
+            )
         return str(uri)
 
 
@@ -268,11 +396,24 @@ class KieVideoProviderAdapter:
                 error.code,
                 "KIE submission failed with no safe automatic retry",
                 retryable=False,
+                http_status=error.http_status,
+                provider_error_summary=error.provider_error_summary,
             ) from None
         data = self._success_data(response)
         task_id = data.get("taskId")
-        if not isinstance(task_id, str) or _TASK_ID.fullmatch(task_id) is None or contains_sensitive_text(task_id):
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE API returned an invalid task identity", retryable=False)
+        if (
+            not isinstance(task_id, str)
+            or _TASK_ID.fullmatch(task_id) is None
+            or contains_sensitive_text(task_id)
+            or task_id == self._credential_resolver.resolve()
+        ):
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE API returned an invalid task identity",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_summary(data),
+            )
         return task_id
 
     def poll(self, provider_job_id: str) -> Mapping[str, object]:
@@ -288,10 +429,18 @@ class KieVideoProviderAdapter:
                 error.code,
                 "KIE polling stopped after the first anomaly",
                 retryable=False,
+                http_status=error.http_status,
+                provider_error_summary=error.provider_error_summary,
             ) from None
         data = self._success_data(response)
         if data.get("taskId") != task_id or data.get("model") not in {None, KIE_MODEL_ID}:
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE task response identity is invalid", retryable=False)
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE task response identity is invalid",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_summary(data),
+            )
         state = data.get("state")
         mapped = {
             "waiting": "running",
@@ -301,16 +450,31 @@ class KieVideoProviderAdapter:
             "fail": "failed",
         }.get(state)
         if mapped is None:
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE task state is unsupported", retryable=False)
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE task state is unsupported",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_summary(data),
+            )
         result: dict[str, object] = {"state": mapped}
         cost = data.get("creditsConsumed")
         if cost is not None:
             if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
-                raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE task cost is invalid", retryable=False)
+                raise AdapterFailure(
+                    "KIE_RESPONSE_INVALID",
+                    "KIE task cost is invalid",
+                    retryable=False,
+                    http_status=200,
+                    provider_error_summary=self._provider_summary(data),
+                )
             result["cost_units"] = cost
         if mapped == "succeeded":
             result_uri = self._result_uri(data.get("resultJson"))
             self._completed[task_id] = {"result_uri": result_uri, **result}
+        elif mapped == "failed":
+            result["http_status"] = 200
+            result["provider_error_summary"] = self._provider_summary(data)
         return result
 
     def cancel(self, provider_job_id: str) -> None:
@@ -328,7 +492,13 @@ class KieVideoProviderAdapter:
             raise AdapterFailure("KIE_DOWNLOAD_INVALID", "KIE task has no completed artifact", retryable=False)
         content = self._download(str(completed["result_uri"]))
         if not content:
-            raise AdapterFailure("KIE_DOWNLOAD_INVALID", "KIE artifact is empty", retryable=False)
+            raise AdapterFailure(
+                "KIE_DOWNLOAD_INVALID",
+                "KIE artifact is empty",
+                retryable=False,
+                http_status=200,
+                provider_error_summary="Provider returned an empty artifact body",
+            )
         return {
             "content": content,
             "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
@@ -406,23 +576,48 @@ class KieVideoProviderAdapter:
         except Exception:
             raise AdapterFailure("KIE_DOWNLOAD_ERROR", "KIE artifact download failed unexpectedly", retryable=False) from None
 
-    @staticmethod
-    def _success_data(response: object) -> dict[str, object]:
+    def _success_data(self, response: object) -> dict[str, object]:
         if not isinstance(response, Mapping) or response.get("code") != 200 or not isinstance(response.get("data"), Mapping):
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE API returned an unsuccessful response", retryable=False)
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE API returned an unsuccessful response",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_summary(response),
+            )
         return dict(response["data"])
 
-    @staticmethod
-    def _result_uri(raw: object) -> str:
+    def _provider_summary(self, response: object) -> str:
+        return _provider_diagnostic_summary(response, credential=self._credential_resolver.resolve())
+
+    def _result_uri(self, raw: object) -> str:
         try:
             result = json.loads(raw) if isinstance(raw, str) else raw
         except json.JSONDecodeError:
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE result metadata is malformed", retryable=False) from None
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE result metadata is malformed",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_summary(raw),
+            ) from None
         if not isinstance(result, Mapping):
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE result metadata is malformed", retryable=False)
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE result metadata is malformed",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_summary(raw),
+            )
         urls = result.get("resultUrls")
         if not isinstance(urls, list) or len(urls) != 1 or not KieVideoProviderAdapter._safe_https_uri(urls[0]):
-            raise AdapterFailure("KIE_RESPONSE_INVALID", "KIE result URL is invalid", retryable=False)
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE result URL is invalid",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_summary(result),
+            )
         return str(urls[0])
 
     @staticmethod
@@ -432,8 +627,12 @@ class KieVideoProviderAdapter:
         parsed = urlparse(raw)
         return bool(parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password and not parsed.fragment)
 
-    @staticmethod
-    def _validated_task_id(raw: object) -> str:
-        if not isinstance(raw, str) or _TASK_ID.fullmatch(raw) is None or contains_sensitive_text(raw):
+    def _validated_task_id(self, raw: object) -> str:
+        if (
+            not isinstance(raw, str)
+            or _TASK_ID.fullmatch(raw) is None
+            or contains_sensitive_text(raw)
+            or raw == self._credential_resolver.resolve()
+        ):
             raise AdapterFailure("KIE_REQUEST_INVALID", "KIE task identity is invalid", retryable=False)
         return raw

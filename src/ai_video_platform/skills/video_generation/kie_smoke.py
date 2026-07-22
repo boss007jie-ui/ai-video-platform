@@ -1,4 +1,4 @@
-"""One-shot controller for the explicitly authorized KIE Revision A smoke."""
+"""One-shot controller for the explicitly authorized KIE Revision B smoke."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import time
 
+from .adapters import AdapterFailure
 from .interface import VideoGenerationInterface
 from .kie_adapter import KieCredentialResolver, KieReferenceImageUploader, KieVideoProviderAdapter, UrllibKieHttpTransport
 from .ledger import InMemoryVideoExecutionLedger
@@ -16,7 +17,7 @@ from .ledger import InMemoryVideoExecutionLedger
 
 AUTHORIZATION_ID = "FTG-P-VIDEO-001"
 WORK_ITEM_ID = "FT-05-001"
-MODEL_ID = "bytedance/seedance-2-mini"
+MODEL_ID = "bytedance/seedance-2-fast"
 PROMPT = (
     "A clean commercial product study of the exact handheld laser device shown in the reference images. "
     "Begin with the full side profile, then make one subtle push-in toward the front emitter and tail button. "
@@ -79,12 +80,12 @@ def build_smoke_request(
     return {
         "execution_package": dict(package),
         "approval_record": {
-            "approval_id": "ftg-p-video-001-revision-a",
+            "approval_id": "ftg-p-video-001-revision-b",
             "approval_type": "video_generation",
             "outcome": "approved",
             "authority": {"authority_id": "authorized-approval-boundary"},
             "decided_at": _timestamp(decided_at),
-            "decision_ref": "FTG-P-VIDEO-001-REVISION-A",
+            "decision_ref": "FTG-P-VIDEO-001-REVISION-B",
             "subject_ref": {"digest": package["package_digest"]},
             "valid_until": _timestamp(decided_at + timedelta(minutes=15)),
         },
@@ -97,7 +98,7 @@ def build_smoke_request(
             "timeout_seconds": 600,
         },
         "provider_binding": {
-            "binding_ref": "ftg-p-video-001-revision-a",
+            "binding_ref": "ftg-p-video-001-revision-b",
             "provider_id": "kie",
             "model_id": MODEL_ID,
             "credential_ref": "env://KIE_API_KEY",
@@ -113,7 +114,7 @@ def build_smoke_request(
             "generate_audio": False,
             "web_search": False,
         },
-        "idempotency_key": "ftg-p-video-001-revision-a-20260722",
+        "idempotency_key": "ftg-p-video-001-revision-b-20260722",
     }
 
 
@@ -175,7 +176,13 @@ def run_smoke(
             if polled["state"] == "succeeded":
                 break
             if polled["state"] != "polling":
-                raise RuntimeError("KIE smoke reached a non-success terminal state")
+                raise AdapterFailure(
+                    "KIE_PROVIDER_FAILED",
+                    "KIE smoke reached a non-success terminal state",
+                    retryable=False,
+                    http_status=polled.get("provider_http_status"),
+                    provider_error_summary=polled.get("provider_error_summary"),
+                )
             time.sleep(poll_interval_seconds)
         downloaded = interface.download_video(submitted_job_id, now=_utc_now())
         manifest = downloaded["asset_manifest_request"]
@@ -198,6 +205,12 @@ def run_smoke(
         return result
     except Exception as error:
         record = ledger.get(submitted_job_id) if submitted_job_id is not None else None
+        http_status = getattr(error, "http_status", None)
+        provider_error_summary = getattr(error, "provider_error_summary", None)
+        details = getattr(error, "details", None)
+        if isinstance(details, Mapping):
+            http_status = details.get("http_status", http_status)
+            provider_error_summary = details.get("provider_error_summary", provider_error_summary)
         result = {
             "authorization_id": AUTHORIZATION_ID,
             "work_item_id": WORK_ITEM_ID,
@@ -206,6 +219,8 @@ def run_smoke(
             "generation_submissions": generation_submissions,
             "ledger_state_chain": [item["state"] for item in record["history"]] if record else [],
             "error_type": type(error).__name__,
+            "http_status": http_status,
+            "provider_error_summary": provider_error_summary,
             "late_artifact_download_performed": False,
             "artifact_uri_valid": False,
             "finished_at": _timestamp(_utc_now()),

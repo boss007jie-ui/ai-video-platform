@@ -40,6 +40,7 @@ _SENSITIVE_VALUE = re.compile(
     r"\bgh[pousr]_[A-Za-z0-9]{20,}\b|"
     r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b|"
     r"\bAKIA[0-9A-Z]{16}\b|"
+    r"(?:[?&](?:token|key|signature|sig|credential|auth)=)[^&\s]+|"
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
     r")",
     re.IGNORECASE,
@@ -52,13 +53,16 @@ def contains_sensitive_text(value: str) -> bool:
     return _SENSITIVE_VALUE.search(value) is not None
 
 
-def _sanitize(value: Any, *, key: str = "") -> Any:
+def sanitize_sensitive(value: Any, *, key: str = "") -> Any:
     if _SENSITIVE_KEY.search(key):
         return "[REDACTED]"
     if isinstance(value, Mapping):
-        return {str(nested_key): _sanitize(nested, key=str(nested_key)) for nested_key, nested in value.items()}
+        return {
+            str(nested_key): sanitize_sensitive(nested, key=str(nested_key))
+            for nested_key, nested in value.items()
+        }
     if isinstance(value, (list, tuple)):
-        return [_sanitize(item) for item in value]
+        return [sanitize_sensitive(item) for item in value]
     if isinstance(value, str) and _SENSITIVE_VALUE.search(value):
         return "[REDACTED]"
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -77,11 +81,11 @@ class GenerationError(ValueError):
         retryable: bool = False,
     ) -> None:
         self.code = code
-        safe_message = _sanitize(message)
+        safe_message = sanitize_sensitive(message)
         self.message = safe_message if isinstance(safe_message, str) else "Rejected unsafe input"
         super().__init__(self.message)
-        self.field_paths = tuple(str(_sanitize(path)) for path in field_paths)
-        self.details = _sanitize(details or {})
+        self.field_paths = tuple(str(sanitize_sensitive(path)) for path in field_paths)
+        self.details = sanitize_sensitive(details or {})
         self.retryable = retryable
 
     def to_dict(self) -> dict[str, object]:
@@ -98,5 +102,5 @@ class GenerationError(ValueError):
             "retryable": self.retryable,
             "message": self.message,
             "field_paths": list(self.field_paths),
-            "details": _sanitize(self.details),
+            "details": sanitize_sensitive(self.details),
         }

@@ -16,9 +16,11 @@ explicit adapter and ledger. The shipped Fake adapter is deterministic and
 in-memory; Rejecting and NetworkBlocked adapters fail closed. The KIE production
 adapter is available only by explicit Python construction and reads `KIE_API_KEY`
 through its dedicated resolver. Approved local reference images use a separate,
-digest-verified Base64 uploader before generation; the current KIE response field
-is `data.downloadUrl`, with `data.fileUrl` accepted only as a legacy-compatible
-fallback. The generic module CLI never selects the production adapter or uploader.
+digest-verified multipart uploader at KIE's `file-stream-upload` endpoint before
+generation. Uploads use the Revision B browser-header set and the exact `file`,
+`uploadPath`, and `fileName` form fields. The current KIE response field is
+`data.downloadUrl`, with `data.fileUrl` or a URL derived from `data.filePath`
+accepted as fallbacks. The generic module CLI never selects the production adapter or uploader.
 KIE execution results record `provider_network_performed: true`; offline adapters
 continue to record `false`.
 
@@ -55,16 +57,18 @@ module CLI never silently selects an adapter and thus fails closed for execution
 commands unless the host supplies one.
 
 The authorized KIE path is fixed to provider `kie`, model
-`bytedance/seedance-2-mini`, 480p, 16:9, no generated audio, no web search, at most
+`bytedance/seedance-2-fast`, 480p, 16:9, no generated audio, no web search, at most
 6 seconds, exactly one request slot, one concurrent task, at most two attempts, and
 at most 600 seconds. It requires two or more HTTPS reference images. Provider task
 results are queried through KIE's unified task endpoint; `creditsConsumed` is stored
 as `provider_cost_units`, and downloaded bytes are digest-verified before producing
 an opaque `kie://...` AssetManifestRequest URI. The documented KIE Market API does
 not expose task cancellation, so the adapter rejects `cancel` explicitly instead of
-claiming that a remote task was cancelled. Under Revision A, the first polling
+claiming that a remote task was cancelled. Under Revision B, the first polling
 transport or response anomaly is terminal: no automatic poll retry is permitted,
 all later polling stops, and any late artifact must not be downloaded or registered.
+HTTP failures and Provider business-error responses preserve a redacted status and
+body summary for the smoke receipt; authorization and credential material remain excluded.
 
 Stable errors cover package identity/version/digest, ApprovalRecord effectiveness
 and subject binding, budgets, Provider binding, opaque credential reference, and
