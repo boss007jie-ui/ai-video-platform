@@ -1,0 +1,63 @@
+{
+  "authorization_id": "FTG-0-20260720-001",
+  "work_item_id": "FT-04-001",
+  "captured_at": "2026-07-22T08:47:17Z",
+  "runtime": "Python 3.14 (local machine)",
+  "provider_smoke": "NOT_AUTHORIZED",
+  "network_used": false,
+  "credential_accessed": false,
+  "binary_media_created": false,
+  "commands": [
+    {
+      "sequence": 1,
+      "command": "py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli inspect-generation-request --input src\\ai_video_platform\\skills\\product_image_panel_generation\\evidence\\offline-release-20260722\\sanitized-panel-fake-request.json",
+      "pythonpath": "src",
+      "exit_code": 0,
+      "stdout": "01-inspect.stdout.json",
+      "stdout_sha256": "be42f6197fb547ac540032a26017c9caa473edd54296f41625502094a83cf928"
+    },
+    {
+      "sequence": 2,
+      "command": "py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli generate-panel --input src\\ai_video_platform\\skills\\product_image_panel_generation\\evidence\\offline-release-20260722\\sanitized-panel-fake-request.json --adapter fake",
+      "pythonpath": "src",
+      "exit_code": 0,
+      "stdout": "02-fake.stdout.json",
+      "stdout_sha256": "c8eef973c374a92c1dd1dd40a482bd7cb6f6ab9db258ac9b2c27a625639e7ae3"
+    },
+    {
+      "sequence": 3,
+      "command": "py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli generate-panel --input src\\ai_video_platform\\skills\\product_image_panel_generation\\evidence\\offline-release-20260722\\sanitized-panel-fake-request.json --adapter fake",
+      "pythonpath": "src",
+      "exit_code": 0,
+      "stdout": "03-replay.stdout.json",
+      "stdout_sha256": "dd1da05edd2edbdf977ff2e70eef79cedeccc761970a3e03a3dda2fa5bf31082"
+    },
+    {
+      "sequence": 4,
+      "command": "py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli generate-panel --input src\\ai_video_platform\\skills\\product_image_panel_generation\\evidence\\offline-release-20260722\\sanitized-panel-rejecting-request.json",
+      "pythonpath": "src",
+      "exit_code": 3,
+      "stdout": "04-rejecting.stdout.json",
+      "stdout_sha256": "40b11d4b190dbe6e29d61e210c503a3ff62c7b58889c45892808289a301511bf"
+    }
+  ],
+  "adapter_invocation_count": {
+    "after_first_fake_generation": 1,
+    "after_exact_replay": 1,
+    "delta_during_replay": 0,
+    "evidence": [
+      "02-fake.stdout.json#generation_record.total_attempts",
+      "03-replay.stdout.json#replayed",
+      "tests.skills.product_image_panel_generation.test_image_panel_adapters.ImagePanelAdapterTests.test_exact_idempotent_replay_does_not_repeat_provider_side_effect"
+    ]
+  },
+  "rejecting_result": {
+    "status": "failed",
+    "error_code": "IMAGE_PANEL_PROVIDER_NOT_AUTHORIZED"
+  },
+  "ledger": {
+    "path": "ledger-receipt.json",
+    "sha256": "bd1a996a6884bd640d6cdc0c618899b428159b807c4166af3a5f1062b04cd8e8",
+    "record_count": 2
+  }
+}
