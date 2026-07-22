@@ -1,0 +1,109 @@
+{
+  "case_id": "DV-codex-03-storyboard-001",
+  "workline_id": "codex-03",
+  "owner": "codex-03",
+  "authorization_id": "FTG-0-20260720-001",
+  "work_item_id": "FT-03-001",
+  "issued_by": "Hermes",
+  "issued_at": "2026-07-22",
+  "capability": "V-01 story breakdown semantics, V-02 continuity semantics, and the Storyboard half of V-05 (shot panel planning only): public input/output shapes, continuity semantics, and offline failure semantics. Storyboard semantic ownership stays separate from Storyboard Master / Video Planning asset-mapping ownership; this case assesses public behavior and continuity only and may not declare a whole-project winner.",
+  "legacy_root_ids": [
+    "LSL-02",
+    "LSL-04"
+  ],
+  "excluded_roots": {
+    "LSL-01": "no storyboard code surface found in 09_Tools/tests enumeration",
+    "LSL-03": "duplicates LSL-02 file family and is the active CatPaw workspace; not needed for this case",
+    "LSL-05": "outside the LSL-01/02/03/04/06 bound requested by DR-FT-03-001",
+    "LSL-06": "storyboard surface is a subset of LSL-04 (fewer continuity modules); LSL-04 coverage is strictly more complete"
+  },
+  "relative_path_allowlist": {
+    "LSL-02": [
+      "09_Tools/product_ad_workflow/story_breakdown_builder.py",
+      "09_Tools/product_ad_workflow/storyboard_constants.py",
+      "09_Tools/product_ad_workflow/continuity_bible_builder.py",
+      "09_Tools/product_ad_workflow/shot_panel_planner.py",
+      "07_Docs/context/storyboard_asset_continuity_permanent_rules.md",
+      "tests/test_storyboard_constants.py",
+      "tests/test_shot_panel_and_prompt.py"
+    ],
+    "LSL-04": [
+      "09_Tools/product_ad_workflow/storyboard_types.py",
+      "09_Tools/product_ad_workflow/story_breakdown.py",
+      "09_Tools/product_ad_workflow/continuity_entities.py",
+      "09_Tools/product_ad_workflow/continuity_inheritance.py",
+      "09_Tools/product_ad_workflow/continuity_validator.py",
+      "09_Tools/product_ad_workflow/shot_panel_planner.py",
+      "tests/test_continuity_entities.py",
+      "tests/test_continuity_inheritance.py"
+    ]
+  },
+  "source_commit_dirty_state": {
+    "LSL-02": {
+      "branch": "NOT_A_GIT_REPOSITORY",
+      "commit": "NOT_A_GIT_REPOSITORY",
+      "dirty": "NOT_APPLICABLE",
+      "t0_action": "read-only Git metadata confirmed at signing; Audit lineage not treated as current Git state"
+    },
+    "LSL-04": {
+      "branch": "master",
+      "commit": "11f2f2b91632c9e8cef2712a15e17d9e017b70f2",
+      "dirty": "2 paths by read-only porcelain count at signing",
+      "t0_action": "read-only Git metadata confirmed without listing, cleanup, or rollback"
+    }
+  },
+  "source_sha256": [
+    { "legacy_root_id": "LSL-02", "relative_path": "09_Tools/product_ad_workflow/story_breakdown_builder.py", "audit_sha256": "fe7acd07041bd24540abe0c6ae60d70b9f854c04503d15a6fbcb8da850777ac2" },
+    { "legacy_root_id": "LSL-02", "relative_path": "09_Tools/product_ad_workflow/storyboard_constants.py", "audit_sha256": "32ce2a9044e5d3fac706a4e4067dc6c70ee8a29a5df1f31c18a1e59dc2f9a369" },
+    { "legacy_root_id": "LSL-02", "relative_path": "09_Tools/product_ad_workflow/continuity_bible_builder.py", "audit_sha256": "668680207cecf778e57a49aac51649e1ba9f5727ffbf97b3e30129aa1f4030ae" },
+    { "legacy_root_id": "LSL-02", "relative_path": "09_Tools/product_ad_workflow/shot_panel_planner.py", "audit_sha256": "e4168d6a2a798b73db8a9e477683417cd828605ea9478a6afaa5bafcc01f2d58" },
+    { "legacy_root_id": "LSL-02", "relative_path": "07_Docs/context/storyboard_asset_continuity_permanent_rules.md", "audit_sha256": "b116bd8cccc8bae6e397ddb0ac3dc2e97a9d7f573d0bc9bd8bb45e729289d23e" },
+    { "legacy_root_id": "LSL-02", "relative_path": "tests/test_storyboard_constants.py", "audit_sha256": "df1f4f23e1ac48fa3d450ae2d12b126dc3c4cb2464a75086b37f13bf696942e4" },
+    { "legacy_root_id": "LSL-02", "relative_path": "tests/test_shot_panel_and_prompt.py", "audit_sha256": "77ddeff421edae2e040cdcb9293f51378566dd33f416cf433c5705d1932bf30f" },
+    { "legacy_root_id": "LSL-04", "relative_path": "09_Tools/product_ad_workflow/storyboard_types.py", "audit_sha256": "5be991757bc6efb93d990da5f61006ff9305dc88bd7476eda5d8a41c7f03d9e7" },
+    { "legacy_root_id": "LSL-04", "relative_path": "09_Tools/product_ad_workflow/story_breakdown.py", "audit_sha256": "6f8b2513f9d6de02ce6dd50bd94c2fcb2aa592ec2846c28cb4b4526c02a83270" },
+    { "legacy_root_id": "LSL-04", "relative_path": "09_Tools/product_ad_workflow/continuity_entities.py", "audit_sha256": "7fb392fe8804dfa74684db8190d3cf9fbc0adb7943914892ed9320654c16d882" },
+    { "legacy_root_id": "LSL-04", "relative_path": "09_Tools/product_ad_workflow/continuity_inheritance.py", "audit_sha256": "34af1d6950a272b8ac9ed850fffac5d1159e3c3db4f4a10c51b828ebc752fd33" },
+    { "legacy_root_id": "LSL-04", "relative_path": "09_Tools/product_ad_workflow/continuity_validator.py", "audit_sha256": "9984b2d39d9d13ebf5a9ca68b68717f7626752c178d60935ca4a98a3406a6c15" },
+    { "legacy_root_id": "LSL-04", "relative_path": "09_Tools/product_ad_workflow/shot_panel_planner.py", "audit_sha256": "aa0ff24e0933f477f316794f937c9d9b534860e62db5184ec8a1c1469a42d2a5" },
+    { "legacy_root_id": "LSL-04", "relative_path": "tests/test_continuity_entities.py", "audit_sha256": "9e4cca32e731ee16880cb3f1df64b4f43296560fa4cd01562ae0c67b3dc60639" },
+    { "legacy_root_id": "LSL-04", "relative_path": "tests/test_continuity_inheritance.py", "audit_sha256": "50f5823ed5f3efdb1d54df93f3ce8133ec9332e71ed4a3dc024f87a34b23e17d" }
+  ],
+  "tests_allowed": [
+    "T0: read-only SHA-256 verification, Git metadata, Python AST imports/entrypoints/schemas/side-effect inspection for the fifteen allowlisted files; any hash mismatch = source drift, stop and report",
+    "T1: approved Foundation Contract parsers plus synthetic Story/Scene/Beat/Shot/Panel fixtures in isolated ignored staging only",
+    "T2: minimal candidate tests with fixed time, seed, and dependencies; stop if dependency closure exceeds the allowlist",
+    "T3: new-platform fake/rejecting adapters, permission/path escape, retry/cancellation, and redaction checks; network remains denied"
+  ],
+  "side_effect_controls": {
+    "network": "DENY",
+    "subprocess": "DENY for staged candidate execution; Git read-only metadata commands only",
+    "filesystem": "Legacy roots read-only; staging copy only under ignored .dv-staging/DV-codex-03-storyboard-001",
+    "secret_redaction": "Do not read credential files or .env; do not display source text, environment values, Provider payloads, or suspected secret values in evidence",
+    "historical_provider_execution": "FORBIDDEN",
+    "adoption_manifest": "No automatic wrap, adoption, migration, deprecation, or 08_ADOPTION_MANIFEST.json change; CatPaw canonical/adopt/migrate language is non-executing evidence only"
+  },
+  "expected_interface_mapping": {
+    "input_foundation_contracts": [
+      "avp.contract.task-spec",
+      "avp.contract.task-context",
+      "avp.contract.product-context-bundle",
+      "avp.contract.reference-manifest"
+    ],
+    "output_foundation_contracts": [
+      "avp.contract.asset-manifest",
+      "avp.contract.feedback-event",
+      "avp.contract.skill-execution-event"
+    ],
+    "public_commands": [
+      "create-storyboard",
+      "revise-storyboard",
+      "validate-continuity"
+    ],
+    "foundation_registry_change": "NONE"
+  },
+  "evidence_output": "docs/dependencies/change-requests/codex-03/DV-codex-03-storyboard-001-evidence.md",
+  "expiry": "2026-07-29T23:59:59+08:00",
+  "adoption_authority": "NONE",
+  "provider_smoke": "NOT_AUTHORIZED"
+}
