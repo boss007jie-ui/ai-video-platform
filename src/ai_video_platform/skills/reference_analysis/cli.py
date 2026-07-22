@@ -39,3 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
