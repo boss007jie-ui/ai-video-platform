@@ -22,12 +22,16 @@ class AdapterFailure(RuntimeError):
         retryable: bool,
         http_status: int | None = None,
         provider_error_summary: str | None = None,
+        download_http_status_chain: list[int] | None = None,
+        download_attempts: list[dict[str, object]] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
         self.http_status = http_status
         self.provider_error_summary = provider_error_summary
+        self.download_http_status_chain = list(download_http_status_chain or [])
+        self.download_attempts = [dict(item) for item in (download_attempts or [])]
 
 
 class FakeVideoProviderAdapter:

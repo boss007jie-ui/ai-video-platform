@@ -307,8 +307,57 @@ class VideoGenerationInterface:
             "provenance": {"source_job_id": job_id, "execution_mode": self._execution_mode()},
             "library_write_performed": False,
         }
+        download_observation = self._download_observation(artifact)
         evaluated_at = self._now(now)
-        return self._result(ledger.transition(job_id, expected_states={"succeeded"}, state="downloaded", at=self._format_time(evaluated_at), asset_manifest_request=manifest_request))
+        return self._result(ledger.transition(
+            job_id,
+            expected_states={"succeeded"},
+            state="downloaded",
+            at=self._format_time(evaluated_at),
+            asset_manifest_request=manifest_request,
+            **download_observation,
+        ))
+
+    @staticmethod
+    def _download_observation(artifact: Mapping[str, object]) -> dict[str, object]:
+        chain = artifact.get("download_http_status_chain")
+        attempts = artifact.get("download_attempts")
+        if chain is None and attempts is None:
+            return {}
+        if (
+            not isinstance(chain, list)
+            or not chain
+            or len(chain) > 4
+            or any(isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599 for status in chain)
+            or not isinstance(attempts, list)
+            or not 1 <= len(attempts) <= 2
+        ):
+            raise GenerationError(GenerationErrorCode.DOWNLOAD_INTEGRITY_FAILED, "Download observation metadata is invalid")
+        normalized: list[dict[str, object]] = []
+        expected_fields = {
+            "attempt", "refresh_http_status", "download_http_status", "outcome", "retry_reason",
+        }
+        for index, raw in enumerate(attempts, start=1):
+            if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+                raise GenerationError(GenerationErrorCode.DOWNLOAD_INTEGRITY_FAILED, "Download observation metadata is invalid")
+            refresh_status = raw.get("refresh_http_status")
+            download_status = raw.get("download_http_status")
+            reason = raw.get("retry_reason")
+            if (
+                raw.get("attempt") != index
+                or isinstance(refresh_status, bool)
+                or not isinstance(refresh_status, int)
+                or not 100 <= refresh_status <= 599
+                or (download_status is not None and (isinstance(download_status, bool) or not isinstance(download_status, int) or not 100 <= download_status <= 599))
+                or raw.get("outcome") not in {"retry", "success", "failed"}
+                or (reason is not None and (not isinstance(reason, str) or re.fullmatch(r"[A-Z0-9_]+", reason) is None))
+            ):
+                raise GenerationError(GenerationErrorCode.DOWNLOAD_INTEGRITY_FAILED, "Download observation metadata is invalid")
+            normalized.append(dict(raw))
+        return {
+            "download_http_status_chain": list(chain),
+            "download_attempts": normalized,
+        }
 
     def recover_video(self, job_id: str, *, now: datetime | None = None) -> dict[str, object]:
         del now
@@ -336,6 +385,10 @@ class VideoGenerationInterface:
             details["http_status"] = error.http_status
         if error.provider_error_summary is not None:
             details["provider_error_summary"] = error.provider_error_summary
+        if error.download_http_status_chain:
+            details["download_http_status_chain"] = list(error.download_http_status_chain)
+        if error.download_attempts:
+            details["download_attempts"] = [dict(item) for item in error.download_attempts]
         return details
 
     @staticmethod

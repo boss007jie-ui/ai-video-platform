@@ -1,4 +1,4 @@
-"""One-shot controller for the explicitly authorized KIE Revision C smoke."""
+"""One-shot controller for the explicitly authorized KIE Revision D smoke."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from .kie_adapter import KieCredentialResolver, KieReferenceImageUploader, KieVi
 from .ledger import InMemoryVideoExecutionLedger
 
 
-AUTHORIZATION_ID = "FTG-P-VIDEO-001"
+AUTHORIZATION_ID = "FTG-P-VIDEO-002"
 WORK_ITEM_ID = "FT-05-001"
 MODEL_ID = "bytedance/seedance-2-fast"
 PROMPT = (
@@ -110,7 +110,7 @@ def _finalize_secret_scan(
 
 
 def _default_reservation_path() -> Path:
-    return Path(__file__).resolve().parent / "evidence" / "ftg-p-video-001-revision-c-reservation.json"
+    return Path(__file__).resolve().parent / "evidence" / "ftg-p-video-002-revision-d-reservation.json"
 
 
 def load_execution_package(path: Path) -> dict[str, object]:
@@ -149,25 +149,25 @@ def build_smoke_request(
     return {
         "execution_package": dict(package),
         "approval_record": {
-            "approval_id": "ftg-p-video-001-revision-c",
+            "approval_id": "ftg-p-video-002-revision-d",
             "approval_type": "video_generation",
             "outcome": "approved",
             "authority": {"authority_id": "authorized-approval-boundary"},
             "decided_at": _timestamp(decided_at),
-            "decision_ref": "FTG-P-VIDEO-001-REVISION-C",
+            "decision_ref": "FTG-P-VIDEO-002-REVISION-D",
             "subject_ref": {"digest": package["package_digest"]},
-            "valid_until": _timestamp(decided_at + timedelta(minutes=15)),
+            "valid_until": _timestamp(decided_at + timedelta(minutes=30)),
         },
         "budget": {
-            "estimated_cost_units": 120,
-            "max_cost_units": 120,
+            "estimated_cost_units": 100,
+            "max_cost_units": 100,
             "max_requests": 1,
             "max_concurrency": 1,
             "max_attempts": 2,
-            "timeout_seconds": 600,
+            "timeout_seconds": 1800,
         },
         "provider_binding": {
-            "binding_ref": "ftg-p-video-001-revision-c",
+            "binding_ref": "ftg-p-video-002-revision-d",
             "provider_id": "kie",
             "model_id": MODEL_ID,
             "credential_ref": "env://KIE_API_KEY",
@@ -183,7 +183,7 @@ def build_smoke_request(
             "generate_audio": False,
             "web_search": False,
         },
-        "idempotency_key": "ftg-p-video-001-revision-c-20260722",
+        "idempotency_key": "ftg-p-video-002-revision-d-20260722",
     }
 
 
@@ -209,7 +209,7 @@ def run_smoke(
         json.dump({
             "authorization_id": AUTHORIZATION_ID,
             "work_item_id": WORK_ITEM_ID,
-            "revision": "C",
+            "revision": "D",
             "started_at": _timestamp(started_at),
             "state": "ATTEMPT_RESERVED",
         }, stream, ensure_ascii=False, indent=2, sort_keys=True)
@@ -219,7 +219,7 @@ def run_smoke(
         json.dump({
             "authorization_id": AUTHORIZATION_ID,
             "work_item_id": WORK_ITEM_ID,
-            "revision": "C",
+            "revision": "D",
             "started_at": _timestamp(started_at),
             "state": "ATTEMPT_RESERVED",
         }, stream, ensure_ascii=False, indent=2, sort_keys=True)
@@ -272,7 +272,7 @@ def run_smoke(
         result = {
             "authorization_id": AUTHORIZATION_ID,
             "work_item_id": WORK_ITEM_ID,
-            "revision": "C",
+            "revision": "D",
             "provider_smoke": "PASS",
             "task_id": task_id,
             "generation_submissions": generation_submissions,
@@ -283,6 +283,9 @@ def run_smoke(
             "credits_consumed": record.get("provider_cost_units"),
             "http_status": transport.http_status_chain[-1] if transport.http_status_chain else None,
             "http_status_chain": list(transport.http_status_chain),
+            "download_http_status_chain": list(downloaded.get("download_http_status_chain", [])),
+            "download_attempts": list(downloaded.get("download_attempts", [])),
+            "download_http_status_chain_provenance": "CAPTURED_BY_REVISION_D_CONTROLLER",
             "contract_status": manifest["contract_status"],
             "finished_at": _timestamp(_utc_now()),
         }
@@ -308,7 +311,7 @@ def run_smoke(
         result = {
             "authorization_id": AUTHORIZATION_ID,
             "work_item_id": WORK_ITEM_ID,
-            "revision": "C",
+            "revision": "D",
             "provider_smoke": "FAIL",
             "task_id": task_id,
             "generation_submissions": generation_submissions,
@@ -320,6 +323,17 @@ def run_smoke(
             "error_type": type(error).__name__,
             "http_status": http_status,
             "http_status_chain": list(transport.http_status_chain),
+            "download_http_status_chain": (
+                list(details.get("download_http_status_chain", []))
+                if isinstance(details, Mapping)
+                else list(adapter.download_http_status_chain)
+            ),
+            "download_attempts": (
+                list(details.get("download_attempts", []))
+                if isinstance(details, Mapping)
+                else list(adapter.download_attempts)
+            ),
+            "download_http_status_chain_provenance": "CAPTURED_BY_REVISION_D_CONTROLLER",
             "provider_error_summary": provider_error_summary,
             "late_artifact_download_performed": False,
             "artifact_uri_valid": False,

@@ -33,7 +33,7 @@ class RecordingTransport:
         self.requests: list[dict[str, object]] = []
         self.downloads: list[str] = []
         self.http_status_chain: list[int] = []
-        self.poll_responses: list[dict[str, object]] = [{
+        completed_response: dict[str, object] = {
             "code": 200,
             "msg": "success",
             "data": {
@@ -51,7 +51,12 @@ class RecordingTransport:
                 "progress": 100,
                 "creditsConsumed": 3,
             },
-        }]
+        }
+        self.poll_responses: list[dict[str, object]] = [
+            completed_response,
+            {**completed_response, "data": dict(completed_response["data"])},
+            {**completed_response, "data": dict(completed_response["data"])},
+        ]
 
     def request_json(
         self,
@@ -144,7 +149,7 @@ def kie_request() -> dict[str, object]:
 
 
 class KieAdapterTests(unittest.TestCase):
-    def test_smoke_request_is_fixed_to_revision_c_envelope(self) -> None:
+    def test_smoke_request_is_fixed_to_revision_d_envelope(self) -> None:
         package = generation_request()["execution_package"]
         digest = package["asset_mapping"][0]["sha256"]
         package["asset_mapping"].append({
@@ -162,24 +167,24 @@ class KieAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(request["budget"], {
-            "estimated_cost_units": 120,
-            "max_cost_units": 120,
+            "estimated_cost_units": 100,
+            "max_cost_units": 100,
             "max_requests": 1,
             "max_concurrency": 1,
             "max_attempts": 2,
-            "timeout_seconds": 600,
+            "timeout_seconds": 1800,
         })
         self.assertEqual(request["output"]["duration"], 5)
         self.assertEqual(request["output"]["resolution"], "480p")
         self.assertEqual(request["provider_binding"]["model_id"], "bytedance/seedance-2-fast")
-        self.assertEqual(request["approval_record"]["approval_id"], "ftg-p-video-001-revision-c")
-        self.assertEqual(request["approval_record"]["decision_ref"], "FTG-P-VIDEO-001-REVISION-C")
-        self.assertEqual(request["provider_binding"]["binding_ref"], "ftg-p-video-001-revision-c")
-        self.assertEqual(request["idempotency_key"], "ftg-p-video-001-revision-c-20260722")
+        self.assertEqual(request["approval_record"]["approval_id"], "ftg-p-video-002-revision-d")
+        self.assertEqual(request["approval_record"]["decision_ref"], "FTG-P-VIDEO-002-REVISION-D")
+        self.assertEqual(request["provider_binding"]["binding_ref"], "ftg-p-video-002-revision-d")
+        self.assertEqual(request["idempotency_key"], "ftg-p-video-002-revision-d-20260722")
         self.assertFalse(request["output"]["generate_audio"])
         self.assertFalse(request["output"]["web_search"])
 
-    def test_revision_c_success_receipt_keeps_hex_task_id_and_records_scan(self) -> None:
+    def test_revision_d_success_receipt_keeps_task_id_and_download_observability(self) -> None:
         import hashlib
         import json
         import tempfile
@@ -190,7 +195,8 @@ class KieAdapterTests(unittest.TestCase):
         class HexTaskTransport(RecordingTransport):
             def __init__(self) -> None:
                 super().__init__()
-                self.poll_responses[0]["data"]["taskId"] = task_id
+                for response in self.poll_responses:
+                    response["data"]["taskId"] = task_id
 
             def request_json(self, method, path, api_key, *, payload=None, query=None):
                 if method == "POST":
@@ -206,8 +212,8 @@ class KieAdapterTests(unittest.TestCase):
                 return super().request_json(method, path, api_key, payload=payload, query=query)
 
         package = generation_request()["execution_package"]
-        first_content = b"revision-c-reference-one"
-        second_content = b"revision-c-reference-two"
+        first_content = b"revision-d-reference-one"
+        second_content = b"revision-d-reference-two"
         first_digest = "sha256:" + hashlib.sha256(first_content).hexdigest()
         second_digest = "sha256:" + hashlib.sha256(second_content).hexdigest()
         asset_mapping = [
@@ -248,7 +254,7 @@ class KieAdapterTests(unittest.TestCase):
                 patch("ai_video_platform.skills.video_generation.kie_smoke.KieCredentialResolver", return_value=resolver),
                 patch(
                     "ai_video_platform.skills.video_generation.kie_smoke._default_reservation_path",
-                    return_value=root / "revision-c-reservation.json",
+                    return_value=root / "revision-d-reservation.json",
                 ),
             ):
                 receipt = run_smoke(
@@ -272,10 +278,23 @@ class KieAdapterTests(unittest.TestCase):
                     )
                 self.assertEqual(sum(item.get("method") == "POST" for item in transport.requests), post_count)
 
-        self.assertEqual(receipt["revision"], "C")
+        self.assertEqual(receipt["revision"], "D")
         self.assertEqual(receipt["task_id"], task_id)
+        self.assertEqual(receipt["generation_submissions"], 1)
         self.assertEqual(receipt["http_status"], 200)
-        self.assertEqual(receipt["http_status_chain"], [200, 200, 200, 200, 200])
+        self.assertEqual(receipt["http_status_chain"], [200, 200, 200, 200, 200, 200])
+        self.assertEqual(receipt["download_http_status_chain"], [200, 200])
+        self.assertEqual(receipt["download_attempts"], [{
+            "attempt": 1,
+            "refresh_http_status": 200,
+            "download_http_status": 200,
+            "outcome": "success",
+            "retry_reason": None,
+        }])
+        self.assertEqual(
+            receipt["download_http_status_chain_provenance"],
+            "CAPTURED_BY_REVISION_D_CONTROLLER",
+        )
         self.assertEqual(receipt["secret_scan_matches"], 0)
         self.assertEqual(receipt["secret_scan_status"], "PASS")
         self.assertEqual(persisted, receipt)
@@ -448,7 +467,7 @@ class KieAdapterTests(unittest.TestCase):
         self.assertIn("stored without URL", captured.exception.provider_error_summary)
         self.assertNotIn("synthetic-value", str(captured.exception))
 
-    def test_revision_c_failure_receipt_records_http_status_and_redacts_credential(self) -> None:
+    def test_revision_d_failure_receipt_records_http_status_and_redacts_credential(self) -> None:
         import json
         import tempfile
 
@@ -484,7 +503,7 @@ class KieAdapterTests(unittest.TestCase):
                 patch("ai_video_platform.skills.video_generation.kie_smoke.KieCredentialResolver", return_value=resolver),
                 patch(
                     "ai_video_platform.skills.video_generation.kie_smoke._default_reservation_path",
-                    return_value=root / "revision-c-reservation.json",
+                    return_value=root / "revision-d-reservation.json",
                 ),
             ):
                 with self.assertRaises(AdapterFailure):
@@ -511,7 +530,7 @@ class KieAdapterTests(unittest.TestCase):
         self.assertEqual(receipt["secret_scan_matches"], 0)
         self.assertNotIn(credential, json.dumps(receipt))
 
-    def test_revision_c_missing_credential_does_not_consume_reservation(self) -> None:
+    def test_revision_d_missing_credential_does_not_consume_reservation(self) -> None:
         import json
         import tempfile
 
@@ -529,7 +548,7 @@ class KieAdapterTests(unittest.TestCase):
             root = Path(directory)
             package_path = root / "package.json"
             package_path.write_text(json.dumps(package), encoding="utf-8")
-            reservation = root / "revision-c-reservation.json"
+            reservation = root / "revision-d-reservation.json"
             with (
                 patch(
                     "ai_video_platform.skills.video_generation.kie_smoke.KieCredentialResolver",
@@ -553,7 +572,7 @@ class KieAdapterTests(unittest.TestCase):
             self.assertFalse(reservation.exists())
             self.assertFalse((root / "evidence" / "provider-attempt.json").exists())
 
-    def test_revision_c_download_403_receipt_keeps_cost_and_succeeded_ledger(self) -> None:
+    def test_revision_d_download_403_exhaustion_receipt_keeps_cost_and_observability(self) -> None:
         import hashlib
         import json
         import tempfile
@@ -602,7 +621,7 @@ class KieAdapterTests(unittest.TestCase):
                 patch("ai_video_platform.skills.video_generation.kie_smoke.KieCredentialResolver", return_value=resolver),
                 patch(
                     "ai_video_platform.skills.video_generation.kie_smoke._default_reservation_path",
-                    return_value=root / "revision-c-reservation.json",
+                    return_value=root / "revision-d-reservation.json",
                 ),
             ):
                 with self.assertRaises(Exception):
@@ -616,10 +635,22 @@ class KieAdapterTests(unittest.TestCase):
             receipt = json.loads((evidence_dir / "provider-result.json").read_text(encoding="utf-8"))
 
         self.assertEqual(receipt["task_id"], "task_bytedance_safe_001")
+        self.assertEqual(receipt["generation_submissions"], 1)
         self.assertEqual(receipt["credits_consumed"], 3)
         self.assertEqual(receipt["ledger_state_chain"][-1], "succeeded")
         self.assertEqual(receipt["http_status"], 403)
-        self.assertEqual(receipt["http_status_chain"], [200, 200, 200, 200, 403])
+        self.assertEqual(receipt["http_status_chain"], [200, 200, 200, 200, 200, 403, 200, 403])
+        self.assertEqual(receipt["download_http_status_chain"], [200, 403, 200, 403])
+        self.assertEqual(len(receipt["download_attempts"]), 2)
+        self.assertEqual(receipt["download_attempts"][0]["retry_reason"], "HTTP_403_REFRESH_RESULT_URL")
+        self.assertEqual(
+            receipt["download_attempts"][1]["retry_reason"],
+            "EXHAUSTED_HTTP_403_REFRESH_RESULT_URL",
+        )
+        self.assertEqual(
+            receipt["download_http_status_chain_provenance"],
+            "CAPTURED_BY_REVISION_D_CONTROLLER",
+        )
         self.assertIsNone(receipt["artifact_uri"])
         self.assertIsNone(receipt["size_bytes"])
         self.assertIsNone(receipt["sha256"])
@@ -815,6 +846,30 @@ class KieAdapterTests(unittest.TestCase):
         self.assertEqual(download.exception.http_status, 404)
         self.assertIn("artifact expired", download.exception.provider_error_summary)
 
+    def test_revision_d_artifact_download_uses_browser_headers_without_credential(self) -> None:
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b"synthetic-video"
+
+        with patch("ai_video_platform.skills.video_generation.kie_adapter.urlopen", return_value=Response()) as opened:
+            content = UrllibKieHttpTransport().download("https://tempfile.aiquickdraw.com/result.mp4")
+
+        request = opened.call_args.args[0]
+        self.assertEqual(content, b"synthetic-video")
+        self.assertIn("Chrome/126.0.0.0", request.get_header("User-agent"))
+        self.assertEqual(request.get_header("Referer"), "https://kie.ai/")
+        self.assertEqual(request.get_header("Accept-encoding"), "identity")
+        self.assertEqual(request.get_header("Sec-fetch-site"), "cross-site")
+        self.assertIsNone(request.get_header("Authorization"))
+
     def test_credential_resolver_reads_only_named_environment_entry(self) -> None:
         resolver = KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"})
         self.assertEqual(resolver.resolve(), "synthetic-value")
@@ -869,6 +924,118 @@ class KieAdapterTests(unittest.TestCase):
         self.assertEqual(manifest["size_bytes"], len(b"synthetic-kie-video"))
         self.assertEqual(transport.downloads, ["https://files.example.test/result.mp4"])
         self.assertNotIn("synthetic-value", str(ledger.get(submitted["job_id"])))
+
+    def test_revision_d_403_refreshes_result_url_and_retries_download_once(self) -> None:
+        class RefreshingTransport(RecordingTransport):
+            def __init__(self) -> None:
+                super().__init__()
+                base = dict(self.poll_responses[0]["data"])
+                self.poll_responses = [
+                    {"code": 200, "msg": "success", "data": {**base, "resultJson": '{"resultUrls":["https://files.example.test/stale.mp4"]}'}},
+                    {"code": 200, "msg": "success", "data": {**base, "resultJson": '{"resultUrls":["https://files.example.test/refreshed-one.mp4"]}'}},
+                    {"code": 200, "msg": "success", "data": {**base, "resultJson": '{"resultUrls":["https://files.example.test/refreshed-two.mp4"]}'}},
+                ]
+
+            def download(self, uri: str) -> bytes:
+                self.downloads.append(uri)
+                if len(self.downloads) == 1:
+                    self.http_status_chain.append(403)
+                    raise AdapterFailure(
+                        "KIE_DOWNLOAD_ERROR",
+                        "KIE artifact download failed",
+                        retryable=False,
+                        http_status=403,
+                        provider_error_summary="Cloudflare access denied",
+                    )
+                self.http_status_chain.append(200)
+                return b"revision-d-video"
+
+        transport = RefreshingTransport()
+        adapter = KieVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        interface = VideoGenerationInterface(adapter=adapter, ledger=InMemoryVideoExecutionLedger())
+        submitted = interface.submit_video(kie_request(), now=NOW)
+        interface.poll_video(submitted["job_id"], now=NOW)
+
+        downloaded = interface.download_video(submitted["job_id"], now=NOW)
+
+        self.assertEqual(transport.downloads, [
+            "https://files.example.test/refreshed-one.mp4",
+            "https://files.example.test/refreshed-two.mp4",
+        ])
+        self.assertEqual(downloaded["asset_manifest_request"]["size_bytes"], len(b"revision-d-video"))
+        self.assertEqual(downloaded["download_http_status_chain"], [200, 403, 200, 200])
+        self.assertEqual(downloaded["download_attempts"], adapter.download_attempts)
+        self.assertEqual(adapter.download_http_status_chain, [200, 403, 200, 200])
+        self.assertEqual(adapter.download_attempts, [
+            {
+                "attempt": 1,
+                "refresh_http_status": 200,
+                "download_http_status": 403,
+                "outcome": "retry",
+                "retry_reason": "HTTP_403_REFRESH_RESULT_URL",
+            },
+            {
+                "attempt": 2,
+                "refresh_http_status": 200,
+                "download_http_status": 200,
+                "outcome": "success",
+                "retry_reason": None,
+            },
+        ])
+
+    def test_revision_d_download_retry_exhaustion_preserves_cost_and_returns_observation_receipt(self) -> None:
+        class ExhaustedTransport(RecordingTransport):
+            def __init__(self) -> None:
+                super().__init__()
+                base = dict(self.poll_responses[0]["data"])
+                self.poll_responses = [
+                    {"code": 200, "msg": "success", "data": {**base, "resultJson": '{"resultUrls":["https://files.example.test/original.mp4"]}'}},
+                    {"code": 200, "msg": "success", "data": {**base, "resultJson": '{"resultUrls":["https://files.example.test/refreshed-one.mp4"]}'}},
+                    {"code": 200, "msg": "success", "data": {**base, "resultJson": '{"resultUrls":["https://files.example.test/refreshed-two.mp4"]}'}},
+                ]
+
+            def download(self, uri: str) -> bytes:
+                self.downloads.append(uri)
+                self.http_status_chain.append(503)
+                raise AdapterFailure(
+                    "KIE_DOWNLOAD_ERROR",
+                    "KIE artifact download failed",
+                    retryable=True,
+                    http_status=503,
+                    provider_error_summary="temporary CDN failure",
+                )
+
+        transport = ExhaustedTransport()
+        ledger = InMemoryVideoExecutionLedger()
+        adapter = KieVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"}),
+        )
+        interface = VideoGenerationInterface(adapter=adapter, ledger=ledger)
+        submitted = interface.submit_video(kie_request(), now=NOW)
+        interface.poll_video(submitted["job_id"], now=NOW)
+
+        with self.assertRaises(Exception) as captured:
+            interface.download_video(submitted["job_id"], now=NOW)
+
+        record = ledger.get(submitted["job_id"])
+        self.assertEqual(record["state"], "succeeded")
+        self.assertEqual(record["provider_cost_units"], 3)
+        self.assertEqual(captured.exception.details["download_http_status_chain"], [200, 503, 200, 503])
+        self.assertEqual(captured.exception.details["download_attempts"][-1], {
+            "attempt": 2,
+            "refresh_http_status": 200,
+            "download_http_status": 503,
+            "outcome": "failed",
+            "retry_reason": "EXHAUSTED_HTTP_503_REFRESH_RESULT_URL",
+        })
+        self.assertEqual(transport.downloads, [
+            "https://files.example.test/refreshed-one.mp4",
+            "https://files.example.test/refreshed-two.mp4",
+        ])
 
     def test_provider_terminal_failure_preserves_safe_diagnostics(self) -> None:
         transport = RecordingTransport()

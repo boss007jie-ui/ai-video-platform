@@ -19,6 +19,7 @@ from .errors import contains_sensitive_text, sanitize_sensitive
 
 
 KIE_MODEL_ID = "bytedance/seedance-2-fast"
+KIE_DOWNLOAD_MAX_ATTEMPTS = 2
 BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -36,6 +37,19 @@ BROWSER_HEADERS = {
     "Sec-Ch-Ua": '"Chromium";v="126", "Not.A/Brand";v="24", "Google Chrome";v="126"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
+}
+ARTIFACT_DOWNLOAD_HEADERS = {
+    "User-Agent": BROWSER_HEADERS["User-Agent"],
+    "Accept": "video/mp4,video/*;q=0.9,application/octet-stream;q=0.8,*/*;q=0.5",
+    "Accept-Language": BROWSER_HEADERS["Accept-Language"],
+    "Accept-Encoding": "identity",
+    "Referer": "https://kie.ai/",
+    "Sec-Fetch-Dest": "video",
+    "Sec-Fetch-Mode": "no-cors",
+    "Sec-Fetch-Site": "cross-site",
+    "Sec-Ch-Ua": BROWSER_HEADERS["Sec-Ch-Ua"],
+    "Sec-Ch-Ua-Mobile": BROWSER_HEADERS["Sec-Ch-Ua-Mobile"],
+    "Sec-Ch-Ua-Platform": BROWSER_HEADERS["Sec-Ch-Ua-Platform"],
 }
 
 
@@ -191,7 +205,7 @@ class UrllibKieHttpTransport:
         parsed = urlparse(uri)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
             raise AdapterFailure("KIE_DOWNLOAD_INVALID", "KIE artifact URL is invalid", retryable=False)
-        request = Request(uri, method="GET", headers={"Accept": "video/mp4,application/octet-stream"})
+        request = Request(uri, method="GET", headers=ARTIFACT_DOWNLOAD_HEADERS)
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:
                 self.http_status_chain.append(int(getattr(response, "status", 200)))
@@ -379,7 +393,7 @@ class KieReferenceImageUploader:
 
 
 class KieVideoProviderAdapter:
-    """KIE adapter with FTG-P-VIDEO-001 limits enforced before network access."""
+    """KIE adapter with the signed Seedance smoke limits enforced before network access."""
 
     execution_mode = "kie_production"
     network_performed = True
@@ -393,6 +407,8 @@ class KieVideoProviderAdapter:
         self._transport = transport or UrllibKieHttpTransport()
         self._credential_resolver = credential_resolver or KieCredentialResolver()
         self._completed: dict[str, dict[str, object]] = {}
+        self.download_http_status_chain: list[int] = []
+        self.download_attempts: list[dict[str, object]] = []
 
     def submit(self, request: Mapping[str, object]) -> str:
         payload = self._submission_payload(request)
@@ -497,7 +513,72 @@ class KieVideoProviderAdapter:
         completed = self._completed.get(task_id)
         if completed is None:
             raise AdapterFailure("KIE_DOWNLOAD_INVALID", "KIE task has no completed artifact", retryable=False)
-        content = self._download(str(completed["result_uri"]))
+        self.download_http_status_chain = []
+        self.download_attempts = []
+        content: bytes | None = None
+        for attempt in range(1, KIE_DOWNLOAD_MAX_ATTEMPTS + 1):
+            before_refresh = self._transport_status_count()
+            try:
+                result_uri = self._refresh_result_uri(task_id)
+            except AdapterFailure as error:
+                refresh_statuses = self._transport_statuses_since(before_refresh)
+                self.download_http_status_chain.extend(refresh_statuses)
+                self.download_attempts.append({
+                    "attempt": attempt,
+                    "refresh_http_status": refresh_statuses[-1] if refresh_statuses else error.http_status,
+                    "download_http_status": None,
+                    "outcome": "failed",
+                    "retry_reason": "TASK_DETAIL_REFRESH_FAILED",
+                })
+                raise AdapterFailure(
+                    error.code,
+                    str(error),
+                    retryable=False,
+                    http_status=error.http_status,
+                    provider_error_summary=error.provider_error_summary,
+                    download_http_status_chain=self.download_http_status_chain,
+                    download_attempts=self.download_attempts,
+                ) from None
+            refresh_statuses = self._transport_statuses_since(before_refresh)
+            self.download_http_status_chain.extend(refresh_statuses)
+            before_download = self._transport_status_count()
+            try:
+                content = self._download(result_uri)
+            except AdapterFailure as error:
+                download_statuses = self._transport_statuses_since(before_download)
+                self.download_http_status_chain.extend(download_statuses)
+                reason = self._download_retry_reason(error)
+                will_retry = reason is not None and attempt < KIE_DOWNLOAD_MAX_ATTEMPTS
+                self.download_attempts.append({
+                    "attempt": attempt,
+                    "refresh_http_status": refresh_statuses[-1] if refresh_statuses else 200,
+                    "download_http_status": download_statuses[-1] if download_statuses else error.http_status,
+                    "outcome": "retry" if will_retry else "failed",
+                    "retry_reason": reason if will_retry else ("EXHAUSTED_" + reason if reason else "NON_RETRYABLE_DOWNLOAD_FAILURE"),
+                })
+                if will_retry:
+                    continue
+                raise AdapterFailure(
+                    error.code,
+                    "KIE artifact download retry budget is exhausted" if reason else str(error),
+                    retryable=False,
+                    http_status=error.http_status,
+                    provider_error_summary=error.provider_error_summary,
+                    download_http_status_chain=self.download_http_status_chain,
+                    download_attempts=self.download_attempts,
+                ) from None
+            download_statuses = self._transport_statuses_since(before_download)
+            self.download_http_status_chain.extend(download_statuses)
+            self.download_attempts.append({
+                "attempt": attempt,
+                "refresh_http_status": refresh_statuses[-1] if refresh_statuses else 200,
+                "download_http_status": download_statuses[-1] if download_statuses else 200,
+                "outcome": "success",
+                "retry_reason": None,
+            })
+            break
+        if content is None:
+            raise AdapterFailure("KIE_DOWNLOAD_ERROR", "KIE artifact download retry budget is exhausted", retryable=False)
         if not content:
             raise AdapterFailure(
                 "KIE_DOWNLOAD_INVALID",
@@ -511,7 +592,51 @@ class KieVideoProviderAdapter:
             "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
             "uri": f"kie://{task_id}/video.mp4",
             "content_type": "video/mp4",
+            "download_http_status_chain": list(self.download_http_status_chain),
+            "download_attempts": [dict(item) for item in self.download_attempts],
         }
+
+    def _refresh_result_uri(self, task_id: str) -> str:
+        response = self._request_json(
+            "GET",
+            "/api/v1/jobs/recordInfo",
+            query={"taskId": task_id},
+        )
+        data = self._success_data(response)
+        if (
+            data.get("taskId") != task_id
+            or data.get("model") not in {None, KIE_MODEL_ID}
+            or data.get("state") != "success"
+        ):
+            raise AdapterFailure(
+                "KIE_RESPONSE_INVALID",
+                "KIE refreshed task result is invalid",
+                retryable=False,
+                http_status=200,
+                provider_error_summary=self._provider_summary(data),
+            )
+        result_uri = self._result_uri(data.get("resultJson"))
+        self._completed[task_id] = {**self._completed[task_id], "result_uri": result_uri}
+        return result_uri
+
+    def _transport_status_count(self) -> int:
+        chain = getattr(self._transport, "http_status_chain", None)
+        return len(chain) if isinstance(chain, list) else 0
+
+    def _transport_statuses_since(self, index: int) -> list[int]:
+        chain = getattr(self._transport, "http_status_chain", None)
+        if not isinstance(chain, list):
+            return []
+        return [int(status) for status in chain[index:] if isinstance(status, int)]
+
+    @staticmethod
+    def _download_retry_reason(error: AdapterFailure) -> str | None:
+        status = error.http_status
+        if status == 403 or status == 429 or (isinstance(status, int) and status >= 500):
+            return f"HTTP_{status}_REFRESH_RESULT_URL"
+        if error.retryable and status is None:
+            return "NETWORK_OR_TIMEOUT_REFRESH_RESULT_URL"
+        return None
 
     def _submission_payload(self, request: Mapping[str, object]) -> dict[str, object]:
         binding = request.get("provider_binding")
@@ -521,9 +646,11 @@ class KieVideoProviderAdapter:
             raise AdapterFailure("KIE_GUARDRAIL", "KIE provider binding is not authorized", retryable=False)
         if not isinstance(budget, Mapping) or any(
             budget.get(field) != expected
-            for field, expected in (("max_requests", 1), ("max_concurrency", 1), ("max_attempts", 2), ("timeout_seconds", 600))
+            for field, expected in (("max_requests", 1), ("max_concurrency", 1), ("max_attempts", 2))
         ):
             raise AdapterFailure("KIE_GUARDRAIL", "KIE smoke budget guardrail is invalid", retryable=False)
+        if budget.get("timeout_seconds") not in {600, 1800}:
+            raise AdapterFailure("KIE_GUARDRAIL", "KIE smoke timeout guardrail is invalid", retryable=False)
         if not isinstance(output, Mapping) or set(output) != _OUTPUT_FIELDS:
             raise AdapterFailure("KIE_GUARDRAIL", "KIE output configuration is invalid", retryable=False)
         prompt = output.get("prompt")
