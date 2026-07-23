@@ -7,6 +7,7 @@ import json
 from time import perf_counter
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from ai_video_platform.skills.product_image_panel_generation import (
@@ -289,19 +290,60 @@ class ImagePanelInterfaceTests(unittest.TestCase):
         )
 
     def test_cli_rejects_unknown_adapter_without_loading_input(self) -> None:
-        for adapter_name in ("real", "yunwu-nano-banana", "yunwu-image2"):
-            with self.subTest(adapter_name=adapter_name):
-                output = StringIO()
+        output = StringIO()
 
-                exit_code = cli_main(
-                    ["generate-panel", "--input", "not-loaded.json", "--adapter", adapter_name],
-                    stdout=output,
+        exit_code = cli_main(
+            ["generate-panel", "--input", "not-loaded.json", "--adapter", "real"],
+            stdout=output,
+        )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["error"]["code"], ImagePanelErrorCode.CONTRACT_INVALID.value)
+        self.assertEqual(payload["error"]["field_paths"], ["argv"])
+
+    def test_cli_recognizes_yunwu_adapters_but_requires_key_before_network(self) -> None:
+        bindings = (
+            ("yunwu-nano-banana", "gemini-3.1-flash-image-preview"),
+            ("yunwu-image2", "gpt-image-2"),
+        )
+        for adapter_name, model_id in bindings:
+            with self.subTest(adapter_name=adapter_name):
+                configured_profile = replace(
+                    profile(),
+                    provider_id=adapter_name,
+                    model_id=model_id,
                 )
+                request = rebind_request(
+                    make_request(),
+                    model_profile_digest=calculate_model_profile_digest(configured_profile),
+                )
+                document = {
+                    "request": generation_request_to_mapping(request),
+                    "model_profile": model_profile_to_mapping(configured_profile),
+                }
+                output = StringIO()
+                with tempfile.TemporaryDirectory() as directory:
+                    input_path = Path(directory) / "request.json"
+                    input_path.write_text(json.dumps(document), encoding="utf-8")
+                    with patch.dict("os.environ", {"YUNWU_API_KEY": ""}):
+                        exit_code = cli_main(
+                            [
+                                "generate-panel",
+                                "--input",
+                                str(input_path),
+                                "--adapter",
+                                adapter_name,
+                            ],
+                            stdout=output,
+                        )
 
                 payload = json.loads(output.getvalue())
                 self.assertEqual(exit_code, 2)
-                self.assertEqual(payload["error"]["code"], ImagePanelErrorCode.CONTRACT_INVALID.value)
-                self.assertEqual(payload["error"]["field_paths"], ["argv"])
+                self.assertEqual(
+                    payload["error"]["code"],
+                    ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED.value,
+                )
 
     def test_cli_malformed_input_uses_stable_sanitized_error_and_exit_two(self) -> None:
         output = StringIO()
