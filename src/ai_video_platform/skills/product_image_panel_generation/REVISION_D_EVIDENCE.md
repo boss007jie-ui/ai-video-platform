@@ -16,7 +16,7 @@ The implementation was performed on branch `ft/codex-05-pipeline` in its dedicat
 
 `ProductFacts` is the product-only projection used by the image-panel preflight gateway. It contains product identity, SKU identity, confirmed facts, approved asset IDs, visual constraints, packaging, dimensions, and category IDs. `ChannelProfile` contains channel expression parameters. `repair_story_context()` belongs to `ProductFacts`; `derive_product_mode()` belongs to `ChannelProfile` and consumes `ProductFacts`.
 
-`to_product_facts()` accepts a mapping or a validated Foundation payload projection and copies only the product-domain allowlist. It intentionally does not retain the Foundation DTO, execution metadata, provider fields, or model fields. Nested mappings and sequences are frozen at construction.
+`to_product_facts()` accepts a mapping or a validated Foundation payload object exposing its mapping `payload`, and copies only the product-domain allowlist. It intentionally does not retain the Foundation DTO, execution metadata, provider fields, or model fields. Nested mappings and sequences are frozen at construction.
 
 ### Continuity review seam
 
