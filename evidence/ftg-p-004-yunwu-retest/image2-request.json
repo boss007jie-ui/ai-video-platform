@@ -1,0 +1,201 @@
+{
+  "model_profile": {
+    "cost_per_attempt": 3,
+    "dimension_multiple": 8,
+    "max_concurrency": 1,
+    "max_dimension": 2048,
+    "min_dimension": 64,
+    "model_id": "gpt-image-2",
+    "profile_id": "ftg-p-004-yunwu-image2",
+    "provider_id": "yunwu-image2",
+    "version": "1.0.0"
+  },
+  "request": {
+    "approval_record": {
+      "contract_id": "019f8e87-bb0f-78d2-b935-ead7a1f409ef",
+      "contract_type": "avp.contract.approval-record",
+      "correlation_id": "task-synthetic-004",
+      "created_at": "2026-07-20T10:00:00Z",
+      "idempotency_key": "avp.contract.approval-record:authorized-approval-boundary",
+      "payload": {
+        "approval_id": "approval-generation-synthetic-004",
+        "approval_type": "image-panel-generation",
+        "authority": {
+          "authority_id": "approval-boundary-synthetic"
+        },
+        "decided_at": "2026-07-20T10:00:00Z",
+        "decision_ref": "review-decision-synthetic-004",
+        "outcome": "approved",
+        "subject_ref": {
+          "digest": "sha256:b9cc2175199978609d0fa5af6c66d0ff45c6ff9a4c54cf856f8725a7e0575a92",
+          "request_id": "image-panel-request-ftg-p-004-image2"
+        },
+        "valid_until": "2099-01-01T00:00:00Z"
+      },
+      "payload_digest": "sha256:82a46761912976eb960602b1d297d3c164746c25dece9df5524bef7d2269eb8a",
+      "producer": {
+        "agent": "system",
+        "component_id": "authorized-approval-boundary",
+        "component_version": "1.0.0"
+      },
+      "schema_version": "1.0.0",
+      "task_id": "task-synthetic-004"
+    },
+    "budget": {
+      "currency": "COST_UNITS",
+      "max_attempts": 1,
+      "max_concurrency": 1,
+      "max_cost_units": 12,
+      "timeout_seconds": 300.0
+    },
+    "command": "generate-product-image",
+    "expected_context_revision": 4,
+    "idempotency_key": "image-panel-idempotency-ftg-p-004-image2",
+    "input_asset_manifests": [
+      {
+        "contract_id": "019f8900-b1a1-7542-8d96-0d50d709603a",
+        "contract_type": "avp.contract.asset-manifest",
+        "correlation_id": "task-synthetic-004",
+        "created_at": "2026-07-20T10:00:00Z",
+        "idempotency_key": "avp.contract.asset-manifest:product-knowledge",
+        "payload": {
+          "assets": [
+            {
+              "approval_ref": "approval-asset-synthetic-004",
+              "asset_id": "asset-approved-004",
+              "byte_size": 8,
+              "created_at": "2026-07-20T10:00:00Z",
+              "media_type": "image",
+              "provenance": {
+                "source": "synthetic-test"
+              },
+              "role": "product-reference",
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+              "uri": "memory://synthetic/input.png"
+            }
+          ],
+          "created_at": "2026-07-20T10:00:00Z",
+          "manifest_id": "asset-manifest-synthetic-input-004",
+          "manifest_revision": 1,
+          "owner_id": "product-synthetic-004",
+          "owner_type": "product"
+        },
+        "payload_digest": "sha256:8795eeaf8fedabc7f717cb7cc7e5df23eb72941e2687f5ebacc42ae15485fd09",
+        "producer": {
+          "agent": "skill",
+          "component_id": "product-knowledge",
+          "component_version": "1.0.0"
+        },
+        "schema_version": "1.0.0",
+        "task_id": "task-synthetic-004"
+      }
+    ],
+    "items": [
+      {
+        "height": 1024,
+        "input_asset_ids": [
+          "asset-approved-004"
+        ],
+        "item_id": "product-image-ftg-p-004-image2",
+        "prompt": "Synthetic clean-room owned product image on a neutral studio background",
+        "role": "product-image",
+        "width": 1024
+      }
+    ],
+    "model_profile_digest": "sha256:2fece470e82de5eec3afe70207b4a71f1230524f778f6ea6574eea2bab57ee04",
+    "model_profile_id": "ftg-p-004-yunwu-image2",
+    "product_context": {
+      "contract_id": "019f8900-b1a1-7d89-8340-8a4ee0c7c45c",
+      "contract_type": "avp.contract.product-context-bundle",
+      "correlation_id": "task-synthetic-004",
+      "created_at": "2026-07-20T10:00:00Z",
+      "idempotency_key": "avp.contract.product-context-bundle:product-knowledge",
+      "payload": {
+        "approved_asset_refs": [
+          "asset-approved-004"
+        ],
+        "bundle_id": "bundle-synthetic-004",
+        "bundle_revision": 3,
+        "facts": [],
+        "generated_at": "2026-07-20T10:00:00Z",
+        "known_error_refs": [],
+        "product_id": "product-synthetic-004",
+        "purpose": "product-image-panel-generation",
+        "rule_refs": [],
+        "source_evidence": [
+          "evidence-synthetic-004"
+        ],
+        "successful_pattern_refs": []
+      },
+      "payload_digest": "sha256:40b204d89f62d535017e63a2c04b1bd8c37ce9640e3f4616c5555a09e0316778",
+      "producer": {
+        "agent": "skill",
+        "component_id": "product-knowledge",
+        "component_version": "1.0.0"
+      },
+      "schema_version": "1.0.0",
+      "task_id": "task-synthetic-004"
+    },
+    "product_id": "product-synthetic-004",
+    "reference_manifest": null,
+    "request_hash": "sha256:b9cc2175199978609d0fa5af6c66d0ff45c6ff9a4c54cf856f8725a7e0575a92",
+    "request_id": "image-panel-request-ftg-p-004-image2",
+    "sku_id": null,
+    "task_context": {
+      "contract_id": "019f8900-b1a1-75fa-b06b-51515841d8e9",
+      "contract_type": "avp.contract.task-context",
+      "correlation_id": "task-synthetic-004",
+      "created_at": "2026-07-20T10:00:00Z",
+      "idempotency_key": "avp.contract.task-context:hermes",
+      "payload": {
+        "active_skill_id": "product-image-panel-generation",
+        "bindings": {},
+        "context_revision": 4,
+        "input_contract_refs": [
+          "019f8900-b1a1-7236-81d0-4b28debba918"
+        ],
+        "state": "ready",
+        "task_id": "task-synthetic-004",
+        "task_spec_ref": "019f8900-b1a1-7236-81d0-4b28debba918",
+        "updated_at": "2026-07-20T10:00:00Z"
+      },
+      "payload_digest": "sha256:b930a290bc02392d2c8395f735a604568b45fc0b86296afe2f0b4d19508a79f3",
+      "producer": {
+        "agent": "hermes",
+        "component_id": "hermes",
+        "component_version": "1.0.0"
+      },
+      "schema_version": "1.0.0",
+      "task_id": "task-synthetic-004"
+    },
+    "task_spec": {
+      "contract_id": "019f8900-b1a1-7236-81d0-4b28debba918",
+      "contract_type": "avp.contract.task-spec",
+      "correlation_id": "task-synthetic-004",
+      "created_at": "2026-07-20T10:00:00Z",
+      "idempotency_key": "avp.contract.task-spec:authorized-direct-cli-caller",
+      "payload": {
+        "created_at": "2026-07-20T10:00:00Z",
+        "created_by": "human:test",
+        "input_refs": [],
+        "objective": "Generate a synthetic approved panel",
+        "requested_outputs": [
+          "AssetManifest"
+        ],
+        "requested_skills": [
+          "product-image-panel-generation"
+        ],
+        "task_id": "task-synthetic-004",
+        "task_type": "single-skill"
+      },
+      "payload_digest": "sha256:1be3d9246522acff11a90b5d045e68cdeb4f08552d4ca2f6f3a8ece0121d9a0a",
+      "producer": {
+        "agent": "human",
+        "component_id": "authorized-direct-cli-caller",
+        "component_version": "1.0.0"
+      },
+      "schema_version": "1.0.0",
+      "task_id": "task-synthetic-004"
+    }
+  }
+}
