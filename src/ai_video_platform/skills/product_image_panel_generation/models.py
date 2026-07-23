@@ -10,6 +10,8 @@ from typing import Any, Mapping
 from ai_video_platform.contracts import ContractEnvelope
 from ai_video_platform.contracts.serialization import content_digest
 
+from .product_data import ProductFacts
+
 
 class GenerationCommand(str, Enum):
     GENERATE_PRODUCT_IMAGE = "generate-product-image"
@@ -90,6 +92,7 @@ class PreflightInspection:
     estimated_max_cost_units: int
     item_count: int
     profile_id: str
+    product_facts: ProductFacts
 
 
 class CancellationToken:
