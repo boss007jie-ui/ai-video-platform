@@ -35,6 +35,9 @@ class ProviderAsset:
     provider_asset_id: str
     content: bytes
     content_type: str
+    width: int | None = None
+    height: int | None = None
+    provider_metadata: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
 class ImageProviderAdapter(ABC):

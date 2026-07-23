@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from threading import Event
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from ai_video_platform.contracts import ContractEnvelope
@@ -119,6 +120,7 @@ class GeneratedAsset:
     height: int
     derived_from: tuple[str, ...]
     provider_asset_id: str
+    provider_metadata: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)

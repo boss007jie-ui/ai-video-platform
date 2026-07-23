@@ -208,10 +208,11 @@ class ImagePanelService:
                         content_type=provider_asset.content_type,
                         sha256=digest,
                         byte_size=len(provider_asset.content),
-                        width=item.width,
-                        height=item.height,
+                        width=provider_asset.width or item.width,
+                        height=provider_asset.height or item.height,
                         derived_from=tuple(item.input_asset_ids),
                         provider_asset_id=provider_asset.provider_asset_id,
+                        provider_metadata=provider_asset.provider_metadata,
                     )
                     break
                 except ImagePanelError as exc:
@@ -368,6 +369,7 @@ class ImagePanelService:
                         "model_id": record.model_id,
                         "model_version": record.model_version,
                         "provider_asset_id": asset.provider_asset_id,
+                        **dict(asset.provider_metadata),
                     },
                 }
                 for asset in assets
