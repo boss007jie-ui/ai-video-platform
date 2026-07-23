@@ -390,6 +390,24 @@ class _YunwuAdapter(ImageProviderAdapter):
             width=width,
             height=height,
         )
+        self._last_receipt = receipt
+        if (
+            width != invocation.item.width
+            or height != invocation.item.height
+        ):
+            self._last_asset = None
+            raise ImagePanelError(
+                ImagePanelErrorCode.PROVIDER_FAILED,
+                "Provider image dimensions did not match requested dimensions",
+                category="provider",
+                retryable=False,
+                details={
+                    "requested_width": invocation.item.width,
+                    "requested_height": invocation.item.height,
+                    "actual_width": width,
+                    "actual_height": height,
+                },
+            )
         asset = ProviderAsset(
             provider_asset_id=provider_asset_id,
             content=content,
@@ -398,7 +416,6 @@ class _YunwuAdapter(ImageProviderAdapter):
             height=height,
             provider_metadata=MappingProxyType(receipt.to_dict()),
         )
-        self._last_receipt = receipt
         self._last_asset = asset
         return asset
 

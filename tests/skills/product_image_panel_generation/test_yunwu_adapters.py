@@ -201,7 +201,7 @@ class YunwuAdapterTests(unittest.TestCase):
         adapter_factory.assert_not_called()
 
     def test_service_chain_records_verified_provider_dimensions_and_http_receipt(self) -> None:
-        content = _png(512, 256)
+        content = _png()
         transport = RecordingTransport(
             YunwuHttpResponse(
                 200,
@@ -230,11 +230,56 @@ class YunwuAdapterTests(unittest.TestCase):
         outcome = service.generate_panel(request)
 
         manifest_asset = outcome.asset_manifest.payload["assets"][0]
-        self.assertEqual(manifest_asset["dimensions"], {"width": 512, "height": 256})
+        self.assertEqual(manifest_asset["dimensions"], {"width": 1024, "height": 1024})
         self.assertEqual(manifest_asset["provider_metadata"]["endpoint"], IMAGE2_ENDPOINT)
         self.assertEqual(manifest_asset["provider_metadata"]["http_status"], 200)
         self.assertEqual(manifest_asset["provider_metadata"]["elapsed_ms"], 444)
         self.assertEqual(manifest_asset["provider_metadata"]["cost_fields"], {"usage": {"cost": 0.01}})
+
+    def test_provider_size_mismatch_fails_closed_with_requested_and_actual_dimensions(self) -> None:
+        content = _png(512, 256)
+        transport = RecordingTransport(
+            YunwuHttpResponse(
+                200,
+                {},
+                json.dumps(
+                    {"data": [{"b64_json": base64.b64encode(content).decode("ascii")}]}
+                ).encode(),
+                444,
+            )
+        )
+        adapter = YunwuImage2Adapter(api_key="synthetic-key", transport=transport)
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(
+                _invocation(
+                    provider_id="yunwu-image2",
+                    model_id="gpt-image-2",
+                ),
+                cancellation=CancellationToken(),
+            )
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertFalse(captured.exception.retryable)
+        self.assertEqual(
+            captured.exception.message,
+            "Provider image dimensions did not match requested dimensions",
+        )
+        self.assertEqual(
+            captured.exception.details,
+            {
+                "requested_width": 1024,
+                "requested_height": 1024,
+                "actual_width": 512,
+                "actual_height": 256,
+            },
+        )
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(adapter.last_receipt.http_status, 200)
+        self.assertEqual(
+            (adapter.last_receipt.width, adapter.last_receipt.height),
+            (512, 256),
+        )
 
     def test_nano_banana_uses_only_signed_endpoint_model_and_minimal_payload(self) -> None:
         content = _png()
