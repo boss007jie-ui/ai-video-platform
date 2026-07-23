@@ -16,6 +16,7 @@ from .models import (
     calculate_model_profile_digest,
     calculate_request_hash,
 )
+from .product_data import to_product_facts
 
 
 SKILL_ID = "product-image-panel-generation"
@@ -100,19 +101,20 @@ def inspect_request(
 
     if request.product_context is None:
         _fail(ImagePanelErrorCode.PRODUCT_CONTEXT_REQUIRED, "ProductContextBundle is required", "product_context")
-    product_context = _validated(request.product_context, "avp.contract.product-context-bundle")
+    _validated(request.product_context, "avp.contract.product-context-bundle")
+    product_facts = to_product_facts(request.product_context)
     _assert_task_relation(
         request.product_context,
         task_id=task_spec.task_id,
         correlation_id=request.task_spec.correlation_id,
         field_path="product_context",
     )
-    if product_context.product_id != request.product_id:
+    if product_facts.product_id != request.product_id:
         _fail(ImagePanelErrorCode.PRODUCT_IDENTITY_MISMATCH, "Product identity does not match ProductContextBundle", "product_id")
-    if request.sku_id != product_context.sku_id:
+    if request.sku_id != product_facts.sku_id:
         _fail(ImagePanelErrorCode.PRODUCT_IDENTITY_MISMATCH, "SKU identity does not match ProductContextBundle", "sku_id")
 
-    approved_asset_ids = set(product_context.approved_asset_refs)
+    approved_asset_ids = set(product_facts.approved_asset_ids)
     manifest_assets: dict[str, object] = {}
     for envelope in request.input_asset_manifests:
         manifest = _validated(envelope, "avp.contract.asset-manifest")
@@ -238,4 +240,5 @@ def inspect_request(
         estimated_max_cost_units=estimated_max_cost,
         item_count=len(request.items),
         profile_id=profile.profile_id,
+        product_facts=product_facts,
     )
