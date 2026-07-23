@@ -1,0 +1,46 @@
+{
+  "actual_size": {
+    "height": 1254,
+    "width": 1254
+  },
+  "adapter": "yunwu-image2",
+  "artifact_receipt": null,
+  "attempts": 1,
+  "authorization": "FTG-P-004",
+  "cli_exit_code": 3,
+  "error": null,
+  "provider_receipt": {
+    "byte_size": 1424589,
+    "content_type": "image/png",
+    "cost_fields": {
+      "usage": {
+        "input_tokens": 376,
+        "input_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 376
+        },
+        "output_tokens": 915,
+        "total_tokens": 1291
+      }
+    },
+    "elapsed_ms": 45730,
+    "endpoint": "https://yunwu.ai/v1/images/generations",
+    "error_body": null,
+    "height": 1254,
+    "http_status": 200,
+    "model_id": "gpt-image-2",
+    "provider_asset_id": "yunwu:image-panel-request-ftg-p-004-image2:product-image-ftg-p-004-image2",
+    "provider_network_performed": true,
+    "sha256": "97c2be5d78bb15f41dea7e63eaf052d0af00b19bea3d9c11634074191e05067b",
+    "upload_http_status": null,
+    "width": 1254
+  },
+  "requested_size": {
+    "height": 1024,
+    "width": 1024
+  },
+  "result": "FAIL",
+  "retries": 0,
+  "size_match": false,
+  "task": "FT-04-YUNWU-SMOKE"
+}

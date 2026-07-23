@@ -1,0 +1,14 @@
+{
+  "artifact_persisted": false,
+  "byte_size": 1424589,
+  "content_type": "image/png",
+  "fail_closed": true,
+  "height": 1254,
+  "pixel_verification": "decoded provider response bytes were parsed before success asset construction",
+  "requested_height": 1024,
+  "requested_width": 1024,
+  "sha256": "97c2be5d78bb15f41dea7e63eaf052d0af00b19bea3d9c11634074191e05067b",
+  "size_match": false,
+  "verification_scope": "provider response; no success artifact persisted",
+  "width": 1254
+}

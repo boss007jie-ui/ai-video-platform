@@ -1,0 +1,200 @@
+{
+  "asset_manifest": {
+    "contract_id": "019f8e8e-78e0-712e-8e20-b4766757e6ac",
+    "contract_type": "avp.contract.asset-manifest",
+    "correlation_id": "task-synthetic-004",
+    "created_at": "2026-07-23T10:38:49.569010Z",
+    "idempotency_key": "image-panel-idempotency-ftg-p-004-image2:asset-manifest",
+    "payload": {
+      "assets": [],
+      "created_at": "2026-07-23T10:38:49Z",
+      "manifest_id": "asset-manifest:image-panel-request-ftg-p-004-image2",
+      "manifest_revision": 1,
+      "owner_id": "task-synthetic-004",
+      "owner_type": "task"
+    },
+    "payload_digest": "sha256:0d48767ab815e29fd3e64b824c5f4ab7973fd71decc83558f03f5292d9cf5cdb",
+    "producer": {
+      "agent": "skill",
+      "component_id": "product-image-panel-generation",
+      "component_version": "0.1.0"
+    },
+    "schema_version": "1.0.0",
+    "source_contract_ids": [
+      "019f8900-b1a1-7236-81d0-4b28debba918",
+      "019f8900-b1a1-75fa-b06b-51515841d8e9",
+      "019f8900-b1a1-7d89-8340-8a4ee0c7c45c",
+      "019f8e87-bb0f-78d2-b935-ead7a1f409ef",
+      "019f8900-b1a1-7542-8d96-0d50d709603a"
+    ],
+    "source_hashes": [
+      "sha256:b9cc2175199978609d0fa5af6c66d0ff45c6ff9a4c54cf856f8725a7e0575a92"
+    ],
+    "task_id": "task-synthetic-004"
+  },
+  "execution_event": {
+    "contract_id": "019f8e8e-78e1-74b4-9cbd-1682cfae265a",
+    "contract_type": "avp.contract.skill-execution-event",
+    "correlation_id": "task-synthetic-004",
+    "created_at": "2026-07-23T10:38:49.569122Z",
+    "idempotency_key": "image-panel-idempotency-ftg-p-004-image2:execution-event",
+    "payload": {
+      "event_type": "failed",
+      "execution_id": "execution:image-panel-request-ftg-p-004-image2",
+      "input_contract_refs": [
+        "019f8900-b1a1-7236-81d0-4b28debba918",
+        "019f8900-b1a1-75fa-b06b-51515841d8e9",
+        "019f8900-b1a1-7d89-8340-8a4ee0c7c45c",
+        "019f8e87-bb0f-78d2-b935-ead7a1f409ef",
+        "019f8900-b1a1-7542-8d96-0d50d709603a"
+      ],
+      "metrics": {
+        "attempts": 1,
+        "cost_units": 3,
+        "items": 1
+      },
+      "occurred_at": "2026-07-23T10:38:49Z",
+      "output_contract_refs": [
+        "019f8e8e-78e0-712e-8e20-b4766757e6ac",
+        "019f8e8e-78e1-77fb-b665-b69cb2aa433b"
+      ],
+      "provider_binding": {
+        "model_id": "gpt-image-2",
+        "provider_id": "yunwu-image2",
+        "version": "1.0.0"
+      },
+      "sequence": 1,
+      "skill_id": "product-image-panel-generation",
+      "status": "failed",
+      "task_id": "task-synthetic-004"
+    },
+    "payload_digest": "sha256:dd22be0225e50c91628ec7e71eb380627f35fb05902ba04a05e1d352092577cb",
+    "producer": {
+      "agent": "skill",
+      "component_id": "product-image-panel-generation",
+      "component_version": "0.1.0"
+    },
+    "schema_version": "1.0.0",
+    "source_contract_ids": [
+      "019f8e8e-78e0-712e-8e20-b4766757e6ac",
+      "019f8e8e-78e1-77fb-b665-b69cb2aa433b"
+    ],
+    "source_hashes": [
+      "sha256:b9cc2175199978609d0fa5af6c66d0ff45c6ff9a4c54cf856f8725a7e0575a92"
+    ],
+    "task_id": "task-synthetic-004"
+  },
+  "feedback_event": {
+    "contract_id": "019f8e8e-78e1-77fb-b665-b69cb2aa433b",
+    "contract_type": "avp.contract.feedback-event",
+    "correlation_id": "task-synthetic-004",
+    "created_at": "2026-07-23T10:38:49.569072Z",
+    "idempotency_key": "image-panel-idempotency-ftg-p-004-image2:feedback-event",
+    "payload": {
+      "asset_refs": [],
+      "bindings": {
+        "model_id": "gpt-image-2",
+        "provider_id": "yunwu-image2",
+        "version": "1.0.0"
+      },
+      "evidence_refs": [
+        "generation-record:image-panel-request-ftg-p-004-image2",
+        "019f8e8e-78e0-712e-8e20-b4766757e6ac"
+      ],
+      "feedback_id": "feedback:image-panel-request-ftg-p-004-image2",
+      "feedback_type": "generation_outcome",
+      "observed_at": "2026-07-23T10:38:49Z",
+      "product_id": "product-synthetic-004",
+      "rule_scope": "product",
+      "scope_key": {
+        "product_id": "product-synthetic-004"
+      },
+      "severity": "warning",
+      "source_skill_id": "product-image-panel-generation",
+      "statement": "Image/panel generation ended with status failed",
+      "submitted_by": "product-image-panel-generation",
+      "task_id": "task-synthetic-004"
+    },
+    "payload_digest": "sha256:553917dd5b35736ad82e6512eb6bb777a4a131d9fe67805b2f022d9c05924a74",
+    "producer": {
+      "agent": "skill",
+      "component_id": "product-image-panel-generation",
+      "component_version": "0.1.0"
+    },
+    "schema_version": "1.0.0",
+    "source_contract_ids": [
+      "019f8e8e-78e0-712e-8e20-b4766757e6ac"
+    ],
+    "source_hashes": [
+      "sha256:b9cc2175199978609d0fa5af6c66d0ff45c6ff9a4c54cf856f8725a7e0575a92"
+    ],
+    "task_id": "task-synthetic-004"
+  },
+  "generation_record": {
+    "completed_at": "2026-07-23T10:38:49Z",
+    "items": [
+      {
+        "asset_id": null,
+        "attempts": 1,
+        "cost_units": 3,
+        "error": {
+          "category": "provider",
+          "code": "IMAGE_PANEL_PROVIDER_FAILED",
+          "details": {
+            "actual_height": 1254,
+            "actual_width": 1254,
+            "requested_height": 1024,
+            "requested_width": 1024
+          },
+          "field_paths": [],
+          "message": "Provider attempt failed",
+          "retryable": false
+        },
+        "item_id": "product-image-ftg-p-004-image2",
+        "status": "failed"
+      }
+    ],
+    "model_id": "gpt-image-2",
+    "model_version": "1.0.0",
+    "product_id": "product-synthetic-004",
+    "profile_id": "ftg-p-004-yunwu-image2",
+    "provider_id": "yunwu-image2",
+    "record_id": "generation-record:image-panel-request-ftg-p-004-image2",
+    "request_hash": "sha256:b9cc2175199978609d0fa5af6c66d0ff45c6ff9a4c54cf856f8725a7e0575a92",
+    "request_id": "image-panel-request-ftg-p-004-image2",
+    "started_at": "2026-07-23T10:38:03Z",
+    "status": "failed",
+    "total_attempts": 1,
+    "total_cost_units": 3
+  },
+  "provider_network_performed": true,
+  "provider_receipt": {
+    "byte_size": 1424589,
+    "content_type": "image/png",
+    "cost_fields": {
+      "usage": {
+        "input_tokens": 376,
+        "input_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 376
+        },
+        "output_tokens": 915,
+        "total_tokens": 1291
+      }
+    },
+    "elapsed_ms": 45730,
+    "endpoint": "https://yunwu.ai/v1/images/generations",
+    "error_body": null,
+    "height": 1254,
+    "http_status": 200,
+    "model_id": "gpt-image-2",
+    "provider_asset_id": "yunwu:image-panel-request-ftg-p-004-image2:product-image-ftg-p-004-image2",
+    "provider_network_performed": true,
+    "sha256": "97c2be5d78bb15f41dea7e63eaf052d0af00b19bea3d9c11634074191e05067b",
+    "upload_http_status": null,
+    "width": 1254
+  },
+  "provider_smoke": "FAIL",
+  "replayed": false,
+  "status": "failed"
+}

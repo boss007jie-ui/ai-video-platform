@@ -13,9 +13,11 @@ from ai_video_platform.skills.product_image_panel_generation import (
     FakeProviderStep,
     GenerationItem,
     GenerationStatus,
+    ImageProviderAdapter,
     ImagePanelError,
     ImagePanelErrorCode,
     ImagePanelService,
+    RejectingImageProviderAdapter,
 )
 
 from ._support import ASSET_ID, make_request, profile, rebind_request
@@ -32,6 +34,42 @@ class ImagePanelAdapterTests(unittest.TestCase):
             max_concurrency=max_concurrency,
         )
 
+    def test_fake_and_rejecting_adapters_implement_the_abstract_contract(self) -> None:
+        self.assertIsInstance(FakeImageProviderAdapter(), ImageProviderAdapter)
+        self.assertIsInstance(RejectingImageProviderAdapter(), ImageProviderAdapter)
+
+    def test_incomplete_provider_adapter_cannot_be_instantiated(self) -> None:
+        class IncompleteAdapter(ImageProviderAdapter):
+            @property
+            def provider_id(self) -> str:
+                return "incomplete"
+
+        with self.assertRaises(TypeError):
+            IncompleteAdapter()
+
+    def test_provider_adapter_cannot_override_public_fail_closed_entrypoint(self) -> None:
+        with self.assertRaisesRegex(TypeError, "generate"):
+            class UnsafeAdapter(ImageProviderAdapter):
+                @property
+                def provider_id(self) -> str:
+                    return "unsafe"
+
+                def generate(self, *_args, **_kwargs):
+                    return None
+
+                def _generate(self, *_args, **_kwargs):
+                    return None
+
+    def test_service_rejects_non_contract_provider(self) -> None:
+        class DuckAdapter:
+            provider_id = "offline-fake"
+
+            def _generate(self, *_args, **_kwargs):
+                return None
+
+        with self.assertRaisesRegex(TypeError, "ImageProviderAdapter"):
+            self.make_service(DuckAdapter())
+
     def test_fake_adapter_success_emits_auditable_foundation_outputs(self) -> None:
         content = b"synthetic-panel-bytes"
         adapter = FakeImageProviderAdapter(
@@ -43,6 +81,7 @@ class ImagePanelAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, GenerationStatus.COMPLETED)
         self.assertFalse(outcome.replayed)
         self.assertEqual(outcome.generation_record.total_attempts, 1)
+        self.assertEqual(adapter.total_attempts, 1)
         self.assertEqual(outcome.generation_record.total_cost_units, 3)
         self.assertEqual(outcome.asset_manifest.contract_type, "avp.contract.asset-manifest")
         self.assertEqual(outcome.feedback_event.contract_type, "avp.contract.feedback-event")

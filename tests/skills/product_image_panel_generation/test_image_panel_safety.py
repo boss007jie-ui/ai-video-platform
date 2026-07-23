@@ -19,6 +19,7 @@ from ai_video_platform.skills.product_image_panel_generation import (
     ImagePanelError,
     ImagePanelErrorCode,
     ImagePanelService,
+    ImageProviderAdapter,
     RejectingImageProviderAdapter,
     calculate_model_profile_digest,
 )
@@ -197,8 +198,10 @@ class ImagePanelSafetyTests(unittest.TestCase):
     def test_unexpected_adapter_exception_is_sanitized_into_failed_outcome(self) -> None:
         synthetic = "sk" + "-" + "testonly" + "Z" * 28
 
-        class ExplodingAdapter:
-            provider_id = "offline-fake"
+        class ExplodingAdapter(ImageProviderAdapter):
+            @property
+            def provider_id(self) -> str:
+                return "offline-fake"
 
             def _generate(self, *_args, **_kwargs):
                 raise RuntimeError(synthetic)
@@ -215,8 +218,10 @@ class ImagePanelSafetyTests(unittest.TestCase):
     def test_provider_error_message_is_replaced_before_public_output(self) -> None:
         synthetic = "sk" + "-" + "testonly" + "Y" * 28
 
-        class LeakyAdapter:
-            provider_id = "offline-fake"
+        class LeakyAdapter(ImageProviderAdapter):
+            @property
+            def provider_id(self) -> str:
+                return "offline-fake"
 
             def _generate(self, *_args, **_kwargs):
                 raise ImagePanelError(
@@ -234,8 +239,10 @@ class ImagePanelSafetyTests(unittest.TestCase):
     def test_blocking_adapter_is_cut_off_by_real_timeout_deadline(self) -> None:
         release = Event()
 
-        class BlockingAdapter:
-            provider_id = "offline-fake"
+        class BlockingAdapter(ImageProviderAdapter):
+            @property
+            def provider_id(self) -> str:
+                return "offline-fake"
 
             def _generate(self, *_args, **_kwargs):
                 release.wait(2.0)

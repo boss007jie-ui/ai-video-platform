@@ -3,8 +3,9 @@
 Version: `0.1.0`
 Workline: `codex-04`
 Provider status: `NOT_AUTHORIZED`
-Current release status: `REVIEW`
-Target ceiling after gates: `RC_PROVIDER_PENDING` (not yet achieved)
+Offline capability status: `INTERNAL_PRODUCTION_READY_OFFLINE`
+Real Provider path status: `RC_PROVIDER_PENDING`
+Full Production Ready status: `NOT_CLAIMED`
 
 ## Responsibility
 
@@ -17,9 +18,10 @@ It does not identify products, write Product Library knowledge, publish `Product
 The Skill-local CLI is invoked as:
 
 ```powershell
-python -m ai_video_platform.skills.product_image_panel_generation.cli inspect-generation-request --input <request.json>
-python -m ai_video_platform.skills.product_image_panel_generation.cli generate-product-image --input <request.json> --adapter fake
-python -m ai_video_platform.skills.product_image_panel_generation.cli generate-panel --input <request.json> --adapter fake
+$env:PYTHONPATH='src'
+py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli inspect-generation-request --input <request.json>
+py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli generate-product-image --input <request.json> --adapter fake
+py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli generate-panel --input <request.json> --adapter fake
 ```
 
 `--adapter` accepts only `rejecting` or `fake`. It defaults to `rejecting`. No real Provider adapter or Provider SDK is included. The explicit fake mode is deterministic and offline.
@@ -55,7 +57,7 @@ The request binds:
 
 ## Preflight and invariants
 
-Preflight completes before the service can invoke the private Adapter execution seam. It fails closed unless all of the following are true:
+Preflight completes before the service can invoke the internal Adapter execution seam. The underscore-prefixed `_generate` method is a Python implementation convention, not a security or authorization boundary; an owned AST architecture test restricts its production call sites to `service.py` and `adapters.py`. Preflight fails closed unless all of the following are true:
 
 - TaskSpec and TaskContext are valid Foundation contracts for `product-image-panel-generation` and share the same task identity;
 - TaskContext revision equals `expected_context_revision`;
@@ -74,7 +76,7 @@ Prompts are compiled deterministically with product identity, optional SKU, role
 
 ## Provider seam and side effects
 
-The public Adapter method always rejects with `IMAGE_PANEL_PROVIDER_BYPASS_FORBIDDEN`. The service reaches only the private execution seam after preflight; no permit issuer or caller-mintable bypass token exists.
+`ImageProviderAdapter` is an abstract base class. Incomplete implementations fail at instantiation, and subclasses cannot override its public `generate()` entry point. That public method always rejects with `IMAGE_PANEL_PROVIDER_BYPASS_FORBIDDEN`. The service accepts only instances of this ABC and reaches the internal execution seam after preflight; no permit issuer or caller-mintable bypass token exists. The AST call-site guard makes accidental direct `_generate` calls elsewhere a test failure, but it is not described or relied upon as a security boundary.
 
 - `FakeImageProviderAdapter` produces deterministic in-memory bytes and can script success, retryable failure, non-retryable failure, timeout, cancellation, and partial outcomes.
 - `RejectingImageProviderAdapter` always returns `IMAGE_PANEL_PROVIDER_NOT_AUTHORIZED` after validated orchestration reaches the seam.
@@ -145,19 +147,22 @@ Forbidden: Product/Research Library writes, Legacy access, credential files, sha
 ## Tests
 
 ```powershell
-python -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_interface
-python -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_adapters
-python -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_safety
-python tools\run_offline_tests.py
+$env:PYTHONPATH=$null
+py -3.14 -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_interface
+py -3.14 -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_adapters
+py -3.14 -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_safety
+py -3.14 -m unittest -v tests.skills.product_image_panel_generation.test_image_panel_architecture
+py -3.14 tools\run_offline_tests.py
 ```
 
-The owned suite uses synthetic contracts and in-memory content only. Full-suite promotion remains gated on Codex-00 accepting the architecture-guard change request that retires the launch-baseline placeholder-only assertion for authorized owner directories.
+The project metadata remains Python `>=3.12` compatible. This closeout is verified on the user-directed local runtime, Python `3.14.0`. Python 3.12 is not locally installed, so its smoke is recorded as `NOT_RUN_ENVIRONMENT_UNAVAILABLE_USER_DIRECTED_LOCAL_3_14`; no runtime was installed or downloaded. The owned suite uses synthetic contracts and in-memory content only.
 
 ## Operations and rollback
 
 - Normal offline release mode is `rejecting`; enable `fake` only for deterministic tests or demonstrations.
+- The CLI adapter allowlist is exactly `rejecting` and `fake`; unknown names fail during argument parsing and no adapter is selected from configuration, environment, network, or Provider discovery.
 - Kill switch: replace any configured Adapter with `RejectingImageProviderAdapter`.
-- Rollback: revert the single Codex-04 work-item commit or omit it from the Codex-00 merge queue; no migration, persistent store, or external side effect needs reversal.
+- Rollback: revert the release commits listed in `evidence/offline-release-20260722/OFFLINE_RELEASE_RECORD.md` in reverse order or omit them from the Codex-00 merge queue; no migration or external Provider side effect needs reversal.
 - Direct service replays are process-local in `0.1.0`; CLI replays survive process restart in the task-workspace ledger. A production orchestration store remains a Codex-00 integration prerequisite before Production Ready.
 - Real image paths remain `RC_PROVIDER_PENDING` until each Provider has a separate FTG-P, dependency approval, bounded smoke, and redacted evidence.
 
