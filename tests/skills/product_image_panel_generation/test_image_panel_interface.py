@@ -289,17 +289,19 @@ class ImagePanelInterfaceTests(unittest.TestCase):
         )
 
     def test_cli_rejects_unknown_adapter_without_loading_input(self) -> None:
-        output = StringIO()
+        for adapter_name in ("real", "yunwu-nano-banana", "yunwu-image2"):
+            with self.subTest(adapter_name=adapter_name):
+                output = StringIO()
 
-        exit_code = cli_main(
-            ["generate-panel", "--input", "not-loaded.json", "--adapter", "real"],
-            stdout=output,
-        )
+                exit_code = cli_main(
+                    ["generate-panel", "--input", "not-loaded.json", "--adapter", adapter_name],
+                    stdout=output,
+                )
 
-        payload = json.loads(output.getvalue())
-        self.assertEqual(exit_code, 2)
-        self.assertEqual(payload["error"]["code"], ImagePanelErrorCode.CONTRACT_INVALID.value)
-        self.assertEqual(payload["error"]["field_paths"], ["argv"])
+                payload = json.loads(output.getvalue())
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(payload["error"]["code"], ImagePanelErrorCode.CONTRACT_INVALID.value)
+                self.assertEqual(payload["error"]["field_paths"], ["argv"])
 
     def test_cli_malformed_input_uses_stable_sanitized_error_and_exit_two(self) -> None:
         output = StringIO()
