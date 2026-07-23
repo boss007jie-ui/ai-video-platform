@@ -1,27 +1,43 @@
-# FT-03-002 Storyboard Gap Closure Evidence
+# FT-03-002R Storyboard Post-Acceptance Recovery Evidence
 
 - Authorization: `FTG-0-20260720-001`
-- Work item: `FT-03-002`
+- Recovery work item: `FT-03-002R`
+- Recovered work item: `FT-03-002`
 - Workline: `codex-03`
 - Branch: `ft/codex-03-storyboard`
-- Interface SemVer: `1.1.0`
-- Execution date: `2026-07-22`
-- Network/Provider/subprocess: `0`
+- Surviving baseline: `3d862bf24d3f1c09bbffd5ca6becd5f6de28d340`
+- Recovery date: `2026-07-23`
+- Recovery write probe: `PASS`
+- Network/Provider/credential access: `0`
 
-## Delivered owner-local capabilities
+## Recovery result
 
-1. `create-storyboard-from-script` and the existing create command accept raw script input and deterministically materialize Story/Scene/Beat/Shot/Panel hierarchy.
-2. Automatic shot/panel planning enforces a configurable 6-12 Panel band and emits additive `panel_type`, `layout`, and `key_moment` fields.
-3. Additive `continuity_archive` records typed character, product, scene, and prop entities with relationship and Panel-reference validation. Existing generic `continuity` and `continuity_changes` behavior remains compatible.
+The eight rescued pre-surgery disassemblies were compared with their `3d862bf` current-state counterparts. Disassembly address noise and unordered `frozenset` rendering were normalized. The three pytest-rewritten test caches were also regenerated in memory with Python `3.14.0` and pytest `9.1.1` before recursive code-object comparison.
 
-No Foundation Contract, shared schema, Core module, other Skill, Legacy source, Provider adapter, or network path was changed or invoked.
+All eight current source files already compile to the rescued pre-surgery bytecode exactly, including nested code objects, constants, names, line tables, exception tables, assertion operands, and assertion messages. Therefore no Python source rewrite was required or introduced:
 
-## Verification
+- `src/ai_video_platform/skills/storyboard/cli.py`
+- `src/ai_video_platform/skills/storyboard/domain.py`
+- `src/ai_video_platform/skills/storyboard/interface.py`
+- `src/ai_video_platform/skills/storyboard/planning.py`
+- `tests/skills/storyboard/test_storyboard_continuity.py`
+- `tests/skills/storyboard/test_storyboard_failures.py`
+- `tests/skills/storyboard/test_storyboard_features.py`
+- `tests/skills/storyboard/test_storyboard_interface.py`
 
-- Owner modules: `45 tests`, `OK`.
+The destroyed evidence increment is restored by this document. No Contract, Core module, other Skill, Legacy source, Provider adapter, or shared surface was modified.
+
+## Fresh verification
+
+All commands ran under Python `3.14.0` with `PYTHONPATH` absent and no network access.
+
+- Storyboard owner suite: `45 tests`, `9/9 subtests`, `OK`.
+- Affected Storyboard plus image-panel/video-planning consumers: `84 tests`, `OK`.
+- Contracts guard: `47 tests`, `9/9 subtests`, `OK`.
+- Architecture guard: `28 tests`, `OK`.
+- Security guard: `10 tests`, `2/2 subtests`, `OK`.
 - Full offline runner: `311 tests`, `OK`, `skipped=3` because symlink creation is unavailable on the Windows host.
-- Architecture ownership, clean-room, Provider/network rejection, Contract registry, Integration/Golden, release, and reproducibility tests all passed.
 
 ## Rollback
 
-Use a normal `git revert` of the FT-03-002 commit and rerun the four Storyboard owner modules plus `py -3.14 tools\run_offline_tests.py`. Do not reset the branch, delete immutable Storyboard artifacts, or change shared surfaces.
+Use a normal `git revert` of the recovery commit and rerun the Storyboard owner suite plus `py -3.14 tools\run_offline_tests.py`. Do not reset the branch, alter repository bookkeeping, delete immutable artifacts, or change shared surfaces.
