@@ -388,8 +388,21 @@ class ResearchLibraryAdapter:
     def delete_record(self, source_id: str, *, reason: str) -> None:
         if not _SAFE_ID.fullmatch(source_id):
             raise SkillError(ErrorCode.PATH_FORBIDDEN, "source_id is not path-safe")
+        media_targets: list[Path] = []
+        for relative in (Path("downloads") / f"{source_id}.mp4", Path("downloads") / "receipts" / f"{source_id}.json"):
+            target = self.root / relative
+            parent = target.parent
+            if not parent.exists():
+                continue
+            _assert_no_link_components(parent)
+            if _is_link(parent) or _is_link(target) or target.parent.resolve() != parent.resolve():
+                raise SkillError(ErrorCode.PATH_FORBIDDEN, "Research media path escaped its controlled root")
+            media_targets.append(target)
         for quarantined in (False, True):
             target = self._target(source_id, quarantined=quarantined)
+            if target.exists():
+                target.unlink()
+        for target in media_targets:
             if target.exists():
                 target.unlink()
         self._memory.delete_record(source_id, reason=reason)

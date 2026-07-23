@@ -5,8 +5,11 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import runpy
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from ai_video_platform.skills.reference_analysis import analyze_reference, compare_result
 from ai_video_platform.skills.reference_analysis.cli import main
@@ -92,6 +95,36 @@ class ReferenceAnalysisInterfaceTests(unittest.TestCase):
             payload = json.loads(output.getvalue())
             self.assertEqual(payload["status"], "COMPLETED")
             self.assertTrue((workspace / "cli-analysis.json").is_file())
+
+    def test_cli_module_entry_executes_main_and_emits_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request_path = workspace / "request.json"
+            request_path.write_text(json.dumps(analyze_request()), encoding="utf-8")
+            argv = [
+                "reference-analysis",
+                "analyze-reference",
+                "--input",
+                str(request_path),
+                "--workspace",
+                str(workspace),
+                "--output",
+                "module-analysis.json",
+            ]
+            output = io.StringIO()
+            module_name = "ai_video_platform.skills.reference_analysis.cli"
+            loaded_module = sys.modules.pop(module_name, None)
+            try:
+                with patch.object(sys, "argv", argv), redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as captured:
+                        runpy.run_module(module_name, run_name="__main__")
+            finally:
+                if loaded_module is not None:
+                    sys.modules[module_name] = loaded_module
+            self.assertEqual(captured.exception.code, 0)
+            payload = json.loads(output.getvalue())
+            self.assertEqual(payload["status"], "COMPLETED")
+            self.assertTrue((workspace / "module-analysis.json").is_file())
 
     def test_analyze_accepts_selected_synthetic_reference_manifest_shape(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
