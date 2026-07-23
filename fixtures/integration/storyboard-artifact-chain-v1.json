@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0.0",
+  "authorization_id": "FTG-0-20260720-001",
+  "fixture_id": "storyboard-artifact-chain-synthetic-v1",
+  "fixture_kind": "VERSIONED_SYNTHETIC_NO_PROVIDER",
+  "production_chain": [
+    "ViralResearchPack",
+    "ReferenceStoryboardAnalysis",
+    "ProductionStoryboardPlan",
+    "ProductionStoryboardPanelPlan",
+    "ProductionStoryboardPanelSet",
+    "VideoGenerationStoryboardMaster",
+    "ShotMotionPlan",
+    "VideoExecutionPackage",
+    "VideoResult"
+  ],
+  "registered_artifacts": [
+    "ReferenceStoryboardAnalysis",
+    "ReferenceBeat",
+    "ReferenceShotEvidence",
+    "ReplicationPattern",
+    "ReferenceAnalysisBoardManifest",
+    "ProductionStoryboardPlan",
+    "ProductionStoryboardPanelPlan",
+    "ProductionStoryboardPanelSet",
+    "VideoGenerationStoryboardMaster",
+    "ShotMotionPlan",
+    "VideoExecutionPackage",
+    "FirstFrameMapping",
+    "ReferenceRoleMapping"
+  ],
+  "synthetic_refs": {
+    "viral_research_pack": "contract://viral-research-pack/synthetic-v1",
+    "reference_analysis": "contract://reference-storyboard-analysis/synthetic-v1",
+    "production_plan": "contract://production-storyboard-plan/synthetic-v1",
+    "panel_plan": "contract://production-storyboard-panel-plan/synthetic-v1",
+    "panel_set": "contract://production-storyboard-panel-set/synthetic-v1",
+    "video_master": "contract://video-generation-storyboard-master/synthetic-v1",
+    "motion_plan": "contract://shot-motion-plan/synthetic-v1",
+    "execution_package": "contract://video-execution-package/synthetic-v1"
+  },
+  "examples": {
+    "FirstFrameMapping": {
+      "shot_id": "shot-001",
+      "panel_id": "panel-001",
+      "asset_ref": "asset://production-panel/panel-001-clean",
+      "asset_role": "clean_full_frame_panel",
+      "aspect_ratio": "9:16",
+      "contains_grid": false,
+      "contains_label": false,
+      "contains_text_overlay": false,
+      "approval_ref": "approval://panel-001/synthetic-v1"
+    },
+    "ReferenceRoleMapping": {
+      "reference_analysis_board": {
+        "asset_ref": "asset://reference-analysis/reference-storyboard-analysis-board",
+        "role": "global_structure_reference",
+        "provider_execution_input": false,
+        "first_frame_eligible": false
+      },
+      "approved_character_reference": {
+        "asset_ref": "asset://approved/character-anchor-001",
+        "role": "character_reference",
+        "provider_execution_input": true,
+        "first_frame_eligible": false
+      }
+    },
+    "VideoExecutionPackage": {
+      "shot_order": ["shot-001", "shot-002"],
+      "approved_panel_refs": [
+        "asset://production-panel/panel-001-clean",
+        "asset://production-panel/panel-002-clean"
+      ],
+      "first_frame_mapping_ref": "contract://first-frame-mapping/synthetic-v1",
+      "reference_role_mapping_ref": "contract://reference-role-mapping/synthetic-v1"
+    }
+  },
+  "forbidden_first_frame_refs": [
+    "asset://reference-analysis/reference-storyboard-analysis-board",
+    "asset://reference-analysis/shot-evidence-board",
+    "asset://reference-analysis/replication-board",
+    "asset://production-panels/storyboard-contact-sheet"
+  ],
+  "provider_calls": 0
+}

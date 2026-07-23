@@ -23,10 +23,52 @@ class BusinessArtifactRegistryTests(unittest.TestCase):
                 "avp.contract.viral-research-request",
                 "avp.contract.viral-research-pack",
                 "avp.contract.reference-collection-manifest",
+                "avp.contract.reference-storyboard-analysis",
+                "avp.contract.reference-beat",
+                "avp.contract.reference-shot-evidence",
+                "avp.contract.replication-pattern",
+                "avp.contract.reference-analysis-board-manifest",
+                "avp.contract.production-storyboard-plan",
+                "avp.contract.production-storyboard-panel-plan",
+                "avp.contract.production-storyboard-panel-set",
+                "avp.contract.video-generation-storyboard-master",
+                "avp.contract.shot-motion-plan",
+                "avp.contract.video-execution-package",
+                "avp.contract.first-frame-mapping",
+                "avp.contract.reference-role-mapping",
             },
         )
         self.assertTrue(set(BUSINESS_ARTIFACT_IDS).isdisjoint(FOUNDATION_CONTRACT_IDS))
         self.assertNotIn(ENVELOPE_SCHEMA_ID, BUSINESS_ARTIFACT_IDS)
+
+    def test_storyboard_chain_identities_have_one_canonical_producer(self) -> None:
+        expected_producers = {
+            "ReferenceStoryboardAnalysis": "reference-analysis",
+            "ReferenceBeat": "reference-analysis",
+            "ReferenceShotEvidence": "reference-analysis",
+            "ReplicationPattern": "reference-analysis",
+            "ReferenceAnalysisBoardManifest": "reference-analysis",
+            "ProductionStoryboardPlan": "storyboard",
+            "ProductionStoryboardPanelPlan": "storyboard",
+            "ProductionStoryboardPanelSet": "product-image-panel-generation",
+            "VideoGenerationStoryboardMaster": "storyboard-master-video-planning",
+            "ShotMotionPlan": "storyboard-master-video-planning",
+            "VideoExecutionPackage": "storyboard-master-video-planning",
+            "FirstFrameMapping": "storyboard-master-video-planning",
+            "ReferenceRoleMapping": "storyboard-master-video-planning",
+        }
+        by_name = {definition.name: definition for definition in BUSINESS_REGISTRY.values()}
+
+        for name, producer in expected_producers.items():
+            with self.subTest(name=name):
+                definition = by_name[name]
+                self.assertEqual(definition.version, "1.0.0")
+                self.assertEqual(definition.authorized_producers, (producer,))
+                self.assertTrue(definition.authorized_consumers)
+
+        self.assertNotIn("StoryboardMaster", by_name)
+        self.assertNotIn("AnalysisResult", by_name)
+        self.assertNotIn("GenerationOutcome", by_name)
 
     def test_registry_rejects_duplicate_or_foundation_identities(self) -> None:
         definition = BusinessArtifactDefinition(
