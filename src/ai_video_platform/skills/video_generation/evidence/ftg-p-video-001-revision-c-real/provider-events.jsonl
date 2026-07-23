@@ -1,0 +1,16 @@
+{"at": "2026-07-22T07:32:34.097470Z", "count": 3, "event": "references_uploaded"}
+{"at": "2026-07-22T07:32:35.400130Z", "event": "submitted", "task_id": "1449f0e53408fb5bbe5d2928cf330187"}
+{"at": "2026-07-22T07:32:35.810121Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:32:46.225691Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:32:56.634511Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:33:07.044887Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:33:17.448697Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:33:27.821446Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:33:38.210250Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:33:48.617576Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:34:01.366726Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:34:16.774463Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:34:28.489418Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:34:40.323792Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:34:53.301627Z", "event": "poll", "provider_cost_units": 77.5, "state": "polling"}
+{"at": "2026-07-22T07:35:10.583378Z", "event": "poll", "provider_cost_units": 77.5, "state": "succeeded"}

@@ -1,0 +1,37 @@
+﻿py.exe : test_approval_must_be_effective_and_match_package (tests.skills.video_generation.test_video_generation_safety.
+VideoGenerationSafetyTests.test_approval_must_be_effective_and_match_package) ... ok
+At line:2 char:1160
++ ... g = Join-Path $logDir $entry[0]; & py -3.14 @($entry[1]) *>&1 | Out-F ...
++                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (test_approval_m...package) ... ok:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+test_budget_and_limits_fail_closed (tests.skills.video_generation.test_video_generation_safety.VideoGenerationSafetyTes
+ts.test_budget_and_limits_fail_closed) ... ok
+test_cli_argument_and_validation_errors_are_machine_readable (tests.skills.video_generation.test_video_generation_safet
+y.VideoGenerationSafetyTests.test_cli_argument_and_validation_errors_are_machine_readable) ... ok
+test_error_redacts_sensitive_nested_fields_and_values (tests.skills.video_generation.test_video_generation_safety.Video
+GenerationSafetyTests.test_error_redacts_sensitive_nested_fields_and_values) ... ok
+test_future_or_unauthorized_approval_boundary_is_rejected (tests.skills.video_generation.test_video_generation_safety.V
+ideoGenerationSafetyTests.test_future_or_unauthorized_approval_boundary_is_rejected) ... ok
+test_generation_source_has_no_private_planning_import (tests.skills.video_generation.test_video_generation_safety.Video
+GenerationSafetyTests.test_generation_source_has_no_private_planning_import) ... ok
+test_missing_idempotency_key_is_rejected (tests.skills.video_generation.test_video_generation_safety.VideoGenerationSaf
+etyTests.test_missing_idempotency_key_is_rejected) ... ok
+test_outer_rehash_cannot_hide_nested_master_tampering (tests.skills.video_generation.test_video_generation_safety.Video
+GenerationSafetyTests.test_outer_rehash_cannot_hide_nested_master_tampering) ... ok
+test_package_version_digest_and_provider_marker_fail_closed (tests.skills.video_generation.test_video_generation_safety
+.VideoGenerationSafetyTests.test_package_version_digest_and_provider_marker_fail_closed) ... ok
+test_provider_binding_and_credential_reference_fail_closed_without_echo (tests.skills.video_generation.test_video_gener
+ation_safety.VideoGenerationSafetyTests.test_provider_binding_and_credential_reference_fail_closed_without_echo) ... ok
+test_recomputed_hashes_cannot_hide_malformed_source_or_task (tests.skills.video_generation.test_video_generation_safety
+.VideoGenerationSafetyTests.test_recomputed_hashes_cannot_hide_malformed_source_or_task) ... ok
+test_redaction_covers_message_and_field_paths (tests.skills.video_generation.test_video_generation_safety.VideoGenerati
+onSafetyTests.test_redaction_covers_message_and_field_paths) ... ok
+test_sensitive_output_configuration_is_rejected_without_echo (tests.skills.video_generation.test_video_generation_safet
+y.VideoGenerationSafetyTests.test_sensitive_output_configuration_is_rejected_without_echo) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.042s
+
+OK

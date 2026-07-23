@@ -1,0 +1,449 @@
+{
+  "authorization_id": "FTG-0-20260720-001",
+  "business_sample_id": "sanitized-video-enhancement-001",
+  "cancel_recovery": {
+    "ledger_state_chain": [
+      "submitting",
+      "submitted",
+      "cancelled"
+    ],
+    "receipt": {
+      "attempts": 1,
+      "authorization_id": "FTG-0-20260720-001",
+      "contract_status": "DRAFT_UNREGISTERED",
+      "cost_estimate": {
+        "currency": "USD",
+        "estimate_only": true,
+        "estimated_cost_usd": 0.011666666666666667,
+        "instance_type": "standard-24gb",
+        "max_runtime_seconds": 60,
+        "not_a_quote": true,
+        "public_source": "RunningHub Enterprise Shared public page",
+        "rate_per_hour": 0.7,
+        "rate_snapshot_at": "2026-07-22T00:00:00Z"
+      },
+      "error_code": null,
+      "error_summary": null,
+      "idempotency_key": "ft-05-002-offline-cancel",
+      "input_summary": {
+        "duration_seconds": 5.0,
+        "file_name": "synthetic-owned-fixture.mp4",
+        "fixture_provenance": "generated_for_ft_05_002_offline_acceptance",
+        "format": "mp4",
+        "fps": 30.0,
+        "height": 360,
+        "lifecycle": "provider_eligible",
+        "rights_basis": "SYNTHETIC",
+        "sha256": "sha256:b57c3ea21f0f0b2be46e881d56a81d1a6a8220882dad2ab09eb6e9073126d7e8",
+        "size_bytes": 43,
+        "source_class": "synthetic_fixture",
+        "width": 640
+      },
+      "job_id": "enh-fd5371320706af7d8626",
+      "operations": [
+        {
+          "factor": 2,
+          "type": "upscale"
+        },
+        {
+          "factor": 2,
+          "type": "frame_interpolation"
+        },
+        {
+          "strength": 0.2,
+          "type": "denoise_restore"
+        }
+      ],
+      "output": null,
+      "provider_execution_performed": true,
+      "provider_job_id_digest": "sha256:77b4f5805d9049bc2d5f653dbcb6a681fdf6b25d8491fd6dc49d5a6d5ab2b859",
+      "provider_network_performed": false,
+      "receipt_id": "receipt-3ead4a3ba872afbfd6ede33f",
+      "recorded_at": "2026-07-22T09:58:15.653596Z",
+      "request_hash": "sha256:9a55d9292192424a685ab6223c5d8409d1ed51b4b9706d5fc85ef23d4ad1d1b0",
+      "retryable": false,
+      "schema_version": "0.1.0",
+      "state": "cancelled",
+      "state_history": [
+        "submitting",
+        "submitted",
+        "cancelled"
+      ],
+      "work_item_id": "FT-05-002",
+      "workflow_profile": {
+        "profile_digest": "sha256:35c581baefd9c1bd004ba0fca73fa61d9cbbfbfb2a002fda21ed50dc33fe5c5d",
+        "profile_id": "fake-enhancement-profile",
+        "profile_version": "1.0.0"
+      }
+    }
+  },
+  "checks": {
+    "cancel_recovery": true,
+    "fake_lifecycle": true,
+    "poll_recovery": true,
+    "provider_network_zero": true,
+    "rejecting_fail_closed": true,
+    "six_cli_commands": true
+  },
+  "fake_success": {
+    "ledger_state_chain": [
+      "submitting",
+      "submitted",
+      "polling",
+      "succeeded",
+      "downloaded"
+    ],
+    "receipt": {
+      "attempts": 1,
+      "authorization_id": "FTG-0-20260720-001",
+      "contract_status": "DRAFT_UNREGISTERED",
+      "cost_estimate": {
+        "currency": "USD",
+        "estimate_only": true,
+        "estimated_cost_usd": 0.011666666666666667,
+        "instance_type": "standard-24gb",
+        "max_runtime_seconds": 60,
+        "not_a_quote": true,
+        "public_source": "RunningHub Enterprise Shared public page",
+        "rate_per_hour": 0.7,
+        "rate_snapshot_at": "2026-07-22T00:00:00Z"
+      },
+      "error_code": null,
+      "error_summary": null,
+      "idempotency_key": "ft-05-002-offline-success",
+      "input_summary": {
+        "duration_seconds": 5.0,
+        "file_name": "synthetic-owned-fixture.mp4",
+        "fixture_provenance": "generated_for_ft_05_002_offline_acceptance",
+        "format": "mp4",
+        "fps": 30.0,
+        "height": 360,
+        "lifecycle": "provider_eligible",
+        "rights_basis": "SYNTHETIC",
+        "sha256": "sha256:b57c3ea21f0f0b2be46e881d56a81d1a6a8220882dad2ab09eb6e9073126d7e8",
+        "size_bytes": 43,
+        "source_class": "synthetic_fixture",
+        "width": 640
+      },
+      "job_id": "enh-dc49f8f64ea1ad8f8efb",
+      "operations": [
+        {
+          "factor": 2,
+          "type": "upscale"
+        },
+        {
+          "factor": 2,
+          "type": "frame_interpolation"
+        },
+        {
+          "strength": 0.2,
+          "type": "denoise_restore"
+        }
+      ],
+      "output": {
+        "contract_status": "DRAFT_UNREGISTERED",
+        "media_type": "video/mp4",
+        "sha256": "sha256:41e0738baa5af24c6ce486d9f81b87cdaeefc8d9ac27ec1ea4a82f079b1ad83d",
+        "size_bytes": 24,
+        "source_uri_digest": "sha256:257e0457b7cb2a8676cbdb70393cf01d3d04e117256610c76efb447aae7b6a81"
+      },
+      "provider_execution_performed": true,
+      "provider_job_id_digest": "sha256:5467fad3fb77c0b91950b3cb83ee2dc02bc277a9b29a01f4efb14cc24929739b",
+      "provider_network_performed": false,
+      "receipt_id": "receipt-a095fe2d008824c601a00c47",
+      "recorded_at": "2026-07-22T09:58:15.653596Z",
+      "request_hash": "sha256:c9444af0fd9efd6967b6a8fccad391a93faca1313fe569619a2c999ae9f54e50",
+      "retryable": false,
+      "schema_version": "0.1.0",
+      "state": "downloaded",
+      "state_history": [
+        "submitting",
+        "submitted",
+        "polling",
+        "succeeded",
+        "downloaded"
+      ],
+      "work_item_id": "FT-05-002",
+      "workflow_profile": {
+        "profile_digest": "sha256:35c581baefd9c1bd004ba0fca73fa61d9cbbfbfb2a002fda21ed50dc33fe5c5d",
+        "profile_id": "fake-enhancement-profile",
+        "profile_version": "1.0.0"
+      }
+    }
+  },
+  "finished_at": "2026-07-22T09:58:15.653596Z",
+  "poll_recovery": {
+    "ledger_state_chain": [
+      "submitting",
+      "submitted",
+      "recovery_required"
+    ],
+    "recovered": {
+      "exit_code": 0,
+      "ok": true,
+      "result": {
+        "history": [
+          {
+            "at": "2026-07-22T09:58:15.653596Z",
+            "state": "submitting"
+          },
+          {
+            "at": "2026-07-22T09:58:15.653596Z",
+            "state": "submitted"
+          },
+          {
+            "at": "2026-07-22T09:58:15.653596Z",
+            "state": "recovery_required"
+          }
+        ],
+        "job_id": "enh-f5f66b6da93a3f27edd5",
+        "provider_execution_mode": "offline_adapter",
+        "provider_network_performed": false,
+        "receipt": {
+          "attempts": 1,
+          "authorization_id": "FTG-0-20260720-001",
+          "contract_status": "DRAFT_UNREGISTERED",
+          "cost_estimate": {
+            "currency": "USD",
+            "estimate_only": true,
+            "estimated_cost_usd": 0.011666666666666667,
+            "instance_type": "standard-24gb",
+            "max_runtime_seconds": 60,
+            "not_a_quote": true,
+            "public_source": "RunningHub Enterprise Shared public page",
+            "rate_per_hour": 0.7,
+            "rate_snapshot_at": "2026-07-22T00:00:00Z"
+          },
+          "error_code": "PROVIDER_RETRY_EXHAUSTED",
+          "error_summary": "enhancement poll retry budget is exhausted",
+          "idempotency_key": "ft-05-002-offline-recover",
+          "input_summary": {
+            "duration_seconds": 5.0,
+            "file_name": "synthetic-owned-fixture.mp4",
+            "fixture_provenance": "generated_for_ft_05_002_offline_acceptance",
+            "format": "mp4",
+            "fps": 30.0,
+            "height": 360,
+            "lifecycle": "provider_eligible",
+            "rights_basis": "SYNTHETIC",
+            "sha256": "sha256:b57c3ea21f0f0b2be46e881d56a81d1a6a8220882dad2ab09eb6e9073126d7e8",
+            "size_bytes": 43,
+            "source_class": "synthetic_fixture",
+            "width": 640
+          },
+          "job_id": "enh-f5f66b6da93a3f27edd5",
+          "operations": [
+            {
+              "factor": 2,
+              "type": "upscale"
+            },
+            {
+              "factor": 2,
+              "type": "frame_interpolation"
+            },
+            {
+              "strength": 0.2,
+              "type": "denoise_restore"
+            }
+          ],
+          "output": null,
+          "provider_execution_performed": true,
+          "provider_job_id_digest": "sha256:10f3122cfd55ed9a8eeecf512fc327528e4dad0afabf81c2ca48b22783726e69",
+          "provider_network_performed": false,
+          "receipt_id": "receipt-c69c5f583eaa8702b80d80e3",
+          "recorded_at": "2026-07-22T09:58:15.653596Z",
+          "request_hash": "sha256:4430af11c22dc29ea6139272cef0842cc951017a2e70287b814664615237e6df",
+          "retryable": true,
+          "schema_version": "0.1.0",
+          "state": "recovery_required",
+          "state_history": [
+            "submitting",
+            "submitted",
+            "recovery_required"
+          ],
+          "work_item_id": "FT-05-002",
+          "workflow_profile": {
+            "profile_digest": "sha256:35c581baefd9c1bd004ba0fca73fa61d9cbbfbfb2a002fda21ed50dc33fe5c5d",
+            "profile_id": "fake-enhancement-profile",
+            "profile_version": "1.0.0"
+          }
+        },
+        "recovered": true,
+        "replayed": false,
+        "state": "recovery_required"
+      }
+    },
+    "result": {
+      "error": {
+        "category": "validation",
+        "code": "PROVIDER_RETRY_EXHAUSTED",
+        "details": {
+          "receipt": {
+            "attempts": 1,
+            "authorization_id": "FTG-0-20260720-001",
+            "contract_status": "DRAFT_UNREGISTERED",
+            "cost_estimate": {
+              "currency": "USD",
+              "estimate_only": true,
+              "estimated_cost_usd": 0.011666666666666667,
+              "instance_type": "standard-24gb",
+              "max_runtime_seconds": 60,
+              "not_a_quote": true,
+              "public_source": "RunningHub Enterprise Shared public page",
+              "rate_per_hour": 0.7,
+              "rate_snapshot_at": "2026-07-22T00:00:00Z"
+            },
+            "error_code": "PROVIDER_RETRY_EXHAUSTED",
+            "error_summary": "enhancement poll retry budget is exhausted",
+            "idempotency_key": "ft-05-002-offline-recover",
+            "input_summary": {
+              "duration_seconds": 5.0,
+              "file_name": "synthetic-owned-fixture.mp4",
+              "fixture_provenance": "generated_for_ft_05_002_offline_acceptance",
+              "format": "mp4",
+              "fps": 30.0,
+              "height": 360,
+              "lifecycle": "provider_eligible",
+              "rights_basis": "SYNTHETIC",
+              "sha256": "sha256:b57c3ea21f0f0b2be46e881d56a81d1a6a8220882dad2ab09eb6e9073126d7e8",
+              "size_bytes": 43,
+              "source_class": "synthetic_fixture",
+              "width": 640
+            },
+            "job_id": "enh-f5f66b6da93a3f27edd5",
+            "operations": [
+              {
+                "factor": 2,
+                "type": "upscale"
+              },
+              {
+                "factor": 2,
+                "type": "frame_interpolation"
+              },
+              {
+                "strength": 0.2,
+                "type": "denoise_restore"
+              }
+            ],
+            "output": null,
+            "provider_execution_performed": true,
+            "provider_job_id_digest": "sha256:10f3122cfd55ed9a8eeecf512fc327528e4dad0afabf81c2ca48b22783726e69",
+            "provider_network_performed": false,
+            "receipt_id": "receipt-c69c5f583eaa8702b80d80e3",
+            "recorded_at": "2026-07-22T09:58:15.653596Z",
+            "request_hash": "sha256:4430af11c22dc29ea6139272cef0842cc951017a2e70287b814664615237e6df",
+            "retryable": true,
+            "schema_version": "0.1.0",
+            "state": "recovery_required",
+            "state_history": [
+              "submitting",
+              "submitted",
+              "recovery_required"
+            ],
+            "work_item_id": "FT-05-002",
+            "workflow_profile": {
+              "profile_digest": "sha256:35c581baefd9c1bd004ba0fca73fa61d9cbbfbfb2a002fda21ed50dc33fe5c5d",
+              "profile_id": "fake-enhancement-profile",
+              "profile_version": "1.0.0"
+            }
+          }
+        },
+        "field_paths": [],
+        "message": "enhancement poll retry budget is exhausted",
+        "retryable": true
+      },
+      "exit_code": 2,
+      "ok": false
+    }
+  },
+  "provider_network_performed": false,
+  "rejecting_fail_closed": {
+    "ledger_state_chain": [
+      "submitting",
+      "failed"
+    ],
+    "result": {
+      "error": {
+        "category": "validation",
+        "code": "PROVIDER_REJECTED",
+        "details": {
+          "receipt": {
+            "attempts": 1,
+            "authorization_id": "FTG-0-20260720-001",
+            "contract_status": "DRAFT_UNREGISTERED",
+            "cost_estimate": {
+              "currency": "USD",
+              "estimate_only": true,
+              "estimated_cost_usd": 0.011666666666666667,
+              "instance_type": "standard-24gb",
+              "max_runtime_seconds": 60,
+              "not_a_quote": true,
+              "public_source": "RunningHub Enterprise Shared public page",
+              "rate_per_hour": 0.7,
+              "rate_snapshot_at": "2026-07-22T00:00:00Z"
+            },
+            "error_code": "PROVIDER_REJECTED",
+            "error_summary": "Enhancement Provider execution is rejected by policy",
+            "idempotency_key": "ft-05-002-offline-reject",
+            "input_summary": {
+              "duration_seconds": 5.0,
+              "file_name": "synthetic-owned-fixture.mp4",
+              "fixture_provenance": "generated_for_ft_05_002_offline_acceptance",
+              "format": "mp4",
+              "fps": 30.0,
+              "height": 360,
+              "lifecycle": "provider_eligible",
+              "rights_basis": "SYNTHETIC",
+              "sha256": "sha256:b57c3ea21f0f0b2be46e881d56a81d1a6a8220882dad2ab09eb6e9073126d7e8",
+              "size_bytes": 43,
+              "source_class": "synthetic_fixture",
+              "width": 640
+            },
+            "job_id": "enh-1d79a49a270aa3c3afe4",
+            "operations": [
+              {
+                "factor": 2,
+                "type": "upscale"
+              },
+              {
+                "factor": 2,
+                "type": "frame_interpolation"
+              },
+              {
+                "strength": 0.2,
+                "type": "denoise_restore"
+              }
+            ],
+            "output": null,
+            "provider_execution_performed": false,
+            "provider_job_id_digest": null,
+            "provider_network_performed": false,
+            "receipt_id": "receipt-05cf9d8ea6fc1f1d99d59ff0",
+            "recorded_at": "2026-07-22T09:58:15.653596Z",
+            "request_hash": "sha256:ad5e82cc62dce6d03ca7468448248ea00cdf2c324c0a9a584bbca4ea1e2a70d9",
+            "retryable": false,
+            "schema_version": "0.1.0",
+            "state": "failed",
+            "state_history": [
+              "submitting",
+              "failed"
+            ],
+            "work_item_id": "FT-05-002",
+            "workflow_profile": {
+              "profile_digest": "sha256:35c581baefd9c1bd004ba0fca73fa61d9cbbfbfb2a002fda21ed50dc33fe5c5d",
+              "profile_id": "fake-enhancement-profile",
+              "profile_version": "1.0.0"
+            }
+          }
+        },
+        "field_paths": [],
+        "message": "Enhancement Provider execution is rejected by policy",
+        "retryable": false
+      },
+      "exit_code": 2,
+      "ok": false
+    }
+  },
+  "status": "PASS",
+  "work_item_id": "FT-05-002"
+}

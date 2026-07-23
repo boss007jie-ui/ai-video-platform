@@ -1,0 +1,19 @@
+﻿py.exe : test_cli_returns_stable_machine_readable_result (tests.skills.video_generation.test_video_generation_interface
+.VideoGenerationInterfaceTests.test_cli_returns_stable_machine_readable_result) ... ok
+At line:2 char:1160
++ ... g = Join-Path $logDir $entry[0]; & py -3.14 @($entry[1]) *>&1 | Out-F ...
++                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (test_cli_return..._result) ... ok:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+test_constructor_reserves_injected_adapter_and_ledger_seams (tests.skills.video_generation.test_video_generation_interf
+ace.VideoGenerationInterfaceTests.test_constructor_reserves_injected_adapter_and_ledger_seams) ... ok
+test_inspect_preflight_is_deterministic_safe_and_provider_free (tests.skills.video_generation.test_video_generation_int
+erface.VideoGenerationInterfaceTests.test_inspect_preflight_is_deterministic_safe_and_provider_free) ... ok
+test_inspect_snapshots_caller_input (tests.skills.video_generation.test_video_generation_interface.VideoGenerationInter
+faceTests.test_inspect_snapshots_caller_input) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.003s
+
+OK

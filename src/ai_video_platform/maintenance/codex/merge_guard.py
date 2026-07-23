@@ -97,6 +97,7 @@ _SKILL_NAMES = {
     "storyboard",
     "product_image_panel_generation",
     "storyboard_master_video_planning",
+    "video_enhancement",
     "video_generation",
     "qa_review",
 }

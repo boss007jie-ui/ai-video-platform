@@ -14,14 +14,31 @@ class VideoProviderAdapter(Protocol):
 
 
 class AdapterFailure(RuntimeError):
-    def __init__(self, code: str, message: str, *, retryable: bool) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool,
+        http_status: int | None = None,
+        provider_error_summary: str | None = None,
+        download_http_status_chain: list[int] | None = None,
+        download_attempts: list[dict[str, object]] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.http_status = http_status
+        self.provider_error_summary = provider_error_summary
+        self.download_http_status_chain = list(download_http_status_chain or [])
+        self.download_attempts = [dict(item) for item in (download_attempts or [])]
 
 
 class FakeVideoProviderAdapter:
     """Deterministic in-memory fake; it never imports or touches networking."""
+
+    execution_mode = "offline_adapter"
+    network_performed = False
 
     def __init__(
         self,
@@ -97,6 +114,8 @@ class FakeVideoProviderAdapter:
 
 
 class RejectingVideoProviderAdapter:
+    execution_mode = "offline_adapter"
+    network_performed = False
     network_calls = 0
 
     def submit(self, request: Mapping[str, object]) -> str:
@@ -113,6 +132,8 @@ class RejectingVideoProviderAdapter:
 
 
 class NetworkBlockedVideoProviderAdapter:
+    execution_mode = "offline_adapter"
+    network_performed = False
     network_calls = 0
 
     def submit(self, request: Mapping[str, object]) -> str:

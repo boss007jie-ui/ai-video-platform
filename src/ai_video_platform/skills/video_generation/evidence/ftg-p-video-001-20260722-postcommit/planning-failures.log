@@ -1,0 +1,48 @@
+﻿py.exe : test_ambiguous_mapping_fails_closed (tests.skills.storyboard_master_video_planning.test_video_planning_failure
+s.VideoPlanningFailureTests.test_ambiguous_mapping_fails_closed) ... ok
+At line:2 char:1160
++ ... g = Join-Path $logDir $entry[0]; & py -3.14 @($entry[1]) *>&1 | Out-F ...
++                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (test_ambiguous_..._closed) ... ok:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+test_blank_role_and_non_hex_asset_digest_are_rejected (tests.skills.storyboard_master_video_planning.test_video_plannin
+g_failures.VideoPlanningFailureTests.test_blank_role_and_non_hex_asset_digest_are_rejected) ... ok
+test_cli_returns_stable_error (tests.skills.storyboard_master_video_planning.test_video_planning_failures.VideoPlanning
+FailureTests.test_cli_returns_stable_error) ... ok
+test_continuity_conflict_fails_closed (tests.skills.storyboard_master_video_planning.test_video_planning_failures.Video
+PlanningFailureTests.test_continuity_conflict_fails_closed) ... ok
+test_duplicate_shot_sequence_fails_closed (tests.skills.storyboard_master_video_planning.test_video_planning_failures.V
+ideoPlanningFailureTests.test_duplicate_shot_sequence_fails_closed) ... ok
+test_missing_asset_fails_closed (tests.skills.storyboard_master_video_planning.test_video_planning_failures.VideoPlanni
+ngFailureTests.test_missing_asset_fails_closed) ... ok
+test_module_cli_argument_error_is_machine_readable (tests.skills.storyboard_master_video_planning.test_video_planning_f
+ailures.VideoPlanningFailureTests.test_module_cli_argument_error_is_machine_readable) ... ok
+test_nested_provider_marker_is_rejected_even_with_recomputed_digests (tests.skills.storyboard_master_video_planning.tes
+t_video_planning_failures.VideoPlanningFailureTests.test_nested_provider_marker_is_rejected_even_with_recomputed_digest
+s) ... ok
+test_partial_mapping_fails_closed (tests.skills.storyboard_master_video_planning.test_video_planning_failures.VideoPlan
+ningFailureTests.test_partial_mapping_fails_closed) ... ok
+test_provider_submission_marker_is_rejected (tests.skills.storyboard_master_video_planning.test_video_planning_failures
+.VideoPlanningFailureTests.test_provider_submission_marker_is_rejected) ... ok
+test_recomputed_digest_cannot_hide_internal_package_contradictions (tests.skills.storyboard_master_video_planning.test_
+video_planning_failures.VideoPlanningFailureTests.test_recomputed_digest_cannot_hide_internal_package_contradictions)
+... ok
+test_recomputed_hashes_cannot_hide_malformed_mapping (tests.skills.storyboard_master_video_planning.test_video_planning
+_failures.VideoPlanningFailureTests.test_recomputed_hashes_cannot_hide_malformed_mapping) ... ok
+test_recomputed_hashes_cannot_hide_nested_identity_or_source_replacement (tests.skills.storyboard_master_video_planning
+.test_video_planning_failures.VideoPlanningFailureTests.test_recomputed_hashes_cannot_hide_nested_identity_or_source_re
+placement) ... ok
+test_shot_without_required_assets_is_rejected_before_build (tests.skills.storyboard_master_video_planning.test_video_pl
+anning_failures.VideoPlanningFailureTests.test_shot_without_required_assets_is_rejected_before_build) ... ok
+test_stale_storyboard_or_manifest_fails_closed (tests.skills.storyboard_master_video_planning.test_video_planning_failu
+res.VideoPlanningFailureTests.test_stale_storyboard_or_manifest_fails_closed) ... ok
+test_tampered_package_is_rejected (tests.skills.storyboard_master_video_planning.test_video_planning_failures.VideoPlan
+ningFailureTests.test_tampered_package_is_rejected) ... ok
+test_unapproved_asset_fails_closed (tests.skills.storyboard_master_video_planning.test_video_planning_failures.VideoPla
+nningFailureTests.test_unapproved_asset_fails_closed) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.020s
+
+OK

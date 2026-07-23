@@ -8,7 +8,7 @@ import hashlib
 import re
 
 from .adapters import AdapterFailure, VideoProviderAdapter
-from .errors import GenerationError, GenerationErrorCode, contains_sensitive_text
+from .errors import GenerationError, GenerationErrorCode, contains_sensitive_text, sanitize_sensitive
 from .ledger import ACTIVE_STATES, InMemoryVideoExecutionLedger
 from .models import CONTRACT_STATUS, content_digest, parse_utc, snapshot
 from .preflight import GenerationPreflight
@@ -84,7 +84,12 @@ class VideoGenerationInterface:
                     code = self._adapter_error_code(exc)
                     terminal_rejection = exc.code in {"PROVIDER_REJECTED", "NETWORK_BLOCKED"}
                     ledger.transition(job_id, expected_states={"submitting"}, state="failed" if terminal_rejection else "recovery_required", at=self._format_time(evaluated_at), attempts=attempts, error_code=code.value, retryable=False)
-                    raise GenerationError(code, str(exc), retryable=False) from None
+                    raise GenerationError(
+                        code,
+                        str(exc),
+                        details=self._adapter_failure_details(exc),
+                        retryable=False,
+                    ) from None
             except GenerationError:
                 ledger.transition(job_id, expected_states={"submitting"}, state="recovery_required", at=self._format_time(evaluated_at), attempts=attempts, error_code=GenerationErrorCode.PROVIDER_REJECTED.value, retryable=False)
                 raise
@@ -140,7 +145,12 @@ class VideoGenerationInterface:
                 adapter.cancel(str(record["provider_job_id"]))
             except AdapterFailure as exc:
                 ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=self._adapter_error_code(exc).value)
-                raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
+                raise GenerationError(
+                    self._adapter_error_code(exc),
+                    str(exc),
+                    details=self._adapter_failure_details(exc),
+                    retryable=exc.retryable,
+                ) from None
             except Exception:
                 ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
                 raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
@@ -160,7 +170,12 @@ class VideoGenerationInterface:
                 if not exc.retryable:
                     code = self._adapter_error_code(exc)
                     ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=code.value)
-                    raise GenerationError(code, str(exc), retryable=False) from None
+                    raise GenerationError(
+                        code,
+                        str(exc),
+                        details=self._adapter_failure_details(exc),
+                        retryable=False,
+                    ) from None
             except GenerationError:
                 raise
             except Exception:
@@ -173,8 +188,64 @@ class VideoGenerationInterface:
         if state not in {"running", "succeeded", "failed", "cancelled"}:
             ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned an unsupported state")
-        ledger_state = "polling" if state == "running" else str(state)
-        return self._result(ledger.transition(job_id, expected_states=ACTIVE_STATES, state=ledger_state, at=self._format_time(evaluated_at), poll_attempts=poll_attempts))
+        changes: dict[str, object] = {"poll_attempts": poll_attempts}
+        cost_units = provider_result.get("cost_units")
+        if cost_units is not None:
+            if isinstance(cost_units, bool) or not isinstance(cost_units, (int, float)) or cost_units < 0:
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned invalid cost data")
+            changes["provider_cost_units"] = cost_units
+            if cost_units > float(record["budget"]["max_cost_units"]):
+                ledger.transition(
+                    job_id,
+                    expected_states=ACTIVE_STATES,
+                    state="failed",
+                    at=self._format_time(evaluated_at),
+                    error_code=GenerationErrorCode.BUDGET_EXCEEDED.value,
+                    **changes,
+                )
+                raise GenerationError(
+                    GenerationErrorCode.BUDGET_EXCEEDED,
+                    "Provider actual cost exceeds the approved budget",
+                )
+        provider_http_status = provider_result.get("http_status")
+        if provider_http_status is not None:
+            if isinstance(provider_http_status, bool) or not isinstance(provider_http_status, int):
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned invalid HTTP diagnostics")
+            changes["provider_http_status"] = provider_http_status
+        provider_error_summary = provider_result.get("provider_error_summary")
+        if provider_error_summary is not None:
+            safe_summary = sanitize_sensitive(provider_error_summary)
+            if not isinstance(safe_summary, str):
+                ledger.transition(job_id, expected_states=ACTIVE_STATES, state="recovery_required", at=self._format_time(evaluated_at), error_code=GenerationErrorCode.PROVIDER_REJECTED.value)
+                raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider returned invalid error diagnostics")
+            changes["provider_error_summary"] = safe_summary[:1000]
+        if record["state"] != "polling":
+            record = ledger.transition(
+                job_id,
+                expected_states=ACTIVE_STATES,
+                state="polling",
+                at=self._format_time(evaluated_at),
+                **changes,
+            )
+        elif state == "running":
+            record = ledger.transition(
+                job_id,
+                expected_states={"polling"},
+                state="polling",
+                at=self._format_time(evaluated_at),
+                **changes,
+            )
+        if state == "running":
+            return self._result(record)
+        return self._result(ledger.transition(
+            job_id,
+            expected_states={"polling"},
+            state=str(state),
+            at=self._format_time(evaluated_at),
+            **changes,
+        ))
 
     def cancel_video(self, job_id: str, *, now: datetime | None = None) -> dict[str, object]:
         adapter, ledger = self._dependencies()
@@ -187,7 +258,12 @@ class VideoGenerationInterface:
         try:
             adapter.cancel(str(record["provider_job_id"]))
         except AdapterFailure as exc:
-            raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
+            raise GenerationError(
+                self._adapter_error_code(exc),
+                str(exc),
+                details=self._adapter_failure_details(exc),
+                retryable=exc.retryable,
+            ) from None
         except Exception:
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
         return self._result(ledger.transition(job_id, expected_states=ACTIVE_STATES, state="cancelled", at=self._format_time(evaluated_at)))
@@ -200,7 +276,12 @@ class VideoGenerationInterface:
         try:
             artifact = adapter.download(str(record["provider_job_id"]))
         except AdapterFailure as exc:
-            raise GenerationError(self._adapter_error_code(exc), str(exc), retryable=exc.retryable) from None
+            raise GenerationError(
+                self._adapter_error_code(exc),
+                str(exc),
+                details=self._adapter_failure_details(exc),
+                retryable=exc.retryable,
+            ) from None
         except Exception:
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Provider adapter failed unexpectedly") from None
         if not isinstance(artifact, Mapping):
@@ -209,7 +290,7 @@ class VideoGenerationInterface:
         expected = artifact.get("sha256")
         uri = artifact.get("uri")
         content_type = artifact.get("content_type")
-        if not isinstance(content, bytes) or not isinstance(expected, str) or not isinstance(uri, str) or contains_sensitive_text(uri) or re.fullmatch(r"memory://[A-Za-z0-9._/-]+", uri) is None or content_type != "video/mp4":
+        if not isinstance(content, bytes) or not isinstance(expected, str) or not isinstance(uri, str) or contains_sensitive_text(uri) or re.fullmatch(r"(?:memory|kie)://[A-Za-z0-9._/-]+", uri) is None or content_type != "video/mp4":
             raise GenerationError(GenerationErrorCode.DOWNLOAD_INTEGRITY_FAILED, "Downloaded artifact metadata is invalid")
         actual = "sha256:" + hashlib.sha256(content).hexdigest()
         if actual != expected:
@@ -223,11 +304,60 @@ class VideoGenerationInterface:
             "sha256": actual,
             "media_type": content_type,
             "size_bytes": len(content),
-            "provenance": {"source_job_id": job_id, "execution_mode": "offline_adapter"},
+            "provenance": {"source_job_id": job_id, "execution_mode": self._execution_mode()},
             "library_write_performed": False,
         }
+        download_observation = self._download_observation(artifact)
         evaluated_at = self._now(now)
-        return self._result(ledger.transition(job_id, expected_states={"succeeded"}, state="downloaded", at=self._format_time(evaluated_at), asset_manifest_request=manifest_request))
+        return self._result(ledger.transition(
+            job_id,
+            expected_states={"succeeded"},
+            state="downloaded",
+            at=self._format_time(evaluated_at),
+            asset_manifest_request=manifest_request,
+            **download_observation,
+        ))
+
+    @staticmethod
+    def _download_observation(artifact: Mapping[str, object]) -> dict[str, object]:
+        chain = artifact.get("download_http_status_chain")
+        attempts = artifact.get("download_attempts")
+        if chain is None and attempts is None:
+            return {}
+        if (
+            not isinstance(chain, list)
+            or not chain
+            or len(chain) > 4
+            or any(isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599 for status in chain)
+            or not isinstance(attempts, list)
+            or not 1 <= len(attempts) <= 2
+        ):
+            raise GenerationError(GenerationErrorCode.DOWNLOAD_INTEGRITY_FAILED, "Download observation metadata is invalid")
+        normalized: list[dict[str, object]] = []
+        expected_fields = {
+            "attempt", "refresh_http_status", "download_http_status", "outcome", "retry_reason",
+        }
+        for index, raw in enumerate(attempts, start=1):
+            if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+                raise GenerationError(GenerationErrorCode.DOWNLOAD_INTEGRITY_FAILED, "Download observation metadata is invalid")
+            refresh_status = raw.get("refresh_http_status")
+            download_status = raw.get("download_http_status")
+            reason = raw.get("retry_reason")
+            if (
+                raw.get("attempt") != index
+                or isinstance(refresh_status, bool)
+                or not isinstance(refresh_status, int)
+                or not 100 <= refresh_status <= 599
+                or (download_status is not None and (isinstance(download_status, bool) or not isinstance(download_status, int) or not 100 <= download_status <= 599))
+                or raw.get("outcome") not in {"retry", "success", "failed"}
+                or (reason is not None and (not isinstance(reason, str) or re.fullmatch(r"[A-Z0-9_]+", reason) is None))
+            ):
+                raise GenerationError(GenerationErrorCode.DOWNLOAD_INTEGRITY_FAILED, "Download observation metadata is invalid")
+            normalized.append(dict(raw))
+        return {
+            "download_http_status_chain": list(chain),
+            "download_attempts": normalized,
+        }
 
     def recover_video(self, job_id: str, *, now: datetime | None = None) -> dict[str, object]:
         del now
@@ -249,6 +379,19 @@ class VideoGenerationInterface:
         return GenerationErrorCode.NETWORK_BLOCKED if error.code == "NETWORK_BLOCKED" else GenerationErrorCode.PROVIDER_REJECTED
 
     @staticmethod
+    def _adapter_failure_details(error: AdapterFailure) -> dict[str, object]:
+        details: dict[str, object] = {}
+        if error.http_status is not None:
+            details["http_status"] = error.http_status
+        if error.provider_error_summary is not None:
+            details["provider_error_summary"] = error.provider_error_summary
+        if error.download_http_status_chain:
+            details["download_http_status_chain"] = list(error.download_http_status_chain)
+        if error.download_attempts:
+            details["download_attempts"] = [dict(item) for item in error.download_attempts]
+        return details
+
+    @staticmethod
     def _now(value: datetime | None) -> datetime:
         evaluated_at = value or datetime.now(timezone.utc)
         if evaluated_at.tzinfo is None:
@@ -259,8 +402,11 @@ class VideoGenerationInterface:
     def _format_time(value: datetime) -> str:
         return value.isoformat().replace("+00:00", "Z")
 
-    @staticmethod
-    def _result(record: Mapping[str, object], *, replayed: bool = False, recovered: bool = False) -> dict[str, object]:
+    def _execution_mode(self) -> str:
+        value = getattr(self._adapter, "execution_mode", "offline_adapter")
+        return value if value in {"offline_adapter", "kie_production"} else "offline_adapter"
+
+    def _result(self, record: Mapping[str, object], *, replayed: bool = False, recovered: bool = False) -> dict[str, object]:
         public = {
             key: value for key, value in record.items()
             if key not in {"provider_job_id", "budget", "output", "request_hash", "idempotency_key"}
@@ -268,7 +414,7 @@ class VideoGenerationInterface:
         public.update({
             "replayed": replayed,
             "recovered": recovered,
-            "provider_network_performed": False,
-            "provider_execution_mode": "offline_adapter",
+            "provider_network_performed": bool(getattr(self._adapter, "network_performed", False)),
+            "provider_execution_mode": self._execution_mode(),
         })
         return snapshot(public)

@@ -1,0 +1,12 @@
+{
+  "artifact_uri_valid": false,
+  "authorization_id": "FTG-P-VIDEO-001",
+  "error_type": "AdapterFailure",
+  "finished_at": "2026-07-22T03:09:41.565800Z",
+  "generation_submissions": 0,
+  "late_artifact_download_performed": false,
+  "ledger_state_chain": [],
+  "provider_smoke": "FAIL",
+  "task_id": null,
+  "work_item_id": "FT-05-001"
+}
