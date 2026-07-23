@@ -18,6 +18,7 @@ class MergeViolation:
 _WORKLINE_PREFIXES = {
     "codex-01": ("src/ai_video_platform/skills/product_knowledge/", "tests/skills/product_knowledge/"),
     "codex-02": (
+        "docs/research/",
         "src/ai_video_platform/skills/viral_research_asset_collection/",
         "src/ai_video_platform/skills/reference_analysis/",
         "tests/skills/viral_research_asset_collection/",
@@ -25,13 +26,16 @@ _WORKLINE_PREFIXES = {
     ),
     "codex-03": ("src/ai_video_platform/skills/storyboard/", "tests/skills/storyboard/"),
     "codex-04": (
+        "evidence/",
         "src/ai_video_platform/skills/product_image_panel_generation/",
         "tests/skills/product_image_panel_generation/",
     ),
     "codex-05": (
         "src/ai_video_platform/skills/storyboard_master_video_planning/",
+        "src/ai_video_platform/skills/video_enhancement/",
         "src/ai_video_platform/skills/video_generation/",
         "tests/skills/storyboard_master_video_planning/",
+        "tests/skills/video_enhancement/",
         "tests/skills/video_generation/",
     ),
     "codex-06": (
@@ -51,6 +55,7 @@ _CODEX_00_PREFIXES = (
     "src/ai_video_platform/contracts/",
     "src/ai_video_platform/core/",
     "src/ai_video_platform/cli/root/",
+    "src/ai_video_platform/interfaces/",
     "src/ai_video_platform/orchestration/hermes/",
     "src/ai_video_platform/maintenance/codex/",
     "schemas/",
@@ -97,6 +102,12 @@ _SKILL_NAMES = {
 }
 _NETWORK_IMPORTS = {"requests", "httpx", "urllib.request", "aiohttp"}
 _PROVIDER_IMPORTS = {"openai", "google.generativeai", "replicate", "fal_client", "apify_client"}
+_AUTHORIZED_PROVIDER_NETWORK_ADAPTERS = {
+    "src/ai_video_platform/skills/product_image_panel_generation/yunwu_adapters.py",
+    "src/ai_video_platform/skills/video_generation/kie_adapter.py",
+    "src/ai_video_platform/skills/viral_research_asset_collection/apify.py",
+    "src/ai_video_platform/skills/viral_research_asset_collection/media.py",
+}
 
 
 def _normalize(relative_path: str) -> str:
@@ -107,6 +118,10 @@ def _normalize(relative_path: str) -> str:
 
 
 def _is_allowed(workline_id: str, path: str) -> bool:
+    if workline_id == "integration-merge":
+        return _is_allowed("codex-00", path) or any(
+            _is_allowed(business_workline, path) for business_workline in _WORKLINE_PREFIXES
+        )
     if workline_id == "codex-00":
         request_prefix = "docs/contracts/change-requests/"
         dependency_prefix = "docs/dependencies/change-requests/"
@@ -707,7 +722,11 @@ def _library_writes(tree: ast.Module) -> frozenset[str]:
 
 
 def _forbidden_runtime_import(tree: ast.AST, relative: Path) -> str | None:
-    if relative.as_posix().endswith("core/guards.py"):
+    relative_path = relative.as_posix()
+    if (
+        relative_path.endswith("core/guards.py")
+        or relative_path in _AUTHORIZED_PROVIDER_NETWORK_ADAPTERS
+    ):
         return None
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

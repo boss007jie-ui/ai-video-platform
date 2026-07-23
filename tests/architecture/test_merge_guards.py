@@ -388,6 +388,78 @@ class MergeGuardTests(unittest.TestCase):
             "OWNERSHIP_PATH_FORBIDDEN",
         )
 
+    def test_changed_path_guard_includes_authorized_workline_prefixes(self) -> None:
+        expected_paths = {
+            "codex-02": "docs/research/provider-notes.md",
+            "codex-04": "evidence/FTG-P-004/result.json",
+            "codex-05": "src/ai_video_platform/skills/video_enhancement/interface.py",
+            "codex-00": "src/ai_video_platform/interfaces/task.py",
+        }
+
+        for workline_id, path in expected_paths.items():
+            with self.subTest(workline_id=workline_id, path=path):
+                self.assertEqual(check_changed_paths(workline_id, (path,)), ())
+
+    def test_integration_merge_accepts_any_owned_business_or_codex_00_path(self) -> None:
+        self.assertEqual(
+            check_changed_paths(
+                "integration-merge",
+                (
+                    "docs/research/provider-notes.md",
+                    "src/ai_video_platform/skills/storyboard/domain/story.py",
+                    "src/ai_video_platform/skills/video_enhancement/interface.py",
+                    "src/ai_video_platform/interfaces/task.py",
+                ),
+            ),
+            (),
+        )
+
+    def test_regular_workline_cannot_write_another_workline_skill(self) -> None:
+        violations = check_changed_paths(
+            "codex-02",
+            ("src/ai_video_platform/skills/storyboard/domain/story.py",),
+        )
+
+        self.assertEqual(
+            [violation.rule_id for violation in violations],
+            ["OWNERSHIP_PATH_FORBIDDEN"],
+        )
+
+    def test_runtime_scan_allows_authorized_provider_adapter_imports(self) -> None:
+        authorized_paths = (
+            "viral_research_asset_collection/apify.py",
+            "viral_research_asset_collection/media.py",
+            "video_generation/kie_adapter.py",
+            "product_image_panel_generation/yunwu_adapters.py",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skills = root / "src" / "ai_video_platform" / "skills"
+            for supplied_path in authorized_paths:
+                target = skills / supplied_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    "import urllib.request\n"
+                    "import openai\n",
+                    encoding="utf-8",
+                )
+
+            self.assertEqual(scan_runtime_boundaries(root), ())
+
+    def test_runtime_scan_still_blocks_network_import_outside_authorized_adapters(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "src" / "ai_video_platform" / "skills" / "video_generation" / "client.py"
+            target.parent.mkdir(parents=True)
+            target.write_text("import urllib.request\n", encoding="utf-8")
+
+            violations = scan_runtime_boundaries(root)
+
+        self.assertEqual(
+            [violation.rule_id for violation in violations],
+            ["NETWORK_CLIENT_IMPORT_FORBIDDEN"],
+        )
+
     def test_runtime_scan_blocks_cross_skill_private_import_and_library_writer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
