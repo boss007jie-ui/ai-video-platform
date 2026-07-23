@@ -2,7 +2,7 @@
 
 ## Release identity
 
-- Interface SemVer: `1.0.0`
+- Interface SemVer: `1.1.0`
 - Python compatibility target: `>=3.12`
 - Foundation Contracts consumed/emitted: `1.0.0`
 - Provider smoke: `NOT_REQUIRED` (Storyboard owns no Provider path)
@@ -10,14 +10,14 @@
 
 ## Preflight
 
-Confirm branch/worktree, clean input Contracts, active Skill `storyboard`, one confirmed product/SKU, required `ReferenceManifest`, `expected_version`, a caller-owned idempotency key, and explicit `task_workspace` plus `state_file` paths. Configure `AVP_TASK_WORKSPACE_ROOT` at launch (or launch from the trusted Task Workspace); `task_workspace` must equal that trusted root and the resolved state file must remain inside it. Never supply `ProductReviewContext`, pending facts, credentials, media payloads, Provider settings, or a Legacy path.
+Confirm branch/worktree, clean input Contracts, active Skill `storyboard`, one confirmed product/SKU, required `ReferenceManifest`, `expected_version`, a caller-owned idempotency key, and explicit `task_workspace` plus `state_file` paths. Supply either the existing structured plan or a non-empty `raw_script`; raw-script planning options must request 6-12 Panels. Configure `AVP_TASK_WORKSPACE_ROOT` at launch (or launch from the trusted Task Workspace); `task_workspace` must equal that trusted root and the resolved state file must remain inside it. Never supply `ProductReviewContext`, pending facts, credentials, media payloads, Provider settings, or a Legacy path.
 
 Run the three owned suites, then the full offline runner. A release packet is not mergeable while any ownership, secret/network/legacy scan, shared change request, DV, or Codex-06 acceptance item is unresolved.
 
 ## Operational budgets
 
 - Canonical plan input: maximum `1,048,576` UTF-8 bytes.
-- Storyboard size: maximum `500` Panels.
+- Storyboard size: maximum `500` Panels for structured compatibility input; automatic raw-script planning is restricted to `6-12` Panels.
 - Owner-local replay/version state: maximum `8 MiB`, rejected before replacing a valid state file.
 - Provider/network calls: exactly `0`.
 - Target local latency: p95 below `100 ms` for the synthetic three-Panel fixture; max-Panel stress evidence is recorded in `RC_EVIDENCE.md` when run.

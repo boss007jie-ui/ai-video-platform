@@ -136,11 +136,11 @@ def run_cli_document(
 ) -> tuple[int, dict[str, Any]]:
     try:
         command = document.get("command")
-        if command not in {"create-storyboard", "revise-storyboard", "validate-continuity"}:
+        if command not in {"create-storyboard", "create-storyboard-from-script", "revise-storyboard", "validate-continuity"}:
             raise StoryboardError(
                 "STORYBOARD_COMMAND_UNSUPPORTED",
                 "validation",
-                "CLI command must be create-storyboard, revise-storyboard, or validate-continuity",
+                "CLI command must be create-storyboard, create-storyboard-from-script, revise-storyboard, or validate-continuity",
                 field_paths=("command",),
             )
         if command == "validate-continuity":
@@ -157,12 +157,20 @@ def run_cli_document(
             return 0, _result_payload(
                 StoryboardResult(status="completed", replay_status="not-applicable", artifact=artifact)
             )
+        plan = document.get("plan", {})
+        if document.get("raw_script") is not None and not plan:
+            plan = {
+                "raw_script": document.get("raw_script"),
+                "planning_options": document.get("planning_options", {}),
+            }
+            if document.get("continuity_archive") is not None:
+                plan["continuity_archive"] = document["continuity_archive"]
         request = StoryboardRequest(
             command=str(command),
             task_spec=_envelope(document.get("task_spec"), "task_spec"),
             task_context=_envelope(document.get("task_context"), "task_context"),
             product_context=_envelope(document.get("product_context"), "product_context"),
-            plan=document.get("plan", {}),
+            plan=plan,
             idempotency_key=str(document.get("idempotency_key", "")),
             expected_version=int(document.get("expected_version", 0)),
             prior_artifact=_artifact(document.get("prior_artifact")),
@@ -232,7 +240,7 @@ def run_cli_document(
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         parser = _MachineArgumentParser(prog="storyboard", add_help=False)
-        parser.add_argument("command", choices=("create-storyboard", "revise-storyboard", "validate-continuity"))
+        parser.add_argument("command", choices=("create-storyboard", "create-storyboard-from-script", "revise-storyboard", "validate-continuity"))
         parser.add_argument("--input", default="-", help="UTF-8 JSON request file or '-' for stdin")
         args = parser.parse_args(argv)
         if args.input == "-":

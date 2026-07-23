@@ -1,0 +1,22 @@
+{
+ "supplement_id": "DV-codex-03-storyboard-001-SUPPLEMENT-ROOTS-001",
+ "case_id": "DV-codex-03-storyboard-001",
+ "work_item_id": "FT-03-001",
+ "workline_id": "codex-03",
+ "authorization_id": "FTG-0-20260720-001",
+ "issued_by": "Hermes",
+ "issued_at": "2026-07-22",
+ "reason": "Original manifest lists legacy root IDs without absolute path mapping; codex-03 correctly stopped (BLOCKED_AUTHORIZATION) instead of searching. This supplement supplies the signed absolute roots.",
+ "absolute_legacy_roots": {
+  "LSL-02": "C:\\Users\\boss0\\Desktop\\04-视频\\veo3.1-production",
+  "LSL-04": "C:\\Users\\boss0\\Desktop\\04-视频\\veo3.1-seedance-skill-sandbox"
+ },
+ "path_rule": "For each allowlist entry: absolute_path = absolute_legacy_roots[legacy_root_id] + relative_path (relative_path uses forward slashes in the manifest; join with OS separator). No other directory may be enumerated, searched, or read.",
+ "t0_reverification_by_hermes_at_issuance": {
+  "files_checked": 15,
+  "missing": 0,
+  "sha256_drift": 0,
+  "note": "Hermes re-hashed all 15 allowlist files at the absolute roots above at supplement issuance: 15/15 match the audit_sha256 values frozen in DV-codex-03-storyboard-001-manifest.json. Zero drift since original signing."
+ },
+ "unchanged_terms": "All other terms of DV-codex-03-storyboard-001-manifest.json remain in force unchanged (T0 hash gate first, network DENY, staging only .dv-staging/DV-codex-03-storyboard-001, no credential files, no source text in evidence, adoption_authority NONE, expiry 2026-07-29)."
+}

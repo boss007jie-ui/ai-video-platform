@@ -16,10 +16,11 @@ from ai_video_platform.contracts.validation import validate_envelope
 from .state import InMemoryVersionStore, VersionStore, VersionStoreError
 
 
-STORYBOARD_VERSION = "1.0.0"
+STORYBOARD_VERSION = "1.1.0"
 MAX_PLAN_BYTES = 1_048_576
 MAX_PANELS = 500
-_COMMANDS = {"create-storyboard", "revise-storyboard"}
+_CREATE_COMMANDS = {"create-storyboard", "create-storyboard-from-script"}
+_COMMANDS = _CREATE_COMMANDS | {"revise-storyboard"}
 _FORBIDDEN_CAPABILITY_KEYS = {
     "provider_submission",
     "provider_request",
@@ -371,14 +372,26 @@ class StoryboardService:
         self._enforce_budget(request.plan)
         self._reject_forbidden_capabilities(request.plan)
         visual_constraints = product_context.payload.visual_constraints or {}
-        from .domain import validate_story
-
-        validate_story(
-            request.plan,
+        plan = self._materialize_plan(
+            request,
             product_id=product_context.payload.product_id,
             visual_constraints=visual_constraints,
         )
-        artifact = self._artifact(request, product_context.payload.product_id, visual_constraints)
+        self._enforce_budget(plan)
+        self._reject_forbidden_capabilities(plan)
+        from .domain import validate_story
+
+        validate_story(
+            plan,
+            product_id=product_context.payload.product_id,
+            visual_constraints=visual_constraints,
+        )
+        artifact = self._artifact(
+            request,
+            product_context.payload.product_id,
+            visual_constraints,
+            plan=plan,
+        )
         self.validate_continuity(artifact)
         asset_manifest = self._asset_manifest(request, artifact)
         feedback_event = self._feedback_event(request, artifact)
@@ -395,7 +408,7 @@ class StoryboardService:
             feedback_event=feedback_event,
             execution_event=execution_event,
         )
-        expected_version = None if request.command == "create-storyboard" else request.expected_version
+        expected_version = None if request.command in _CREATE_COMMANDS else request.expected_version
         try:
             outcome = self._version_store.commit(
                 artifact.task_id,
@@ -537,7 +550,7 @@ class StoryboardService:
                 retryable=exc.retryable,
                 field_paths=("state_file",),
             ) from exc
-        if request.command == "create-storyboard":
+        if request.command in _CREATE_COMMANDS:
             valid = (
                 request.expected_version == 0
                 and request.prior_artifact is None
@@ -560,7 +573,7 @@ class StoryboardService:
             )
 
     def _validate_request_identity(self, request: StoryboardRequest, *, task_id: str, product_id: str) -> None:
-        if request.command == "create-storyboard":
+        if request.command in _CREATE_COMMANDS:
             valid = request.expected_version == 0 and request.prior_artifact is None
         else:
             prior = request.prior_artifact
@@ -598,6 +611,42 @@ class StoryboardService:
         elif isinstance(value, (list, tuple)):
             for index, nested in enumerate(value):
                 self._reject_forbidden_capabilities(nested, f"{path}[{index}]")
+
+    def _materialize_plan(
+        self,
+        request: StoryboardRequest,
+        *,
+        product_id: str,
+        visual_constraints: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        from .planning import build_storyboard_plan, validate_continuity_archive
+
+        supplied = thaw_json(request.plan)
+        raw_script = supplied.get("raw_script")
+        if request.command == "create-storyboard-from-script" and raw_script is None:
+            raise StoryboardError(
+                "STORYBOARD_PLANNING_INVALID",
+                "validation",
+                "create-storyboard-from-script requires raw_script",
+                field_paths=("plan.raw_script",),
+            )
+        if raw_script is not None and not supplied.get("scenes"):
+            return freeze_json(
+                build_storyboard_plan(
+                    raw_script,
+                    product_id=product_id,
+                    visual_constraints=visual_constraints,
+                    planning_options=supplied.get("planning_options"),
+                    continuity_archive=supplied.get("continuity_archive"),
+                )
+            )
+        archive = supplied.get("continuity_archive")
+        if archive is not None:
+            supplied["continuity_archive"] = validate_continuity_archive(
+                archive,
+                product_id=product_id,
+            )
+        return freeze_json(supplied)
 
     def _enforce_budget(self, plan: Mapping[str, Any]) -> None:
         if len(canonical_json(plan).encode("utf-8")) > MAX_PLAN_BYTES:
@@ -641,11 +690,18 @@ class StoryboardService:
             }
         )
 
-    def _artifact(self, request: StoryboardRequest, product_id: str, visual_constraints: Mapping[str, Any]) -> StoryboardArtifact:
+    def _artifact(
+        self,
+        request: StoryboardRequest,
+        product_id: str,
+        visual_constraints: Mapping[str, Any],
+        *,
+        plan: Mapping[str, Any],
+    ) -> StoryboardArtifact:
         source_envelopes = [request.task_spec, request.task_context, request.product_context]
         if request.reference_manifest is not None:
             source_envelopes.append(request.reference_manifest)
-        story = thaw_json(freeze_json(request.plan))
+        story = thaw_json(freeze_json(plan))
         story["artifact_kind"] = "storyboard-owner-local-draft"
         story["artifact_version"] = STORYBOARD_VERSION
         story["product_constraints"] = thaw_json(freeze_json(visual_constraints))
