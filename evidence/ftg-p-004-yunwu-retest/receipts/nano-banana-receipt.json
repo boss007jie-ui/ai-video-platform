@@ -1,0 +1,55 @@
+{
+  "actual_size": {
+    "height": 1024,
+    "width": 1024
+  },
+  "adapter": "yunwu-nano-banana",
+  "artifact_receipt": {
+    "byte_size": 996238,
+    "content_type": "image/png",
+    "height": 1024,
+    "path": "C:\\Users\\boss0\\Desktop\\05-项目文件夹\\AI Video Platform\\.worktrees\\codex-04-image-panel\\evidence\\ftg-p-004-yunwu-retest\\nano-banana\\yunwu-b2b50ba19ff4c83f-369c7b3d5610c932.png",
+    "provider_asset_id": "yunwu:image-panel-request-ftg-p-004-nano-banana:product-image-ftg-p-004-nano-banana",
+    "sha256": "369c7b3d5610c932e499ab26b302e9f1641a16f243cf2e24615c7c78ea591b29",
+    "width": 1024
+  },
+  "attempts": 1,
+  "authorization": "FTG-P-004",
+  "cli_exit_code": 0,
+  "error": null,
+  "provider_receipt": {
+    "byte_size": 996238,
+    "content_type": "image/png",
+    "cost_fields": {
+      "usageMetadata": {
+        "cachedContentTokenCount": 0,
+        "candidatesTokenCount": 1024,
+        "promptTokenCount": 47,
+        "promptTokensDetails": null,
+        "thoughtsTokenCount": 0,
+        "toolUsePromptTokenCount": 0,
+        "toolUsePromptTokensDetails": null,
+        "totalTokenCount": 1071
+      }
+    },
+    "elapsed_ms": 29608,
+    "endpoint": "https://yunwu.ai/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+    "error_body": null,
+    "height": 1024,
+    "http_status": 200,
+    "model_id": "gemini-3.1-flash-image-preview",
+    "provider_asset_id": "yunwu:image-panel-request-ftg-p-004-nano-banana:product-image-ftg-p-004-nano-banana",
+    "provider_network_performed": true,
+    "sha256": "369c7b3d5610c932e499ab26b302e9f1641a16f243cf2e24615c7c78ea591b29",
+    "upload_http_status": null,
+    "width": 1024
+  },
+  "requested_size": {
+    "height": 1024,
+    "width": 1024
+  },
+  "result": "PASS",
+  "retries": 0,
+  "size_match": true,
+  "task": "FT-04-YUNWU-SMOKE"
+}

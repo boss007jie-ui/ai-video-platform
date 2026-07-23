@@ -1,0 +1,251 @@
+{
+  "artifact_receipt": {
+    "byte_size": 996238,
+    "content_type": "image/png",
+    "height": 1024,
+    "path": "C:\\Users\\boss0\\Desktop\\05-项目文件夹\\AI Video Platform\\.worktrees\\codex-04-image-panel\\evidence\\ftg-p-004-yunwu-retest\\nano-banana\\yunwu-b2b50ba19ff4c83f-369c7b3d5610c932.png",
+    "provider_asset_id": "yunwu:image-panel-request-ftg-p-004-nano-banana:product-image-ftg-p-004-nano-banana",
+    "sha256": "369c7b3d5610c932e499ab26b302e9f1641a16f243cf2e24615c7c78ea591b29",
+    "width": 1024
+  },
+  "asset_manifest": {
+    "contract_id": "019f8e8c-2f12-7bca-9c79-be27ead38c18",
+    "contract_type": "avp.contract.asset-manifest",
+    "correlation_id": "task-synthetic-004",
+    "created_at": "2026-07-23T10:36:19.602826Z",
+    "idempotency_key": "image-panel-idempotency-ftg-p-004-nano-banana:asset-manifest",
+    "payload": {
+      "assets": [
+        {
+          "asset_id": "asset:image-panel-request-ftg-p-004-nano-banana:product-image-ftg-p-004-nano-banana",
+          "byte_size": 996238,
+          "content_type": "image/png",
+          "created_at": "2026-07-23T10:36:19Z",
+          "derived_from": [
+            "asset-approved-004"
+          ],
+          "dimensions": {
+            "height": 1024,
+            "width": 1024
+          },
+          "media_type": "image",
+          "provenance": {
+            "generation_record_id": "generation-record:image-panel-request-ftg-p-004-nano-banana",
+            "request_hash": "sha256:2daa31392bf6704d7ce06974aeeaf846e46fc56f55ce04e7424597e24e1819d0"
+          },
+          "provider_metadata": {
+            "byte_size": 996238,
+            "content_type": "image/png",
+            "cost_fields": {
+              "usageMetadata": {
+                "cachedContentTokenCount": 0,
+                "candidatesTokenCount": 1024,
+                "promptTokenCount": 47,
+                "promptTokensDetails": null,
+                "thoughtsTokenCount": 0,
+                "toolUsePromptTokenCount": 0,
+                "toolUsePromptTokensDetails": null,
+                "totalTokenCount": 1071
+              }
+            },
+            "elapsed_ms": 29608,
+            "endpoint": "https://yunwu.ai/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+            "error_body": null,
+            "height": 1024,
+            "http_status": 200,
+            "model_id": "gemini-3.1-flash-image-preview",
+            "model_version": "1.0.0",
+            "provider_asset_id": "yunwu:image-panel-request-ftg-p-004-nano-banana:product-image-ftg-p-004-nano-banana",
+            "provider_id": "yunwu-nano-banana",
+            "provider_network_performed": true,
+            "sha256": "369c7b3d5610c932e499ab26b302e9f1641a16f243cf2e24615c7c78ea591b29",
+            "upload_http_status": null,
+            "width": 1024
+          },
+          "role": "product-image",
+          "sha256": "369c7b3d5610c932e499ab26b302e9f1641a16f243cf2e24615c7c78ea591b29",
+          "uri": "memory://offline/image-panel-request-ftg-p-004-nano-banana/product-image-ftg-p-004-nano-banana"
+        }
+      ],
+      "created_at": "2026-07-23T10:36:19Z",
+      "manifest_id": "asset-manifest:image-panel-request-ftg-p-004-nano-banana",
+      "manifest_revision": 1,
+      "owner_id": "task-synthetic-004",
+      "owner_type": "task"
+    },
+    "payload_digest": "sha256:32b7980f959cf31a6402daeeab7a36ffd439e236e287f07a0c710560d0f1d828",
+    "producer": {
+      "agent": "skill",
+      "component_id": "product-image-panel-generation",
+      "component_version": "0.1.0"
+    },
+    "schema_version": "1.0.0",
+    "source_contract_ids": [
+      "019f8900-b1a1-7236-81d0-4b28debba918",
+      "019f8900-b1a1-75fa-b06b-51515841d8e9",
+      "019f8900-b1a1-7d89-8340-8a4ee0c7c45c",
+      "019f8e87-bb0d-773a-a63a-3ed00500bd2d",
+      "019f8900-b1a1-7542-8d96-0d50d709603a"
+    ],
+    "source_hashes": [
+      "sha256:2daa31392bf6704d7ce06974aeeaf846e46fc56f55ce04e7424597e24e1819d0"
+    ],
+    "task_id": "task-synthetic-004"
+  },
+  "execution_event": {
+    "contract_id": "019f8e8c-2f13-7cc0-b447-eb5b5ba9d375",
+    "contract_type": "avp.contract.skill-execution-event",
+    "correlation_id": "task-synthetic-004",
+    "created_at": "2026-07-23T10:36:19.603113Z",
+    "idempotency_key": "image-panel-idempotency-ftg-p-004-nano-banana:execution-event",
+    "payload": {
+      "event_type": "completed",
+      "execution_id": "execution:image-panel-request-ftg-p-004-nano-banana",
+      "input_contract_refs": [
+        "019f8900-b1a1-7236-81d0-4b28debba918",
+        "019f8900-b1a1-75fa-b06b-51515841d8e9",
+        "019f8900-b1a1-7d89-8340-8a4ee0c7c45c",
+        "019f8e87-bb0d-773a-a63a-3ed00500bd2d",
+        "019f8900-b1a1-7542-8d96-0d50d709603a"
+      ],
+      "metrics": {
+        "attempts": 1,
+        "cost_units": 3,
+        "items": 1
+      },
+      "occurred_at": "2026-07-23T10:36:19Z",
+      "output_contract_refs": [
+        "019f8e8c-2f12-7bca-9c79-be27ead38c18",
+        "019f8e8c-2f12-7c45-9816-9e56b47f77a2"
+      ],
+      "provider_binding": {
+        "model_id": "gemini-3.1-flash-image-preview",
+        "provider_id": "yunwu-nano-banana",
+        "version": "1.0.0"
+      },
+      "sequence": 1,
+      "skill_id": "product-image-panel-generation",
+      "status": "completed",
+      "task_id": "task-synthetic-004"
+    },
+    "payload_digest": "sha256:599523e55d3c88221ee2c4e3282afcc501f7750727a99dc9156bed016d584233",
+    "producer": {
+      "agent": "skill",
+      "component_id": "product-image-panel-generation",
+      "component_version": "0.1.0"
+    },
+    "schema_version": "1.0.0",
+    "source_contract_ids": [
+      "019f8e8c-2f12-7bca-9c79-be27ead38c18",
+      "019f8e8c-2f12-7c45-9816-9e56b47f77a2"
+    ],
+    "source_hashes": [
+      "sha256:2daa31392bf6704d7ce06974aeeaf846e46fc56f55ce04e7424597e24e1819d0"
+    ],
+    "task_id": "task-synthetic-004"
+  },
+  "feedback_event": {
+    "contract_id": "019f8e8c-2f12-7c45-9816-9e56b47f77a2",
+    "contract_type": "avp.contract.feedback-event",
+    "correlation_id": "task-synthetic-004",
+    "created_at": "2026-07-23T10:36:19.603000Z",
+    "idempotency_key": "image-panel-idempotency-ftg-p-004-nano-banana:feedback-event",
+    "payload": {
+      "asset_refs": [
+        "asset:image-panel-request-ftg-p-004-nano-banana:product-image-ftg-p-004-nano-banana"
+      ],
+      "bindings": {
+        "model_id": "gemini-3.1-flash-image-preview",
+        "provider_id": "yunwu-nano-banana",
+        "version": "1.0.0"
+      },
+      "evidence_refs": [
+        "generation-record:image-panel-request-ftg-p-004-nano-banana",
+        "019f8e8c-2f12-7bca-9c79-be27ead38c18"
+      ],
+      "feedback_id": "feedback:image-panel-request-ftg-p-004-nano-banana",
+      "feedback_type": "generation_outcome",
+      "observed_at": "2026-07-23T10:36:19Z",
+      "product_id": "product-synthetic-004",
+      "rule_scope": "product",
+      "scope_key": {
+        "product_id": "product-synthetic-004"
+      },
+      "severity": "info",
+      "source_skill_id": "product-image-panel-generation",
+      "statement": "Image/panel generation ended with status completed",
+      "submitted_by": "product-image-panel-generation",
+      "task_id": "task-synthetic-004"
+    },
+    "payload_digest": "sha256:619c00329513ae59fa0e7562a768d197d00d026f57cde7ad5c0a555912c1ccee",
+    "producer": {
+      "agent": "skill",
+      "component_id": "product-image-panel-generation",
+      "component_version": "0.1.0"
+    },
+    "schema_version": "1.0.0",
+    "source_contract_ids": [
+      "019f8e8c-2f12-7bca-9c79-be27ead38c18"
+    ],
+    "source_hashes": [
+      "sha256:2daa31392bf6704d7ce06974aeeaf846e46fc56f55ce04e7424597e24e1819d0"
+    ],
+    "task_id": "task-synthetic-004"
+  },
+  "generation_record": {
+    "completed_at": "2026-07-23T10:36:19Z",
+    "items": [
+      {
+        "asset_id": "asset:image-panel-request-ftg-p-004-nano-banana:product-image-ftg-p-004-nano-banana",
+        "attempts": 1,
+        "cost_units": 3,
+        "error": null,
+        "item_id": "product-image-ftg-p-004-nano-banana",
+        "status": "completed"
+      }
+    ],
+    "model_id": "gemini-3.1-flash-image-preview",
+    "model_version": "1.0.0",
+    "product_id": "product-synthetic-004",
+    "profile_id": "ftg-p-004-yunwu-nano-banana",
+    "provider_id": "yunwu-nano-banana",
+    "record_id": "generation-record:image-panel-request-ftg-p-004-nano-banana",
+    "request_hash": "sha256:2daa31392bf6704d7ce06974aeeaf846e46fc56f55ce04e7424597e24e1819d0",
+    "request_id": "image-panel-request-ftg-p-004-nano-banana",
+    "started_at": "2026-07-23T10:35:49Z",
+    "status": "completed",
+    "total_attempts": 1,
+    "total_cost_units": 3
+  },
+  "provider_network_performed": true,
+  "provider_receipt": {
+    "byte_size": 996238,
+    "content_type": "image/png",
+    "cost_fields": {
+      "usageMetadata": {
+        "cachedContentTokenCount": 0,
+        "candidatesTokenCount": 1024,
+        "promptTokenCount": 47,
+        "promptTokensDetails": null,
+        "thoughtsTokenCount": 0,
+        "toolUsePromptTokenCount": 0,
+        "toolUsePromptTokensDetails": null,
+        "totalTokenCount": 1071
+      }
+    },
+    "elapsed_ms": 29608,
+    "endpoint": "https://yunwu.ai/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+    "error_body": null,
+    "height": 1024,
+    "http_status": 200,
+    "model_id": "gemini-3.1-flash-image-preview",
+    "provider_asset_id": "yunwu:image-panel-request-ftg-p-004-nano-banana:product-image-ftg-p-004-nano-banana",
+    "provider_network_performed": true,
+    "sha256": "369c7b3d5610c932e499ab26b302e9f1641a16f243cf2e24615c7c78ea591b29",
+    "upload_http_status": null,
+    "width": 1024
+  },
+  "provider_smoke": "PASS",
+  "replayed": false,
+  "status": "completed"
+}
