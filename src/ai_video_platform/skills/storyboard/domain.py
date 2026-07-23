@@ -119,6 +119,10 @@ def validate_story(
                     _validate_transition(previous_continuity, continuity, panel.get("continuity_changes", {}), panel_path)
                     previous_continuity = dict(continuity)
 
+    from .planning import validate_panel_entity_references
+
+    validate_panel_entity_references(story, product_id=product_id)
+
 
 def _unique_id(
     item: Mapping[str, Any],
