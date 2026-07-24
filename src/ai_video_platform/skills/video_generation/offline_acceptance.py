@@ -57,7 +57,7 @@ def build_sanitized_request(
             "authority": {"authority_id": "authorized-approval-boundary"},
             "decided_at": _timestamp(evaluated_at - timedelta(minutes=1)),
             "decision_ref": "FT-05-001-OFFLINE-ACCEPTANCE",
-            "subject_ref": {"digest": package["package_digest"]},
+            "subject_ref": {"digest": package["artifact_digest"]},
             "valid_until": _timestamp(evaluated_at + timedelta(hours=1)),
         },
         "budget": {

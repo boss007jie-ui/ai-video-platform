@@ -89,139 +89,146 @@ class GenerationPreflight:
 
     def _package(self, raw: object) -> dict[str, Any]:
         package = require_mapping(raw, "execution_package")
-        if package.get("artifact_name") != "VideoExecutionPackage" or package.get("contract_status") != CONTRACT_STATUS:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Execution package identity/status is invalid")
         if package.get("schema_version") != SCHEMA_VERSION:
             raise GenerationError(GenerationErrorCode.PACKAGE_VERSION_UNSUPPORTED, "Execution package version is unsupported")
+        self._artifact_identity(package, "VideoExecutionPackage", "avp.contract.video-execution-package")
         if package.get("planning_provider_submission_performed") is not False:
             raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Planning package cannot contain Provider submission")
         package_id = require_string(package, "package_id", GenerationErrorCode.PACKAGE_INVALID)
-        task_id = require_string(package, "task_id", GenerationErrorCode.PACKAGE_INVALID)
-        source = self._source(package.get("source"), "execution_package.source")
-        expected_package_id = "vep-" + content_digest(source).removeprefix("sha256:")[:20]
-        if package_id != expected_package_id:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Execution package identifier is invalid")
-        master = require_mapping(package.get("storyboard_master"), "execution_package.storyboard_master")
-        if master.get("planning_provider_submission_performed") is not False:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Nested planning artifact cannot contain Provider submission")
-        if master.get("artifact_name") != "StoryboardMaster" or master.get("schema_version") != SCHEMA_VERSION or master.get("contract_status") != CONTRACT_STATUS:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Nested planning artifact identity/status is invalid")
-        master_task_id = require_string(master, "task_id", GenerationErrorCode.PACKAGE_INVALID)
-        master_source = self._source(master.get("source"), "execution_package.storyboard_master.source")
-        master_digest = master.get("master_digest")
-        master_body = {key: item for key, item in master.items() if key != "master_digest"}
-        if not isinstance(master_digest, str) or content_digest(master_body) != master_digest:
-            raise GenerationError(GenerationErrorCode.PACKAGE_TAMPERED, "Nested planning artifact digest mismatch")
-        if master_task_id != task_id or master_source != source:
-            raise GenerationError(GenerationErrorCode.PACKAGE_TAMPERED, "Execution package task or source disagrees with nested planning artifact")
-        self._planning_payload(master)
+        artifacts = {
+            "video_generation_storyboard_master": ("VideoGenerationStoryboardMaster", "avp.contract.video-generation-storyboard-master"),
+            "shot_motion_plan": ("ShotMotionPlan", "avp.contract.shot-motion-plan"),
+            "first_frame_mapping": ("FirstFrameMapping", "avp.contract.first-frame-mapping"),
+            "reference_role_mapping": ("ReferenceRoleMapping", "avp.contract.reference-role-mapping"),
+        }
+        nested: dict[str, dict[str, Any]] = {}
+        revisions = {package.get("planning_revision")}
+        for field, (name, contract_id) in artifacts.items():
+            artifact = require_mapping(package.get(field), f"execution_package.{field}")
+            self._artifact_identity(artifact, name, contract_id)
+            revisions.add(artifact.get("planning_revision"))
+            nested[field] = artifact
+        if len(revisions) != 1 or not isinstance(package.get("planning_revision"), str) or not package["planning_revision"]:
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Planning artifact revisions disagree")
+
+        master = nested["video_generation_storyboard_master"]
+        shots = master.get("shots")
+        if not isinstance(shots, list) or not shots:
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Storyboard master shots must be non-empty")
+        shot_order: list[str] = []
+        panel_order: list[str] = []
+        panel_by_shot: dict[str, tuple[str, str, str]] = {}
+        required_shot_fields = {
+            "shot_id", "sequence", "panel_id", "panel_asset_ref", "panel_sha256", "duration_ms",
+            "start_state", "middle_state", "end_state", "motion_path", "character_state", "product_state",
+            "emotion", "camera_motion", "transition", "voiceover", "caption", "sound_effect", "cta",
+        }
+        for index, raw_shot in enumerate(shots):
+            shot = require_mapping(raw_shot, f"execution_package.video_generation_storyboard_master.shots[{index}]")
+            if required_shot_fields - set(shot) or shot.get("sequence") != index + 1:
+                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Storyboard master shot is incomplete or unordered")
+            shot_id = require_string(shot, "shot_id", GenerationErrorCode.PACKAGE_INVALID)
+            panel_id = require_string(shot, "panel_id", GenerationErrorCode.PACKAGE_INVALID)
+            asset_ref = require_string(shot, "panel_asset_ref", GenerationErrorCode.PACKAGE_INVALID)
+            digest = shot.get("panel_sha256")
+            if shot_id in panel_by_shot or not isinstance(digest, str) or _DIGEST.fullmatch(digest) is None:
+                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Storyboard panel binding is invalid")
+            shot_order.append(shot_id)
+            panel_order.append(panel_id)
+            panel_by_shot[shot_id] = (panel_id, asset_ref, digest)
+        if package.get("shot_order") != shot_order or package.get("panel_order") != panel_order:
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Execution package shot/panel order diverges")
+        expected_package_id = "vep-" + content_digest({"revision": package["planning_revision"], "shots": shot_order}).removeprefix("sha256:")[:20]
+        if package_id != expected_package_id or package.get("approved_panel_refs") != [panel_by_shot[shot][1] for shot in shot_order]:
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Execution package identity or approved panel order is invalid")
+
+        first = nested["first_frame_mapping"]
+        forbidden_flags = ("contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")
+        first_ref = str(first.get("asset_ref", "")).lower()
+        target_ratio = master.get("target_aspect_ratio")
+        expected_first = panel_by_shot[shot_order[0]]
         if (
-            package.get("asset_mapping") != master.get("asset_mapping")
-            or package.get("visual_anchors") != master.get("visual_anchors")
-            or package.get("motion_plan") != master.get("motion_plan")
+            first.get("shot_id") != shot_order[0] or first.get("panel_id") != expected_first[0]
+            or first.get("asset_ref") != expected_first[1] or first.get("sha256") != expected_first[2]
+            or first.get("aspect_ratio") != target_ratio or first.get("clean_full_frame") is not True
+            or any(first.get(flag) is not False for flag in forbidden_flags)
+            or any(marker in first_ref for marker in ("analysis", "evidence", "replication", "contact_sheet", "contact-sheet"))
         ):
-            raise GenerationError(GenerationErrorCode.PACKAGE_TAMPERED, "Execution package disagrees with nested planning artifact")
-        supplied = package.get("package_digest")
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "First frame is not the approved clean first production panel")
+
+        role_map = nested["reference_role_mapping"]
+        if master.get("first_frame_mapping_ref") != first.get("artifact_digest") or master.get("reference_role_mapping_ref") != role_map.get("artifact_digest"):
+            raise GenerationError(GenerationErrorCode.PACKAGE_TAMPERED, "Storyboard master artifact references are stale")
+        references = role_map.get("references")
+        if not isinstance(references, list):
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Reference role mapping is invalid")
+        provider_refs: dict[str, dict[str, Any]] = {}
+        for index, raw_reference in enumerate(references):
+            reference = require_mapping(raw_reference, f"execution_package.reference_role_mapping.references[{index}]")
+            asset_ref = require_string(reference, "asset_ref", GenerationErrorCode.PACKAGE_INVALID)
+            role = reference.get("role")
+            structural = role == "global_structure_reference" or any(marker in asset_ref.lower() for marker in ("analysis", "evidence", "replication", "contact_sheet", "contact-sheet"))
+            if structural:
+                if role != "global_structure_reference" or reference.get("provider_execution_input") is not False or reference.get("first_frame_eligible") is not False:
+                    raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Structural analysis references cannot be Provider inputs")
+            else:
+                if role not in {"character_reference", "product_reference", "style_reference"} or reference.get("provider_execution_input") is not True or reference.get("first_frame_eligible") is not False:
+                    raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Provider reference role is invalid")
+                if asset_ref in provider_refs:
+                    raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Provider reference mapping is duplicated")
+                provider_refs[asset_ref] = reference
+
+        mappings = package.get("asset_mapping")
+        if not isinstance(mappings, list):
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Execution package asset mapping is invalid")
+        mapped_panels: dict[str, str] = {}
+        mapped_refs: set[str] = set()
+        for index, raw_mapping in enumerate(mappings):
+            mapping = require_mapping(raw_mapping, f"execution_package.asset_mapping[{index}]")
+            uri = require_string(mapping, "uri", GenerationErrorCode.PACKAGE_INVALID)
+            sha = mapping.get("sha256")
+            if mapping.get("approval_state") != "approved" or not isinstance(sha, str) or _DIGEST.fullmatch(sha) is None:
+                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Execution asset is not approved or has an invalid digest")
+            if mapping.get("role") == "production_panel":
+                shot_id = require_string(mapping, "shot_id", GenerationErrorCode.PACKAGE_INVALID)
+                expected = panel_by_shot.get(shot_id)
+                if shot_id in mapped_panels or expected is None or mapping.get("panel_id") != expected[0] or uri != expected[1] or sha != expected[2]:
+                    raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Production panel mapping diverges from the storyboard master")
+                mapped_panels[shot_id] = uri
+            else:
+                reference = provider_refs.get(uri)
+                if uri in mapped_refs or reference is None or mapping.get("role") != reference.get("role") or mapping.get("provider_execution_input") is not True or sha != reference.get("sha256"):
+                    raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Reference mapping is not approved for Provider execution")
+                mapped_refs.add(uri)
+        if list(mapped_panels) != shot_order or mapped_refs != set(provider_refs):
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Execution asset mapping is incomplete or unordered")
+
+        motion = nested["shot_motion_plan"].get("shots")
+        motion_fields = ("shot_id", "sequence", "duration_ms", "start_state", "middle_state", "end_state", "motion_path", "camera_motion", "transition")
+        expected_motion = [{field: shot[field] for field in motion_fields} for shot in shots]
+        if not isinstance(motion, list) or motion != expected_motion:
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Shot motion plan does not cover the storyboard order")
+
+        for artifact in (*nested.values(), package):
+            self._artifact_digest(artifact)
+        supplied = package.get("artifact_digest")
         if not isinstance(supplied, str) or _DIGEST.fullmatch(supplied) is None:
             raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Execution package digest is invalid")
-        body = {key: item for key, item in package.items() if key != "package_digest"}
-        if content_digest(body) != supplied:
-            raise GenerationError(GenerationErrorCode.PACKAGE_TAMPERED, "Execution package digest mismatch")
-        return package
+        return {**package, "package_digest": supplied}
 
-    def _source(self, raw: object, field: str) -> dict[str, Any]:
-        source = require_mapping(raw, field)
-        for name in ("storyboard_id", "asset_manifest_id"):
-            require_string(source, name, GenerationErrorCode.PACKAGE_INVALID)
-        for name in ("storyboard_revision", "asset_manifest_revision"):
-            value = source.get(name)
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, f"{field}.{name} must be a positive integer")
-        for name in ("storyboard_digest", "asset_manifest_digest"):
-            value = source.get(name)
-            if not isinstance(value, str) or _DIGEST.fullmatch(value) is None:
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, f"{field}.{name} must be a sha256 digest")
-        return source
+    @staticmethod
+    def _artifact_identity(artifact: Mapping[str, object], name: str, contract_id: str) -> None:
+        if artifact.get("artifact_name") != name or artifact.get("contract_id") != contract_id or artifact.get("contract_status") != CONTRACT_STATUS:
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, f"{name} identity/status is invalid")
+        if artifact.get("schema_version") != SCHEMA_VERSION:
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, f"{name} version is unsupported")
 
-    def _planning_payload(self, master: Mapping[str, object]) -> None:
-        shots = master.get("shots")
-        mappings = master.get("asset_mapping")
-        anchors = master.get("visual_anchors")
-        motions = master.get("motion_plan")
-        if not isinstance(shots, list) or not shots:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Nested planning artifact shots must be non-empty")
-        if not isinstance(mappings, list) or not mappings:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Nested planning artifact asset_mapping must be non-empty")
-        if not isinstance(anchors, list) or not anchors:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Nested planning artifact visual_anchors must be non-empty")
-        if not isinstance(motions, list) or not motions:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Nested planning artifact motion_plan must be non-empty")
-
-        required_pairs: set[tuple[str, str]] = set()
-        shot_ids: set[str] = set()
-        sequences: set[int] = set()
-        shot_sequences: dict[str, int] = {}
-        shot_motions: dict[str, object] = {}
-        shot_anchors: dict[str, object] = {}
-        continuity_groups: set[str] = set()
-        for index, raw_shot in enumerate(shots):
-            shot = require_mapping(raw_shot, f"shots[{index}]")
-            shot_id = require_string(shot, "shot_id", GenerationErrorCode.PACKAGE_INVALID)
-            sequence = shot.get("sequence")
-            roles = shot.get("required_asset_roles")
-            continuity = require_string(shot, "continuity_group", GenerationErrorCode.PACKAGE_INVALID)
-            if shot_id in shot_ids or isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0 or sequence in sequences:
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Shot identifiers and positive sequences must be unique")
-            if not isinstance(roles, list) or not roles or any(not isinstance(role, str) or not role.strip() for role in roles):
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Each shot requires non-empty asset roles")
-            if len(set(roles)) != len(roles) or not isinstance(shot.get("visual_anchor"), Mapping) or not isinstance(shot.get("motion"), Mapping):
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Shot planning fields are invalid")
-            if continuity in shot_anchors and shot_anchors[continuity] != shot["visual_anchor"]:
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Shots in one continuity group disagree on their visual anchor")
-            shot_ids.add(shot_id)
-            sequences.add(sequence)
-            shot_sequences[shot_id] = sequence
-            shot_motions[shot_id] = shot["motion"]
-            shot_anchors[continuity] = shot["visual_anchor"]
-            continuity_groups.add(continuity)
-            required_pairs.update((shot_id, role) for role in roles)
-
-        mapped_pairs: set[tuple[str, str]] = set()
-        for index, raw_mapping in enumerate(mappings):
-            mapping = require_mapping(raw_mapping, f"asset_mapping[{index}]")
-            pair = (
-                require_string(mapping, "shot_id", GenerationErrorCode.PACKAGE_INVALID),
-                require_string(mapping, "role", GenerationErrorCode.PACKAGE_INVALID),
-            )
-            require_string(mapping, "asset_id", GenerationErrorCode.PACKAGE_INVALID)
-            require_string(mapping, "uri", GenerationErrorCode.PACKAGE_INVALID)
-            sha = mapping.get("sha256")
-            if pair in mapped_pairs or not isinstance(sha, str) or _DIGEST.fullmatch(sha) is None:
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Asset mapping is duplicated or has an invalid digest")
-            mapped_pairs.add(pair)
-        if mapped_pairs != required_pairs:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Asset mapping does not exactly cover required shot roles")
-
-        anchor_groups: set[str] = set()
-        for index, raw_anchor in enumerate(anchors):
-            anchor = require_mapping(raw_anchor, f"visual_anchors[{index}]")
-            group = require_string(anchor, "continuity_group", GenerationErrorCode.PACKAGE_INVALID)
-            if group in anchor_groups or not isinstance(anchor.get("anchor"), Mapping) or anchor.get("anchor") != shot_anchors.get(group):
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Visual anchor is duplicated or invalid")
-            anchor_groups.add(group)
-        if anchor_groups != continuity_groups:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Visual anchors do not exactly cover continuity groups")
-
-        motion_ids: set[str] = set()
-        for index, raw_motion in enumerate(motions):
-            motion = require_mapping(raw_motion, f"motion_plan[{index}]")
-            shot_id = require_string(motion, "shot_id", GenerationErrorCode.PACKAGE_INVALID)
-            sequence = motion.get("sequence")
-            if shot_id in motion_ids or shot_id not in shot_ids or sequence != shot_sequences.get(shot_id) or not isinstance(motion.get("motion"), Mapping) or motion.get("motion") != shot_motions.get(shot_id):
-                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Motion plan is duplicated or invalid")
-            motion_ids.add(shot_id)
-        if motion_ids != shot_ids:
-            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Motion plan does not exactly cover shots")
+    @staticmethod
+    def _artifact_digest(artifact: Mapping[str, object]) -> None:
+        supplied = artifact.get("artifact_digest")
+        body = {key: value for key, value in artifact.items() if key != "artifact_digest"}
+        if not isinstance(supplied, str) or _DIGEST.fullmatch(supplied) is None or content_digest(body) != supplied:
+            raise GenerationError(GenerationErrorCode.PACKAGE_TAMPERED, "Planning artifact digest mismatch")
 
     def _approval(self, raw: object, package_digest: str, now: datetime) -> dict[str, Any]:
         if raw is None:

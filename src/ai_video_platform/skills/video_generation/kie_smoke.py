@@ -155,7 +155,7 @@ def build_smoke_request(
             "authority": {"authority_id": "authorized-approval-boundary"},
             "decided_at": _timestamp(decided_at),
             "decision_ref": "FTG-P-VIDEO-002-REVISION-D",
-            "subject_ref": {"digest": package["package_digest"]},
+            "subject_ref": {"digest": package["artifact_digest"]},
             "valid_until": _timestamp(decided_at + timedelta(minutes=30)),
         },
         "budget": {

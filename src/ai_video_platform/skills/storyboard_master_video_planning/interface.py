@@ -1,4 +1,4 @@
-"""Pure deterministic Planning domain interface with no Provider seam."""
+"""Canonical, deterministic Video Planning artifact builder with no Provider seam."""
 
 from __future__ import annotations
 
@@ -10,33 +10,23 @@ from .errors import PlanningError, PlanningErrorCode
 from .models import CONTRACT_STATUS, SCHEMA_VERSION, content_digest, snapshot
 
 
+CONTRACT_IDS = {
+    "VideoGenerationStoryboardMaster": "avp.contract.video-generation-storyboard-master",
+    "ShotMotionPlan": "avp.contract.shot-motion-plan",
+    "VideoExecutionPackage": "avp.contract.video-execution-package",
+    "FirstFrameMapping": "avp.contract.first-frame-mapping",
+    "ReferenceRoleMapping": "avp.contract.reference-role-mapping",
+}
+FORBIDDEN_FIRST_FRAME_MARKERS = ("analysis", "evidence", "replication", "contact_sheet", "contact-sheet")
+
+
 def _mapping(value: object, field: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"{field} must be an object", field_paths=(field,))
     try:
         return snapshot(value)
     except (TypeError, ValueError) as exc:
-        raise PlanningError(
-            PlanningErrorCode.INVALID_INPUT,
-            f"{field} must contain only finite JSON-compatible values",
-            field_paths=(field,),
-        ) from exc
-
-
-def _nonempty_string(mapping: Mapping[str, object], field: str, prefix: str = "") -> str:
-    value = mapping.get(field)
-    if not isinstance(value, str) or not value.strip():
-        path = f"{prefix}.{field}" if prefix else field
-        raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"{path} must be a non-empty string", field_paths=(path,))
-    return value
-
-
-def _positive_int(mapping: Mapping[str, object], field: str, prefix: str = "") -> int:
-    value = mapping.get(field)
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        path = f"{prefix}.{field}" if prefix else field
-        raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"{path} must be a positive integer", field_paths=(path,))
-    return value
+        raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"{field} must contain finite JSON values", field_paths=(field,)) from exc
 
 
 def _list(value: object, field: str) -> list[Any]:
@@ -45,296 +35,162 @@ def _list(value: object, field: str) -> list[Any]:
     return list(value)
 
 
+def _string(value: Mapping[str, object], field: str, prefix: str) -> str:
+    candidate = value.get(field)
+    if not isinstance(candidate, str) or not candidate.strip():
+        raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"{prefix}.{field} is required", field_paths=(f"{prefix}.{field}",))
+    return candidate
+
+
+def _artifact(name: str, revision: str, body: Mapping[str, object]) -> dict[str, object]:
+    value = {
+        "artifact_name": name,
+        "contract_id": CONTRACT_IDS[name],
+        "schema_version": SCHEMA_VERSION,
+        "contract_status": CONTRACT_STATUS,
+        "planning_revision": revision,
+        **snapshot(body),
+    }
+    return snapshot({**value, "artifact_digest": content_digest(value)})
+
+
 class VideoPlanningInterface:
-    """Compose local draft board and execution artifacts without side effects."""
+    """Build the five registered planning payloads from approved production panels."""
 
-    def compose_storyboard_master(self, request: Mapping[str, object]) -> dict[str, object]:
-        context = self._validate_request(request)
-        board, asset_mapping, anchors, motion_plan = self._compose(context)
-        body: dict[str, object] = {
-            "artifact_name": "StoryboardMaster",
-            "schema_version": SCHEMA_VERSION,
-            "contract_status": CONTRACT_STATUS,
-            "task_id": context["task_id"],
-            "source": context["source"],
-            "shots": board,
-            "asset_mapping": asset_mapping,
-            "visual_anchors": anchors,
-            "motion_plan": motion_plan,
-            "planning_provider_submission_performed": False,
-        }
-        return snapshot({**body, "master_digest": content_digest(body)})
-
-    def build_video_plan(self, request: Mapping[str, object]) -> dict[str, object]:
-        master = self.compose_storyboard_master(request)
-        source = snapshot(master["source"])
-        package_id = "vep-" + content_digest(source).removeprefix("sha256:")[:20]
-        body: dict[str, object] = {
-            "artifact_name": "VideoExecutionPackage",
-            "schema_version": SCHEMA_VERSION,
-            "contract_status": CONTRACT_STATUS,
-            "package_id": package_id,
-            "task_id": master["task_id"],
-            "source": source,
-            "storyboard_master": master,
-            "asset_mapping": snapshot(master["asset_mapping"]),
-            "visual_anchors": snapshot(master["visual_anchors"]),
-            "motion_plan": snapshot(master["motion_plan"]),
-            "planning_provider_submission_performed": False,
-        }
-        return snapshot({**body, "package_digest": content_digest(body)})
-
-    def validate_video_plan(self, package: Mapping[str, object]) -> dict[str, str]:
-        candidate = _mapping(package, "package")
-        if candidate.get("planning_provider_submission_performed") is not False:
-            raise PlanningError(
-                PlanningErrorCode.PROVIDER_SUBMISSION_FORBIDDEN,
-                "Planning artifacts cannot record Provider submission",
-                field_paths=("planning_provider_submission_performed",),
-            )
-        required = {
-            "artifact_name", "schema_version", "contract_status", "package_id", "task_id", "source",
-            "storyboard_master", "asset_mapping", "visual_anchors", "motion_plan", "package_digest",
-        }
-        if required - set(candidate):
-            raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "VideoExecutionPackage is incomplete")
-        if candidate["artifact_name"] != "VideoExecutionPackage" or candidate["schema_version"] != SCHEMA_VERSION:
-            raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "VideoExecutionPackage identity or version is unsupported")
-        if candidate["contract_status"] != CONTRACT_STATUS:
-            raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "Business artifact must remain DRAFT_UNREGISTERED")
-        for field in ("asset_mapping", "motion_plan"):
-            if not isinstance(candidate[field], list) or not candidate[field]:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, f"{field} must be non-empty", field_paths=(field,))
-        master = _mapping(candidate["storyboard_master"], "storyboard_master")
-        master_digest = master.pop("master_digest", None)
-        if not isinstance(master_digest, str) or content_digest(master) != master_digest:
-            raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "StoryboardMaster digest mismatch")
-        try:
-            self._validate_master_structure(master)
-        except PlanningError as error:
-            if error.code in {
-                PlanningErrorCode.PACKAGE_INVALID,
-                PlanningErrorCode.PACKAGE_TAMPERED,
-                PlanningErrorCode.PROVIDER_SUBMISSION_FORBIDDEN,
-            }:
-                raise
-            raise PlanningError(
-                PlanningErrorCode.PACKAGE_INVALID,
-                "StoryboardMaster structure is invalid",
-                field_paths=error.field_paths,
-            ) from error
-        if master.get("planning_provider_submission_performed") is not False:
-            raise PlanningError(
-                PlanningErrorCode.PROVIDER_SUBMISSION_FORBIDDEN,
-                "Nested Planning artifact cannot record Provider submission",
-            )
-        expected_package_id = "vep-" + content_digest(candidate["source"]).removeprefix("sha256:")[:20]
-        if candidate["package_id"] != expected_package_id:
-            raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "VideoExecutionPackage identifier does not match its source")
-        if candidate["task_id"] != master.get("task_id") or candidate["source"] != master.get("source"):
-            raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "Execution package source disagrees with StoryboardMaster")
-        if (
-            candidate["asset_mapping"] != master.get("asset_mapping")
-            or candidate["visual_anchors"] != master.get("visual_anchors")
-            or candidate["motion_plan"] != master.get("motion_plan")
-        ):
-            raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "Execution package disagrees with StoryboardMaster")
-        supplied = candidate.pop("package_digest")
-        if not isinstance(supplied, str) or content_digest(candidate) != supplied:
-            raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "VideoExecutionPackage digest mismatch")
-        return {
-            "status": "valid",
-            "schema_version": SCHEMA_VERSION,
-            "contract_status": CONTRACT_STATUS,
-            "package_digest": supplied,
-        }
-
-    def _validate_master_structure(self, master: Mapping[str, object]) -> None:
-        if (
-            master.get("artifact_name") != "StoryboardMaster"
-            or master.get("schema_version") != SCHEMA_VERSION
-            or master.get("contract_status") != CONTRACT_STATUS
-        ):
-            raise PlanningError(PlanningErrorCode.PACKAGE_TAMPERED, "Nested StoryboardMaster identity is invalid")
-        _nonempty_string(master, "task_id", "storyboard_master")
-        source = _mapping(master.get("source"), "storyboard_master.source")
-        for field in ("storyboard_id", "asset_manifest_id"):
-            _nonempty_string(source, field, "storyboard_master.source")
-        for field in ("storyboard_revision", "asset_manifest_revision"):
-            _positive_int(source, field, "storyboard_master.source")
-        for field in ("storyboard_digest", "asset_manifest_digest"):
-            digest_value = _nonempty_string(source, field, "storyboard_master.source")
-            if re.fullmatch(r"sha256:[0-9a-f]{64}", digest_value) is None:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, f"storyboard_master.source.{field} is invalid")
-
-        shots = _list(master.get("shots"), "storyboard_master.shots")
-        mappings = _list(master.get("asset_mapping"), "storyboard_master.asset_mapping")
-        anchors = _list(master.get("visual_anchors"), "storyboard_master.visual_anchors")
-        motions = _list(master.get("motion_plan"), "storyboard_master.motion_plan")
-        if not shots or not mappings or not anchors or not motions:
-            raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster planning structures must be non-empty")
-
-        shot_by_id: dict[str, dict[str, Any]] = {}
-        sequence_values: set[int] = set()
-        expected_pairs: set[tuple[str, str]] = set()
-        expected_anchors: dict[str, dict[str, Any]] = {}
-        for index, raw_shot in enumerate(shots):
-            shot = _mapping(raw_shot, f"storyboard_master.shots[{index}]")
-            shot_id = _nonempty_string(shot, "shot_id", f"storyboard_master.shots[{index}]")
-            sequence = _positive_int(shot, "sequence", f"storyboard_master.shots[{index}]")
-            if shot_id in shot_by_id or sequence in sequence_values:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster shot identity/order is ambiguous")
-            sequence_values.add(sequence)
-            roles = _list(shot.get("required_asset_roles"), f"storyboard_master.shots[{index}].required_asset_roles")
-            if not roles or any(not isinstance(role, str) or not role.strip() for role in roles) or len(set(roles)) != len(roles):
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster required roles are invalid")
-            group = _nonempty_string(shot, "continuity_group", f"storyboard_master.shots[{index}]")
-            anchor = _mapping(shot.get("visual_anchor"), f"storyboard_master.shots[{index}].visual_anchor")
-            motion = _mapping(shot.get("motion"), f"storyboard_master.shots[{index}].motion")
-            if group in expected_anchors and expected_anchors[group] != anchor:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster continuity anchors conflict")
-            expected_anchors[group] = anchor
-            expected_pairs.update((shot_id, role) for role in roles)
-            shot_by_id[shot_id] = {"sequence": sequence, "motion": motion}
-
-        actual_pairs: set[tuple[str, str]] = set()
-        for index, raw_mapping in enumerate(mappings):
-            item = _mapping(raw_mapping, f"storyboard_master.asset_mapping[{index}]")
-            shot_id = _nonempty_string(item, "shot_id", "storyboard_master.asset_mapping")
-            role = _nonempty_string(item, "role", "storyboard_master.asset_mapping")
-            _nonempty_string(item, "asset_id", "storyboard_master.asset_mapping")
-            _nonempty_string(item, "uri", "storyboard_master.asset_mapping")
-            digest_value = _nonempty_string(item, "sha256", "storyboard_master.asset_mapping")
-            if re.fullmatch(r"sha256:[0-9a-f]{64}", digest_value) is None:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster asset digest is invalid")
-            pair = (shot_id, role)
-            if pair in actual_pairs:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster asset mapping is ambiguous")
-            actual_pairs.add(pair)
-        if actual_pairs != expected_pairs:
-            raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster asset mapping is incomplete")
-
-        actual_anchors: dict[str, dict[str, Any]] = {}
-        for index, raw_anchor in enumerate(anchors):
-            item = _mapping(raw_anchor, f"storyboard_master.visual_anchors[{index}]")
-            group = _nonempty_string(item, "continuity_group", "storyboard_master.visual_anchors")
-            if group in actual_anchors:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster visual anchors are ambiguous")
-            actual_anchors[group] = _mapping(item.get("anchor"), "storyboard_master.visual_anchors.anchor")
-        if actual_anchors != expected_anchors:
-            raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster visual anchors are incomplete")
-
-        seen_motion: set[str] = set()
-        for index, raw_motion in enumerate(motions):
-            item = _mapping(raw_motion, f"storyboard_master.motion_plan[{index}]")
-            shot_id = _nonempty_string(item, "shot_id", "storyboard_master.motion_plan")
-            sequence = _positive_int(item, "sequence", "storyboard_master.motion_plan")
-            motion = _mapping(item.get("motion"), "storyboard_master.motion_plan.motion")
-            if shot_id in seen_motion or shot_id not in shot_by_id:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster motion plan contains an unknown or duplicate shot")
-            if sequence != shot_by_id[shot_id]["sequence"] or motion != shot_by_id[shot_id]["motion"]:
-                raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster motion plan disagrees with board")
-            seen_motion.add(shot_id)
-        if seen_motion != set(shot_by_id):
-            raise PlanningError(PlanningErrorCode.PACKAGE_INVALID, "StoryboardMaster motion plan is incomplete")
-
-    def _validate_request(self, request: Mapping[str, object]) -> dict[str, Any]:
+    def build_storyboard_master(self, request: Mapping[str, object]) -> dict[str, object]:
         value = _mapping(request, "request")
-        task_id = _nonempty_string(value, "task_id")
-        storyboard = _mapping(value.get("storyboard"), "storyboard")
-        manifest = _mapping(value.get("asset_manifest"), "asset_manifest")
-        storyboard_id = _nonempty_string(storyboard, "storyboard_id", "storyboard")
-        storyboard_revision = _positive_int(storyboard, "revision", "storyboard")
-        manifest_id = _nonempty_string(manifest, "manifest_id", "asset_manifest")
-        manifest_revision = _positive_int(manifest, "manifest_revision", "asset_manifest")
-        expected_storyboard = _positive_int(value, "expected_storyboard_revision")
-        expected_manifest = _positive_int(value, "expected_asset_manifest_revision")
-        if expected_storyboard != storyboard_revision or expected_manifest != manifest_revision:
-            raise PlanningError(
-                PlanningErrorCode.STALE_INPUT_VERSION,
-                "Expected revisions do not match the supplied Storyboard and AssetManifest",
-                field_paths=("expected_storyboard_revision", "expected_asset_manifest_revision"),
-            )
-        if manifest.get("storyboard_id") != storyboard_id or manifest.get("storyboard_revision") != storyboard_revision:
-            raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "AssetManifest targets a different Storyboard revision")
-        shots = _list(storyboard.get("shots"), "storyboard.shots")
-        assets = _list(manifest.get("assets"), "asset_manifest.assets")
-        if not shots:
-            raise PlanningError(PlanningErrorCode.INVALID_INPUT, "storyboard.shots must be non-empty")
-        return {
-            "task_id": task_id,
-            "storyboard": storyboard,
-            "manifest": manifest,
-            "shots": shots,
-            "assets": assets,
-            "source": {
-                "storyboard_id": storyboard_id,
-                "storyboard_revision": storyboard_revision,
-                "storyboard_digest": content_digest(storyboard),
-                "asset_manifest_id": manifest_id,
-                "asset_manifest_revision": manifest_revision,
-                "asset_manifest_digest": content_digest(manifest),
-            },
-        }
+        plan = _mapping(value.get("production_storyboard_plan"), "production_storyboard_plan")
+        panels = _mapping(value.get("production_storyboard_panel_set"), "production_storyboard_panel_set")
+        product = _mapping(value.get("product_context_bundle"), "product_context_bundle")
+        self._identity(plan, "ProductionStoryboardPlan", "avp.contract.production-storyboard-plan")
+        self._identity(panels, "ProductionStoryboardPanelSet", "avp.contract.production-storyboard-panel-set")
+        revision = _string(plan, "planning_revision", "production_storyboard_plan")
+        product_id = _string(plan, "product_id", "production_storyboard_plan")
+        if panels.get("planning_revision") != revision or panels.get("product_id") != product_id or product.get("product_id") != product_id:
+            raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Planning revision or product identity diverges")
 
-    def _compose(self, context: Mapping[str, Any]) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-        normalized_shots: list[dict[str, Any]] = []
-        shot_ids: set[str] = set()
+        approved_results = {
+            item.get("panel_id") for item in (_mapping(raw, "approved_panel_results") for raw in _list(value.get("approved_panel_results"), "approved_panel_results"))
+            if item.get("approval_state") == "approved"
+        }
+        panel_by_shot: dict[str, dict[str, Any]] = {}
+        for raw in _list(panels.get("panels"), "production_storyboard_panel_set.panels"):
+            panel = _mapping(raw, "production_storyboard_panel_set.panels")
+            shot_id = _string(panel, "shot_id", "panel")
+            if panel.get("approval_state") != "approved" or panel.get("panel_id") not in approved_results:
+                raise PlanningError(PlanningErrorCode.ASSET_NOT_APPROVED, "Every execution panel must be approved")
+            if shot_id in panel_by_shot:
+                raise PlanningError(PlanningErrorCode.ASSET_MAPPING_AMBIGUOUS, "Each shot must resolve to one panel")
+            panel_by_shot[shot_id] = panel
+
+        ordered_shots: list[dict[str, object]] = []
+        shot_order: list[str] = []
+        panel_order: list[str] = []
         sequences: set[int] = set()
-        anchor_by_group: dict[str, dict[str, Any]] = {}
-        for index, raw in enumerate(context["shots"]):
-            shot = _mapping(raw, f"storyboard.shots[{index}]")
-            shot_id = _nonempty_string(shot, "shot_id", f"storyboard.shots[{index}]")
-            sequence = _positive_int(shot, "sequence", f"storyboard.shots[{index}]")
-            if shot_id in shot_ids or sequence in sequences:
-                raise PlanningError(PlanningErrorCode.SHOT_SEQUENCE_INVALID, "Shot IDs and sequences must be unique")
-            shot_ids.add(shot_id)
+        required = ("duration_ms", "start_state", "middle_state", "end_state", "motion_path", "character_state", "product_state", "emotion", "camera_motion", "transition", "voiceover", "caption", "sound_effect", "cta")
+        raw_shots = [_mapping(raw, "production_storyboard_plan.shots") for raw in _list(plan.get("shots"), "production_storyboard_plan.shots")]
+        identities = [(shot.get("shot_id"), shot.get("sequence")) for shot in raw_shots]
+        if (
+            not identities
+            or any(not isinstance(shot_id, str) or not shot_id or isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1 for shot_id, sequence in identities)
+            or len({shot_id for shot_id, _ in identities}) != len(identities)
+            or {sequence for _, sequence in identities} != set(range(1, len(identities) + 1))
+        ):
+            raise PlanningError(PlanningErrorCode.INVALID_SHOT_ORDER, "Shots must have unique identities and one contiguous positive sequence")
+        for shot in sorted(raw_shots, key=lambda item: item["sequence"]):
+            shot_id = _string(shot, "shot_id", "shot")
+            sequence = shot.get("sequence")
+            if shot_id in shot_order or isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1 or sequence in sequences:
+                raise PlanningError(PlanningErrorCode.INVALID_SHOT_ORDER, "Shot identities and positive sequences must be unique")
             sequences.add(sequence)
-            roles = _list(shot.get("required_asset_roles"), f"storyboard.shots[{index}].required_asset_roles")
-            if not roles or any(not isinstance(role, str) or not role.strip() for role in roles) or len(set(roles)) != len(roles):
-                raise PlanningError(PlanningErrorCode.INVALID_INPUT, "required_asset_roles must contain one or more unique strings")
-            group = _nonempty_string(shot, "continuity_group", f"storyboard.shots[{index}]")
-            anchor = _mapping(shot.get("visual_anchor"), f"storyboard.shots[{index}].visual_anchor")
-            motion = _mapping(shot.get("motion"), f"storyboard.shots[{index}].motion")
-            if group in anchor_by_group and anchor_by_group[group] != anchor:
-                raise PlanningError(PlanningErrorCode.CONTINUITY_CONFLICT, "Continuity group contains conflicting visual anchors")
-            anchor_by_group[group] = anchor
-            normalized_shots.append({
-                "shot_id": shot_id,
-                "sequence": sequence,
-                "required_asset_roles": sorted(roles),
-                "continuity_group": group,
-                "visual_anchor": anchor,
-                "motion": motion,
-            })
-        normalized_shots.sort(key=lambda item: (item["sequence"], item["shot_id"]))
-        normalized_assets = [_mapping(asset, f"asset_manifest.assets[{i}]") for i, asset in enumerate(context["assets"])]
-        mapping: list[dict[str, object]] = []
-        for shot in normalized_shots:
-            for role in shot["required_asset_roles"]:
-                candidates = [
-                    asset for asset in normalized_assets
-                    if asset.get("role") == role and shot["shot_id"] in _list(asset.get("shot_ids", []), "asset.shot_ids")
-                ]
-                if not candidates:
-                    raise PlanningError(PlanningErrorCode.ASSET_MAPPING_MISSING, "Required shot asset mapping is missing")
-                if len(candidates) > 1:
-                    raise PlanningError(PlanningErrorCode.ASSET_MAPPING_AMBIGUOUS, "Required shot asset mapping is ambiguous")
-                asset = candidates[0]
-                asset_id = _nonempty_string(asset, "asset_id", "asset_manifest.assets")
-                if asset.get("approval_state") != "approved":
-                    raise PlanningError(PlanningErrorCode.ASSET_NOT_APPROVED, "Mapped asset is not approved")
-                uri = _nonempty_string(asset, "uri", "asset_manifest.assets")
-                sha256 = _nonempty_string(asset, "sha256", "asset_manifest.assets")
-                if re.fullmatch(r"sha256:[0-9a-f]{64}", sha256) is None:
-                    raise PlanningError(PlanningErrorCode.INVALID_INPUT, "Mapped asset sha256 is invalid")
-                mapping.append({"shot_id": shot["shot_id"], "role": role, "asset_id": asset_id, "uri": uri, "sha256": sha256})
-        anchors = [
-            {"continuity_group": group, "anchor": anchor_by_group[group]}
-            for group in sorted(anchor_by_group)
-        ]
-        motion_plan = [
-            {"shot_id": shot["shot_id"], "sequence": shot["sequence"], "motion": shot["motion"]}
-            for shot in normalized_shots
-        ]
-        return normalized_shots, mapping, anchors, motion_plan
+            panel = panel_by_shot.get(shot_id)
+            if panel is None:
+                raise PlanningError(PlanningErrorCode.ASSET_MAPPING_MISSING, "Every shot requires one approved panel")
+            if panel.get("sequence") != shot.get("sequence"):
+                raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Panel and shot order diverge")
+            for field in required:
+                if field not in shot or (field != "cta" and (not isinstance(shot[field], (str, int)) or shot[field] == "")):
+                    raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"shot.{field} is required")
+            ordered_shots.append(snapshot({**shot, "panel_id": panel["panel_id"], "panel_asset_ref": panel["asset_ref"], "panel_sha256": panel["sha256"]}))
+            shot_order.append(shot_id)
+            panel_order.append(str(panel["panel_id"]))
+        if not shot_order or sequences != set(range(1, len(shot_order) + 1)):
+            raise PlanningError(PlanningErrorCode.INVALID_SHOT_ORDER, "Shots must form one contiguous non-empty sequence")
+        if set(panel_by_shot) != set(shot_order):
+            raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Panel set contains unknown or unordered shots")
+
+        first_panel = panel_by_shot[shot_order[0]]
+        self._validate_first_frame(first_panel, str(plan.get("target_aspect_ratio")))
+        first_frame = _artifact("FirstFrameMapping", revision, {
+            "shot_id": shot_order[0], "panel_id": first_panel["panel_id"], "asset_ref": first_panel["asset_ref"],
+            "sha256": first_panel["sha256"], "approval_ref": first_panel["approval_ref"], "aspect_ratio": first_panel["aspect_ratio"],
+            **{field: first_panel[field] for field in ("clean_full_frame", "contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")},
+        })
+        references = self._reference_roles(value)
+        role_mapping = _artifact("ReferenceRoleMapping", revision, {"references": references})
+        master = _artifact("VideoGenerationStoryboardMaster", revision, {
+            "product_context_bundle": product, "target_aspect_ratio": plan["target_aspect_ratio"], "shots": ordered_shots,
+            "first_frame_mapping_ref": first_frame["artifact_digest"], "reference_role_mapping_ref": role_mapping["artifact_digest"],
+        })
+        motion = _artifact("ShotMotionPlan", revision, {"shots": [{"shot_id": shot["shot_id"], "sequence": shot["sequence"], "duration_ms": shot["duration_ms"], "start_state": shot["start_state"], "middle_state": shot["middle_state"], "end_state": shot["end_state"], "motion_path": shot["motion_path"], "camera_motion": shot["camera_motion"], "transition": shot["transition"]} for shot in ordered_shots]})
+        execution = _artifact("VideoExecutionPackage", revision, {
+            "package_id": "vep-" + content_digest({"revision": revision, "shots": shot_order}).removeprefix("sha256:")[:20],
+            "video_generation_storyboard_master": master, "shot_motion_plan": motion, "first_frame_mapping": first_frame,
+            "reference_role_mapping": role_mapping, "shot_order": shot_order, "panel_order": panel_order,
+            "approved_panel_refs": [panel_by_shot[shot]["asset_ref"] for shot in shot_order],
+            "asset_mapping": [
+                {"shot_id": shot, "panel_id": panel_by_shot[shot]["panel_id"], "role": "production_panel", "asset_id": panel_by_shot[shot]["panel_id"], "uri": panel_by_shot[shot]["asset_ref"], "sha256": panel_by_shot[shot]["sha256"], "approval_state": "approved"}
+                for shot in shot_order
+            ] + [
+                {"role": item["role"], "asset_id": item["asset_ref"], "uri": item["asset_ref"], "sha256": item.get("sha256"), "approval_state": "approved", "provider_execution_input": item["provider_execution_input"]}
+                for item in references if item["provider_execution_input"]
+            ],
+            "planning_provider_submission_performed": False,
+        })
+        artifacts = {"video_generation_storyboard_master": master, "shot_motion_plan": motion, "video_execution_package": execution, "first_frame_mapping": first_frame, "reference_role_mapping": role_mapping}
+        return snapshot({"schema_version": SCHEMA_VERSION, "planning_revision": revision, "artifacts": artifacts, "planning_provider_submission_performed": False, "provenance": {"production_storyboard_plan_digest": content_digest(plan), "production_storyboard_panel_set_digest": content_digest(panels), "product_context_bundle_digest": content_digest(product)}})
+
+    @staticmethod
+    def _identity(value: Mapping[str, object], name: str, contract_id: str) -> None:
+        if value.get("artifact_name") != name or value.get("contract_id") != contract_id or value.get("schema_version") != SCHEMA_VERSION:
+            raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"{name} identity/version is unsupported")
+
+    @staticmethod
+    def _validate_first_frame(panel: Mapping[str, object], target_ratio: str) -> None:
+        asset_ref = str(panel.get("asset_ref", "")).lower()
+        flags = ("contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")
+        if panel.get("clean_full_frame") is not True or panel.get("aspect_ratio") != target_ratio or any(panel.get(flag) is not False for flag in flags) or any(marker in asset_ref for marker in FORBIDDEN_FIRST_FRAME_MARKERS):
+            raise PlanningError(PlanningErrorCode.FIRST_FRAME_INELIGIBLE, "First frame must be one approved clean full-frame production panel")
+        digest = panel.get("sha256")
+        if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+            raise PlanningError(PlanningErrorCode.INVALID_INPUT, "First-frame panel digest is invalid")
+
+    @staticmethod
+    def _reference_roles(value: Mapping[str, object]) -> list[dict[str, object]]:
+        roles: list[dict[str, object]] = []
+        seen_refs: set[str] = set()
+        for raw in _list(value.get("reference_assets", []), "reference_assets"):
+            asset = _mapping(raw, "reference_assets")
+            if asset.get("approval_state") != "approved" or asset.get("role") not in {"character_reference", "product_reference", "style_reference"}:
+                raise PlanningError(PlanningErrorCode.REFERENCE_ROLE_FORBIDDEN, "Reference asset role or approval is invalid")
+            asset_ref = _string(asset, "asset_ref", "reference_assets")
+            if asset_ref in seen_refs:
+                raise PlanningError(PlanningErrorCode.ASSET_MAPPING_AMBIGUOUS, "Reference asset mapping must be unique")
+            digest = asset.get("sha256")
+            if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+                raise PlanningError(PlanningErrorCode.INVALID_INPUT, "Reference asset digest is invalid")
+            seen_refs.add(asset_ref)
+            roles.append({"asset_ref": asset_ref, "sha256": asset["sha256"], "role": asset["role"], "provider_execution_input": True, "first_frame_eligible": False})
+        manifest = value.get("reference_analysis_board_manifest")
+        if manifest is not None:
+            board = _mapping(manifest, "reference_analysis_board_manifest")
+            for raw in _list(board.get("assets"), "reference_analysis_board_manifest.assets"):
+                asset = _mapping(raw, "reference_analysis_board_manifest.assets")
+                if asset.get("provider_execution_input") is True or asset.get("first_frame_eligible") is True:
+                    raise PlanningError(PlanningErrorCode.REFERENCE_ROLE_FORBIDDEN, "Analysis boards are structural-only")
+                asset_ref = _string(asset, "asset_ref", "reference_analysis_board_manifest.assets")
+                if asset_ref in seen_refs:
+                    raise PlanningError(PlanningErrorCode.ASSET_MAPPING_AMBIGUOUS, "Reference asset mapping must be unique")
+                seen_refs.add(asset_ref)
+                roles.append({"asset_ref": asset_ref, "role": "global_structure_reference", "provider_execution_input": False, "first_frame_eligible": False})
+        return roles
