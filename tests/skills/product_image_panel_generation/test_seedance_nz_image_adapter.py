@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import base64
+from dataclasses import replace
+import json
+import struct
+import unittest
+
+from ai_video_platform.skills.product_image_panel_generation import (
+    CancellationToken,
+    ImagePanelError,
+    ImagePanelErrorCode,
+)
+from ai_video_platform.skills.product_image_panel_generation.adapters import ProviderInvocation
+from ai_video_platform.skills.product_image_panel_generation.seedance_nz_image_adapter import (
+    SEEDANCE_NZ_IMAGE_SUBMIT_ENDPOINT,
+    SEEDANCE_NZ_IMAGE_TASK_ENDPOINT,
+    FakeSeedanceNzImageAdapter,
+    SeedanceNzHttpResponse,
+    SeedanceNzImageAdapter,
+    SeedanceNzHttpClient,
+)
+
+from ._support import make_request, profile
+
+
+def _png(width: int = 1024, height: int = 1024) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + struct.pack(">II", width, height)
+        + b"\x08\x06\x00\x00\x00"
+    )
+
+
+class RecordingTransport:
+    def __init__(self, responses: list[SeedanceNzHttpResponse], download_body: bytes = b"") -> None:
+        self.responses = list(responses)
+        self.download_body = download_body
+        self.calls: list[dict[str, object]] = []
+
+    def post_json(self, endpoint, *, headers, payload, timeout_seconds):
+        self.calls.append({"method": "POST", "endpoint": endpoint, "headers": dict(headers), "payload": payload})
+        return self.responses.pop(0)
+
+    def get_json(self, endpoint, *, headers, timeout_seconds):
+        self.calls.append({"method": "GET", "endpoint": endpoint, "headers": dict(headers)})
+        return self.responses.pop(0)
+
+    def get_bytes(self, endpoint, *, headers, timeout_seconds):
+        self.calls.append({"method": "GET_BYTES", "endpoint": endpoint, "headers": dict(headers)})
+        return self.download_body
+
+
+def _invocation(*, model_id: str = "seedream-v5-pro-t2i") -> ProviderInvocation:
+    request = make_request()
+    return ProviderInvocation(
+        request_id=request.request_id,
+        request_hash=request.request_hash,
+        item=request.items[0],
+        profile=replace(profile(), provider_id="seedance-nz-image", model_id=model_id),
+        compiled_prompt="Synthetic Seedance product panel",
+        attempt=1,
+        timeout_seconds=5.0,
+    )
+
+
+class SeedanceNzImageAdapterTests(unittest.TestCase):
+    def test_happy_path_submits_polls_downloads_and_records_provenance(self) -> None:
+        content = _png()
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-001"}', 3),
+                SeedanceNzHttpResponse(200, {}, b'{"status":"IN_PROGRESS"}', 2),
+                SeedanceNzHttpResponse(
+                    200,
+                    {},
+                    b'{"status":"SUCCESS","data":{"result_url":"https://cdn.seedance.nz/task-001.png"}}',
+                    2,
+                ),
+            ],
+            download_body=content,
+        )
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        asset = adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(asset.content, content)
+        self.assertEqual((asset.width, asset.height), (1024, 1024))
+        self.assertEqual(asset.provider_asset_id, "task-001")
+        self.assertEqual([call["endpoint"] for call in transport.calls], [
+            SEEDANCE_NZ_IMAGE_SUBMIT_ENDPOINT,
+            SEEDANCE_NZ_IMAGE_TASK_ENDPOINT.format(task_id="task-001"),
+            SEEDANCE_NZ_IMAGE_TASK_ENDPOINT.format(task_id="task-001"),
+            "https://cdn.seedance.nz/task-001.png",
+        ])
+        self.assertEqual(transport.calls[0]["payload"], {
+            "model": "seedream-v5-pro-t2i",
+            "prompt": "Synthetic Seedance product panel",
+            "metadata": {"resolution": "1k", "output_format": "jpeg"},
+        })
+        self.assertEqual(transport.calls[0]["headers"]["Authorization"], "Bearer sk-synthetic")
+        self.assertEqual(adapter.last_receipt.task_id, "task-001")
+        self.assertEqual(adapter.last_receipt.sha256, __import__("hashlib").sha256(content).hexdigest())
+
+    def test_401_fails_closed_and_redacts_key(self) -> None:
+        transport = RecordingTransport([SeedanceNzHttpResponse(401, {}, b"invalid sk-synthetic", 1)])
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport)
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED)
+        self.assertEqual(adapter.last_receipt.error_body, "invalid [REDACTED]")
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_missing_key_is_rejected_before_transport(self) -> None:
+        with self.assertRaisesRegex(ValueError, "SEEDANCE_NZ_API_KEY"):
+            SeedanceNzImageAdapter(api_key="", transport=RecordingTransport([]))
+
+    def test_poll_failure_is_terminal_and_does_not_download(self) -> None:
+        transport = RecordingTransport([
+            SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-fail"}', 1),
+            SeedanceNzHttpResponse(200, {}, b'{"status":"FAILURE","message":"synthetic failure"}', 1),
+        ])
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertEqual(len(transport.calls), 2)
+
+    def test_fake_adapter_is_memory_only_and_supports_failure(self) -> None:
+        fake = FakeSeedanceNzImageAdapter(terminal_status="SUCCESS", content=_png())
+        asset = fake._generate(_invocation(), cancellation=CancellationToken())
+        self.assertEqual(asset.provider_asset_id, "seedance-nz-fake-task-001")
+        self.assertEqual(fake.network_calls, 0)
+
+        rejecting = FakeSeedanceNzImageAdapter(terminal_status="FAILURE")
+        with self.assertRaises(ImagePanelError) as captured:
+            rejecting._generate(_invocation(), cancellation=CancellationToken())
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertEqual(rejecting.network_calls, 0)
+
+    def test_i2i_adds_explicit_reference_urls_and_rejects_more_than_ten(self) -> None:
+        content = _png()
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-i2i"}', 1),
+                SeedanceNzHttpResponse(200, {}, b'{"status":"SUCCESS","data":{"result_url":"https://cdn.seedance.nz/i2i.png"}}', 1),
+            ],
+            download_body=content,
+        )
+        adapter = SeedanceNzImageAdapter(
+            api_key="sk-synthetic",
+            transport=transport,
+            sleep=lambda _: None,
+            reference_image_urls={"panel-synthetic-004": ("https://assets.example/ref.png",)},
+        )
+        adapter._generate(_invocation(model_id="seedream-v5-pro-i2i"), cancellation=CancellationToken())
+        self.assertEqual(transport.calls[0]["payload"]["images"], ["https://assets.example/ref.png"])
+
+        with self.assertRaisesRegex(ValueError, "at most 10"):
+            SeedanceNzImageAdapter(
+                api_key="sk-synthetic",
+                transport=RecordingTransport([]),
+                reference_image_urls={"panel-synthetic-004": tuple("https://e/" + str(i) for i in range(11))},
+            )
+
+    def test_direct_public_generate_remains_fail_closed(self) -> None:
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=RecordingTransport([]))
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter.generate(None, cancellation=CancellationToken())
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_BYPASS_FORBIDDEN)
+
+    def test_download_allowlist_accepts_seedance_cdn_but_rejects_external_host(self) -> None:
+        called: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        client = SeedanceNzHttpClient(connection_factory=lambda *args, **kwargs: called.append((args, kwargs)))
+        with self.assertRaises(ImagePanelError) as captured:
+            client.get_bytes("https://example.invalid/panel.png", headers={}, timeout_seconds=1)
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED)
+        self.assertEqual(called, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
