@@ -115,6 +115,9 @@ class GenerationPreflight:
         shots = master.get("shots")
         if not isinstance(shots, list) or not shots:
             raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Storyboard master shots must be non-empty")
+        target_ratio = master.get("target_aspect_ratio")
+        if not isinstance(target_ratio, str) or not target_ratio.strip():
+            raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Storyboard target aspect ratio is invalid")
         shot_order: list[str] = []
         panel_order: list[str] = []
         panel_by_shot: dict[str, tuple[str, str, str]] = {}
@@ -133,6 +136,12 @@ class GenerationPreflight:
             digest = shot.get("panel_sha256")
             if shot_id in panel_by_shot or not isinstance(digest, str) or _DIGEST.fullmatch(digest) is None:
                 raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Storyboard panel binding is invalid")
+            duration = shot.get("duration_ms")
+            if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
+                raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Storyboard shot duration is invalid")
+            for field in required_shot_fields - {"shot_id", "sequence", "panel_id", "panel_asset_ref", "panel_sha256", "duration_ms"}:
+                if not isinstance(shot.get(field), str) or (field != "cta" and not shot[field].strip()):
+                    raise GenerationError(GenerationErrorCode.PACKAGE_INVALID, "Storyboard shot state fields are invalid")
             shot_order.append(shot_id)
             panel_order.append(panel_id)
             panel_by_shot[shot_id] = (panel_id, asset_ref, digest)
@@ -145,12 +154,11 @@ class GenerationPreflight:
         first = nested["first_frame_mapping"]
         forbidden_flags = ("contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")
         first_ref = str(first.get("asset_ref", "")).lower()
-        target_ratio = master.get("target_aspect_ratio")
         expected_first = panel_by_shot[shot_order[0]]
         if (
             first.get("shot_id") != shot_order[0] or first.get("panel_id") != expected_first[0]
             or first.get("asset_ref") != expected_first[1] or first.get("sha256") != expected_first[2]
-            or first.get("aspect_ratio") != target_ratio or first.get("clean_full_frame") is not True
+            or first.get("asset_role") != "clean_full_frame_panel" or first.get("aspect_ratio") != target_ratio or first.get("clean_full_frame") is not True
             or any(first.get(flag) is not False for flag in forbidden_flags)
             or any(marker in first_ref for marker in ("analysis", "evidence", "replication", "contact_sheet", "contact-sheet"))
         ):

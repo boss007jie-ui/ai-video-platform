@@ -94,6 +94,7 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
         self.assertEqual(first["shot_id"], "shot-001")
         self.assertEqual(first["panel_id"], "panel-001")
         self.assertEqual(first["asset_ref"], "asset://panel/panel-001")
+        self.assertEqual(first["asset_role"], "clean_full_frame_panel")
         self.assertTrue(first["clean_full_frame"])
         self.assertFalse(any(first[field] for field in ("contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")))
 

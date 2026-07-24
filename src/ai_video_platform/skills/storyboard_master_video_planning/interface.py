@@ -66,6 +66,7 @@ class VideoPlanningInterface:
         self._identity(panels, "ProductionStoryboardPanelSet", "avp.contract.production-storyboard-panel-set")
         revision = _string(plan, "planning_revision", "production_storyboard_plan")
         product_id = _string(plan, "product_id", "production_storyboard_plan")
+        target_ratio = _string(plan, "target_aspect_ratio", "production_storyboard_plan")
         if panels.get("planning_revision") != revision or panels.get("product_id") != product_id or product.get("product_id") != product_id:
             raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Planning revision or product identity diverges")
 
@@ -74,13 +75,27 @@ class VideoPlanningInterface:
             if item.get("approval_state") == "approved"
         }
         panel_by_shot: dict[str, dict[str, Any]] = {}
+        panel_ids: set[str] = set()
         for raw in _list(panels.get("panels"), "production_storyboard_panel_set.panels"):
             panel = _mapping(raw, "production_storyboard_panel_set.panels")
+            panel_id = _string(panel, "panel_id", "panel")
             shot_id = _string(panel, "shot_id", "panel")
             if panel.get("approval_state") != "approved" or panel.get("panel_id") not in approved_results:
                 raise PlanningError(PlanningErrorCode.ASSET_NOT_APPROVED, "Every execution panel must be approved")
-            if shot_id in panel_by_shot:
+            if shot_id in panel_by_shot or panel_id in panel_ids:
                 raise PlanningError(PlanningErrorCode.ASSET_MAPPING_AMBIGUOUS, "Each shot must resolve to one panel")
+            _string(panel, "asset_ref", "panel")
+            _string(panel, "approval_ref", "panel")
+            _string(panel, "aspect_ratio", "panel")
+            digest = panel.get("sha256")
+            if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+                raise PlanningError(PlanningErrorCode.INVALID_INPUT, "Panel digest is invalid")
+            if isinstance(panel.get("sequence"), bool) or not isinstance(panel.get("sequence"), int) or panel["sequence"] < 1:
+                raise PlanningError(PlanningErrorCode.INVALID_SHOT_ORDER, "Panel sequence must be a positive integer")
+            for flag in ("clean_full_frame", "contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot"):
+                if not isinstance(panel.get(flag), bool):
+                    raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"panel.{flag} must be boolean")
+            panel_ids.add(panel_id)
             panel_by_shot[shot_id] = panel
 
         ordered_shots: list[dict[str, object]] = []
@@ -109,8 +124,13 @@ class VideoPlanningInterface:
             if panel.get("sequence") != shot.get("sequence"):
                 raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Panel and shot order diverge")
             for field in required:
-                if field not in shot or (field != "cta" and (not isinstance(shot[field], (str, int)) or shot[field] == "")):
+                if field not in shot:
                     raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"shot.{field} is required")
+                if field == "duration_ms":
+                    if isinstance(shot[field], bool) or not isinstance(shot[field], int) or shot[field] <= 0:
+                        raise PlanningError(PlanningErrorCode.INVALID_INPUT, "shot.duration_ms must be a positive integer")
+                elif not isinstance(shot[field], str) or (field != "cta" and not shot[field].strip()):
+                    raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"shot.{field} must be text")
             ordered_shots.append(snapshot({**shot, "panel_id": panel["panel_id"], "panel_asset_ref": panel["asset_ref"], "panel_sha256": panel["sha256"]}))
             shot_order.append(shot_id)
             panel_order.append(str(panel["panel_id"]))
@@ -120,16 +140,16 @@ class VideoPlanningInterface:
             raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Panel set contains unknown or unordered shots")
 
         first_panel = panel_by_shot[shot_order[0]]
-        self._validate_first_frame(first_panel, str(plan.get("target_aspect_ratio")))
+        self._validate_first_frame(first_panel, target_ratio)
         first_frame = _artifact("FirstFrameMapping", revision, {
             "shot_id": shot_order[0], "panel_id": first_panel["panel_id"], "asset_ref": first_panel["asset_ref"],
-            "sha256": first_panel["sha256"], "approval_ref": first_panel["approval_ref"], "aspect_ratio": first_panel["aspect_ratio"],
+            "sha256": first_panel["sha256"], "approval_ref": first_panel["approval_ref"], "asset_role": "clean_full_frame_panel", "aspect_ratio": first_panel["aspect_ratio"],
             **{field: first_panel[field] for field in ("clean_full_frame", "contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")},
         })
         references = self._reference_roles(value)
         role_mapping = _artifact("ReferenceRoleMapping", revision, {"references": references})
         master = _artifact("VideoGenerationStoryboardMaster", revision, {
-            "product_context_bundle": product, "target_aspect_ratio": plan["target_aspect_ratio"], "shots": ordered_shots,
+            "product_context_bundle": product, "target_aspect_ratio": target_ratio, "shots": ordered_shots,
             "first_frame_mapping_ref": first_frame["artifact_digest"], "reference_role_mapping_ref": role_mapping["artifact_digest"],
         })
         motion = _artifact("ShotMotionPlan", revision, {"shots": [{"shot_id": shot["shot_id"], "sequence": shot["sequence"], "duration_ms": shot["duration_ms"], "start_state": shot["start_state"], "middle_state": shot["middle_state"], "end_state": shot["end_state"], "motion_path": shot["motion_path"], "camera_motion": shot["camera_motion"], "transition": shot["transition"]} for shot in ordered_shots]})
@@ -184,6 +204,10 @@ class VideoPlanningInterface:
         manifest = value.get("reference_analysis_board_manifest")
         if manifest is not None:
             board = _mapping(manifest, "reference_analysis_board_manifest")
+            if board.get("artifact_name") != "ReferenceAnalysisBoardManifest" or board.get("schema_version") != SCHEMA_VERSION:
+                raise PlanningError(PlanningErrorCode.REFERENCE_ROLE_FORBIDDEN, "Analysis board manifest identity/version is unsupported")
+            if board.get("provider_execution_input") is True or board.get("first_frame_eligible") is True:
+                raise PlanningError(PlanningErrorCode.REFERENCE_ROLE_FORBIDDEN, "Analysis boards are structural-only")
             for raw in _list(board.get("assets"), "reference_analysis_board_manifest.assets"):
                 asset = _mapping(raw, "reference_analysis_board_manifest.assets")
                 if asset.get("provider_execution_input") is True or asset.get("first_frame_eligible") is True:
