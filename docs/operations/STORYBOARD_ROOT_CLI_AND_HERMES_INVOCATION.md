@@ -8,14 +8,18 @@ Authorization: `FTG-0-20260720-001`
 |---|---|---|
 | `ai-video-platform viral-research search` | Viral Research & Asset Collection | `TARGET_NOT_ROUTED` |
 | `ai-video-platform reference-analysis analyze-storyboard` | Reference Analysis | `TARGET_NOT_ROUTED` |
-| `ai-video-platform storyboard derive-production-panels` | Storyboard | `TARGET_NOT_ROUTED` |
-| `ai-video-platform image-panel generate-panels` | Product Image / Panel Generation | `TARGET_NOT_ROUTED` |
-| `ai-video-platform video-planning build-storyboard-master` | Storyboard Master / Video Planning | `TARGET_NOT_ROUTED` |
-| `ai-video-platform video-generation run` | Video Generation | `TARGET_NOT_ROUTED` |
-| `ai-video-platform qa-review review-artifact` | QA / Review | `TARGET_NOT_ROUTED` |
-| `ai-video-platform qa-review review-composition` | QA / Review | `TARGET_NOT_ROUTED` |
+| `ai-video-platform storyboard derive-production-panels` | Storyboard | `ROUTED` |
+| `ai-video-platform image-panel generate-panels` | Product Image / Panel Generation | `ROUTED` |
+| `ai-video-platform video-planning build-storyboard-master` | Storyboard Master / Video Planning | `ROUTED` |
+| `ai-video-platform video-generation run` | Video Generation | `ROUTED` |
+| `ai-video-platform qa-review review-artifact` | QA / Review | `ROUTED` |
+| `ai-video-platform qa-review review-composition` | QA / Review | `ROUTED` |
 
-These are frozen public targets, not executable promises at this commit. The machine-readable target manifest is `ai_video_platform.cli.root.ROOT_CLI_TARGETS`. Each owning workline must first expose and test its matching public command. A later Codex-00 integration change may route the root executable without moving business logic into the root CLI.
+The six Storyboard Artifact Chain targets above are executable through the
+thin root dispatcher `python -m ai_video_platform.cli`; the dispatcher only
+forwards to each owner's public CLI or public interface. Viral Research and
+Reference Analysis remain `TARGET_NOT_ROUTED` in this bounded wave. The
+machine-readable target manifest is `ai_video_platform.cli.root.ROOT_CLI_TARGETS`.
 
 ## Hermes call protocol
 

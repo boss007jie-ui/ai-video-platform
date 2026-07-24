@@ -27,9 +27,17 @@ class StoryboardArtifactChainTests(unittest.TestCase):
                 ("qa-review", "review-composition"),
             ],
         )
-        self.assertTrue(all(target.status == "TARGET_NOT_ROUTED" for target in ROOT_CLI_TARGETS))
-
         targets = {(target.namespace, target.command): target for target in ROOT_CLI_TARGETS}
+        routed = {
+            ("storyboard", "derive-production-panels"),
+            ("image-panel", "generate-panels"),
+            ("video-planning", "build-storyboard-master"),
+            ("video-generation", "run"),
+            ("qa-review", "review-artifact"),
+            ("qa-review", "review-composition"),
+        }
+        self.assertEqual({key for key, target in targets.items() if target.status == "ROUTED"}, routed)
+
         reference_analysis = targets[("reference-analysis", "analyze-storyboard")]
         self.assertEqual(
             reference_analysis.required_inputs,

@@ -1,9 +1,4 @@
-"""Canonical target manifest for the public root CLI.
-
-The manifest is orchestration metadata, not a business implementation.  Every
-target remains fail-closed until the owning Skill publishes and tests the
-matching public command and Codex-00 wires that command in a later merge.
-"""
+"""Canonical target manifest for the public root CLI."""
 
 from __future__ import annotations
 
@@ -55,6 +50,7 @@ ROOT_CLI_TARGETS = (
             "production-constraints",
         ),
         outputs=("ProductionStoryboardPlan", "ProductionStoryboardPanelPlan"),
+        status="ROUTED",
     ),
     RootCliTarget(
         namespace="image-panel",
@@ -68,6 +64,7 @@ ROOT_CLI_TARGETS = (
         ),
         optional_inputs=(),
         outputs=("ProductionStoryboardPanelSet",),
+        status="ROUTED",
     ),
     RootCliTarget(
         namespace="video-planning",
@@ -87,6 +84,7 @@ ROOT_CLI_TARGETS = (
             "FirstFrameMapping",
             "ReferenceRoleMapping",
         ),
+        status="ROUTED",
     ),
     RootCliTarget(
         namespace="video-generation",
@@ -102,6 +100,7 @@ ROOT_CLI_TARGETS = (
         ),
         optional_inputs=(),
         outputs=("VideoResult",),
+        status="ROUTED",
     ),
     RootCliTarget(
         namespace="qa-review",
@@ -110,6 +109,7 @@ ROOT_CLI_TARGETS = (
         required_inputs=("artifact-ref", "review-criteria"),
         optional_inputs=("ProductContextBundle",),
         outputs=("ReviewDecision",),
+        status="ROUTED",
     ),
     RootCliTarget(
         namespace="qa-review",
@@ -118,8 +118,11 @@ ROOT_CLI_TARGETS = (
         required_inputs=("storyboard-artifact-chain", "review-criteria"),
         optional_inputs=("ProductContextBundle",),
         outputs=("ReviewDecision",),
+        status="ROUTED",
     ),
 )
 
 
-__all__ = ["ROOT_CLI_TARGETS", "RootCliTarget"]
+from .dispatcher import dispatch, main
+
+__all__ = ["ROOT_CLI_TARGETS", "RootCliTarget", "dispatch", "main"]
