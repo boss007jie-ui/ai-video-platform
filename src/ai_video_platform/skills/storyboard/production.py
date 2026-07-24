@@ -226,6 +226,24 @@ def _safe_reference_text(value: object, fallback: str, protected: tuple[str, ...
     return selected
 
 
+def _reject_protected_identity(value: object, path: str, protected: tuple[str, ...]) -> None:
+    if isinstance(value, str):
+        if any(item in value.casefold() for item in protected):
+            raise StoryboardError(
+                "STORYBOARD_REFERENCE_IDENTITY_FORBIDDEN",
+                "authorization",
+                "Reference identity cannot be copied into a production storyboard",
+                field_paths=(path,),
+            )
+        return
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            _reject_protected_identity(nested, f"{path}.{safe_field_segment(key)}", protected)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for index, nested in enumerate(value):
+            _reject_protected_identity(nested, f"{path}[{index}]", protected)
+
+
 def _panel_count(production_constraints: Mapping[str, Any], reference_beats: Sequence[object]) -> int:
     supplied = production_constraints.get("panel_count")
     count = len(reference_beats) if supplied is None and reference_beats else supplied if supplied is not None else 3
@@ -353,6 +371,8 @@ def derive_production_storyboard(
     )
     beats = _reference_beats(reference)
     protected = _protected_values(reference)
+    _reject_protected_identity(creative, "creative_constraints", protected)
+    _reject_protected_identity(production, "production_constraints", protected)
     pattern_by_beat = _replication_by_beat(replication)
     patterns = _replication_patterns(replication)
 

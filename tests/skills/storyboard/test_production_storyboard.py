@@ -175,6 +175,20 @@ class ProductionStoryboardTests(unittest.TestCase):
         self.assertIn("product-001", serialized)
         self.assertIn("character-current-001", serialized)
 
+    def test_user_constraints_cannot_reintroduce_a_protected_reference_identity(self) -> None:
+        creative, production = constraints()
+
+        with self.assertRaises(StoryboardError) as captured:
+            self.derive(
+                creative_constraints={
+                    **creative,
+                    "narrative_goal": "Copy the Reference Brand payoff",
+                },
+                production_constraints=production,
+            )
+
+        self.assertEqual(captured.exception.code, "STORYBOARD_REFERENCE_IDENTITY_FORBIDDEN")
+
     def test_replication_pattern_is_independently_optional_and_reference_pacing_scales(self) -> None:
         replication_only = self.derive(reference_storyboard_analysis=None)
         self.assertEqual(
