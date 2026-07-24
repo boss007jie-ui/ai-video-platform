@@ -22,10 +22,17 @@ review-asset
 review-storyboard
 review-video-plan
 review-video-result
+review-artifact
+review-composition
 ```
 
 Every command requires `--request <utf8-json>` and `--output-dir <task-output-directory>`.
 Exit codes are `0` pass, `2` fail, `3` needs-review, and `64` sanitized input/state error.
+
+`review-artifact` evaluates one canonical storyboard-chain artifact. Its context may provide
+`available_artifact_refs` for immutable upstream references resolved by the caller.
+`review-composition` evaluates the complete synthetic/offline chain across all thirteen
+canonical `1.0.0` artifact identities. Both commands publish QA review artifacts only.
 
 ## Input Interface
 
@@ -38,6 +45,12 @@ Request schema `1.0.0` requires:
 Unsupported major versions fail with `QA_SCHEMA_UNSUPPORTED`. Missing fields fail with
 `QA_INPUT_INVALID`. Semantic reference comparison criteria fail with
 `QA_CRITERION_FORBIDDEN`.
+
+Storyboard-chain review blocks missing ProductContextBundle, copied reference identity,
+panel/product or revision mismatch, incomplete master timing/motion, unapproved execution
+panels, analysis-board/contact-sheet misuse, unsupported identity/version, wrong producer,
+and broken immutable provenance. Every chain failure identifies the offending artifact and
+the registered owning producer in the human review package.
 
 ## Outputs
 
@@ -88,6 +101,7 @@ input surface. The repository-wide network deny guard remains active in offline 
 python -m unittest -v tests.skills.qa_review.test_qa_review_interface
 python -m unittest -v tests.skills.qa_review.test_qa_review_permissions
 python -m unittest -v tests.skills.qa_review.test_qa_review_evaluation
+python -m unittest -v tests.skills.qa_review.test_storyboard_artifact_chain
 python -m unittest discover -s tests\integration -t . -p 'test_*.py' -v
 python -m unittest discover -s tests\golden -t . -p 'test_*.py' -v
 ```
