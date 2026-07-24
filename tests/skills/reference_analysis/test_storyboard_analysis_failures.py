@@ -49,6 +49,19 @@ class StoryboardAnalysisFailureTests(unittest.TestCase):
                 analyze_storyboard(request, workspace=workspace)
             self.assertEqual(captured.exception.code, ErrorCode.EVIDENCE_MISSING)
 
+    def test_absent_comments_cannot_be_replaced_with_visual_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = materialize_fixture(workspace, include_comments=False)
+            request["analysis_configuration"]["timeline"][0]["comment_evidence"] = {
+                "value": "A visual frame cannot establish audience comment evidence",
+                "evidence_refs": ["keyframe:kf-001"],
+            }
+            with self.assertRaises(SkillError) as captured:
+                analyze_storyboard(request, workspace=workspace)
+            self.assertEqual(captured.exception.code, ErrorCode.EVIDENCE_MISSING)
+            self.assertFalse((workspace / "reference_analysis").exists())
+
     def test_reference_identity_cannot_be_copied_into_product_adaptation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
