@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import unittest
 from pathlib import Path
@@ -99,6 +100,103 @@ def constraints() -> tuple[dict, dict]:
     return creative, production
 
 
+SHOT_REQUIRED_FIELDS = {
+    "start_state",
+    "action_path",
+    "end_state",
+    "emotion_transition",
+    "audience_psychology",
+    "conversion_function",
+    "dialogue_or_voiceover",
+    "subtitle",
+    "sound_design",
+    "transition",
+    "required_assets",
+    "forbidden_assets",
+    "first_frame_role",
+    "provider_reference_role",
+}
+
+
+def structured_plan() -> dict:
+    shots = []
+    beats = []
+    for index in range(1, 6):
+        start_ms = (index - 1) * 1000
+        end_ms = index * 1000
+        beat_id = f"B{index:02d}"
+        shot_id = f"S{index:02d}"
+        panel_id = f"{shot_id}-P01"
+        beats.append({"beat_id": beat_id, "beat_sequence": index, "shot_ids": [shot_id]})
+        shots.append(
+            {
+                "beat_id": beat_id,
+                "shot_id": shot_id,
+                "shot_sequence": index,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "duration_ms": 1000,
+                "start_state": f"state-{index}-start",
+                "action_path": f"action-{index}",
+                "end_state": f"state-{index}-end",
+                "emotion_transition": "interest-to-confidence",
+                "audience_psychology": "belief",
+                "conversion_function": "proof" if index < 5 else "cta",
+                "dialogue_or_voiceover": "Approved synthetic narration",
+                "subtitle": "Approved synthetic subtitle",
+                "sound_design": "soft product cue",
+                "transition": {"kind": "none", "duration_ms": 0, "timing_policy": "none"},
+                "required_assets": ["asset-product-front", "asset-character-current"],
+                "forbidden_assets": ["asset-reference-person", "asset-reference-brand"],
+                "first_frame_role": "clean_panel" if index == 1 else "not_first_frame",
+                "provider_reference_role": "product_reference",
+                "camera_motion": {
+                    "structured_definition": "locked camera",
+                    "visual_annotation": {"label": "CAMERA", "line_style": "solid", "marker": "triangle", "color": "blue"},
+                },
+                "subject_motion": {
+                    "structured_definition": "presenter lifts product",
+                    "visual_annotation": {"label": "SUBJECT", "line_style": "dashed", "marker": "circle", "color": "blue"},
+                },
+                "active_product_id": "product-001",
+                "active_sku_id": "sku-001",
+                "visible_sku_ids": ["sku-001"],
+                "forbidden_sku_ids": [],
+                "product_state": "sealed",
+                "package_state": "current-matte-blue-carton",
+                "container_state": "sealed-then-open",
+                "scale_constraints": {"product_to_hand": "true-to-current-product"},
+                "character_state": "character-current-001",
+                "wardrobe_state": "blue-jacket-presenter",
+                "scene_state": "approved-studio",
+                "panels": [
+                    {
+                        "beat_id": beat_id,
+                        "shot_id": shot_id,
+                        "panel_id": panel_id,
+                        "panel_sequence": 1,
+                        "panel_timing_mode": "TEMPORAL_SEGMENT",
+                        "start_ms": start_ms,
+                        "end_ms": end_ms,
+                        "duration_ms": 1000,
+                    }
+                ],
+            }
+        )
+    return {
+        "workflow_profile": "short_form",
+        "total_duration_ms": 5000,
+        "product_scope": {
+            "mode": "single_sku",
+            "active_product_id": "product-001",
+            "active_sku_id": "sku-001",
+            "allowed_sku_ids": ["sku-001"],
+        },
+        "beats": beats,
+        "shots": shots,
+    }
+
+
 class ProductionStoryboardTests(unittest.TestCase):
     def derive(self, **overrides):
         creative, production = constraints()
@@ -153,6 +251,218 @@ class ProductionStoryboardTests(unittest.TestCase):
         )
         self.assertEqual(result.provider_calls, 0)
         self.assertEqual(result.network_calls, 0)
+
+    def test_frozen_structured_plan_is_validated_and_projected(self) -> None:
+        creative, production = constraints()
+        result = self.derive(
+            creative_constraints=creative,
+            production_constraints={**production, "structured_plan": structured_plan()},
+        )
+
+        shots = result.production_storyboard_plan["ShotPlan"]
+        panels = result.production_storyboard_panel_plan["panels"]
+        self.assertEqual([shot["shot_id"] for shot in shots], ["S01", "S02", "S03", "S04", "S05"])
+        self.assertTrue(all(SHOT_REQUIRED_FIELDS.issubset(shot) for shot in shots))
+        self.assertEqual([panel["panel_id"] for panel in panels], [f"S{index:02d}-P01" for index in range(1, 6)])
+        self.assertTrue(all(panel["panel_timing_mode"] == "TEMPORAL_SEGMENT" for panel in panels))
+        self.assertEqual(result.production_storyboard_plan["total_duration_ms"], 5000)
+        self.assertEqual(result.production_storyboard_plan["workflow_profile"], "short_form")
+
+    def test_duration_mismatch_and_missing_shot_fail_closed(self) -> None:
+        creative, production = constraints()
+        mismatched = structured_plan()
+        mismatched["total_duration_ms"] = 15000
+        with self.assertRaises(StoryboardError) as duration:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": mismatched},
+            )
+        self.assertEqual(duration.exception.code, "STORYBOARD_DURATION_MISMATCH")
+
+        missing = structured_plan()
+        missing["shots"][4]["shot_id"] = "S06"
+        missing["shots"][4]["panels"][0]["shot_id"] = "S06"
+        missing["shots"][4]["panels"][0]["panel_id"] = "S06-P01"
+        missing["beats"][4]["shot_ids"] = ["S06"]
+        with self.assertRaises(StoryboardError) as sequence:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": missing},
+            )
+        self.assertEqual(sequence.exception.code, "STORYBOARD_SEQUENCE_INVALID")
+
+    def test_panel_timing_modes_and_beat_binding_fail_closed(self) -> None:
+        creative, production = constraints()
+        gap = structured_plan()
+        gap["shots"][0]["panels"][0]["end_ms"] = 900
+        gap["shots"][0]["panels"][0]["duration_ms"] = 900
+        with self.assertRaises(StoryboardError) as segment:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": gap},
+            )
+        self.assertEqual(segment.exception.code, "STORYBOARD_PANEL_TIMING_INVALID")
+
+        anchor = structured_plan()
+        anchor["shots"][0]["panels"][0] = {
+            "beat_id": "B01",
+            "shot_id": "S01",
+            "panel_id": "S01-P01",
+            "panel_sequence": 1,
+            "panel_timing_mode": "KEYFRAME_ANCHOR",
+            "anchor_time_ms": 500,
+            "anchor_role": "opening_product_anchor",
+            "duration_ms": 10,
+        }
+        with self.assertRaises(StoryboardError) as keyframe:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": anchor},
+            )
+        self.assertEqual(keyframe.exception.code, "STORYBOARD_PANEL_TIMING_INVALID")
+
+        wrong_beat = structured_plan()
+        wrong_beat["shots"][0]["panels"][0]["beat_id"] = "B02"
+        with self.assertRaises(StoryboardError) as hierarchy:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": wrong_beat},
+            )
+        self.assertEqual(hierarchy.exception.code, "STORYBOARD_HIERARCHY_INVALID")
+
+    def test_multisku_motion_and_required_semantics_fail_closed(self) -> None:
+        creative, production = constraints()
+        multiple = structured_plan()
+        multiple["product_scope"] = {
+            "mode": "multi_sku",
+            "active_product_id": "product-001",
+            "active_sku_id": "sku-001",
+            "allowed_sku_ids": ["sku-001", "sku-002", "sku-003"],
+        }
+        multiple["shots"][2]["visible_sku_ids"] = ["sku-001", "sku-002", "sku-003"]
+        with self.assertRaises(StoryboardError) as sku:
+            self.derive(
+                task_spec=task_spec(),
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": multiple},
+            )
+        self.assertEqual(sku.exception.code, "STORYBOARD_SKU_SCOPE_UNAUTHORIZED")
+
+        motion = structured_plan()
+        motion["shots"][0]["subject_motion"]["visual_annotation"] = deepcopy(
+            motion["shots"][0]["camera_motion"]["visual_annotation"]
+        )
+        with self.assertRaises(StoryboardError) as arrows:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": motion},
+            )
+        self.assertEqual(arrows.exception.code, "STORYBOARD_MOTION_ANNOTATION_INVALID")
+
+        incomplete = structured_plan()
+        del incomplete["shots"][0]["sound_design"]
+        with self.assertRaises(StoryboardError) as fields:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": incomplete},
+            )
+        self.assertEqual(fields.exception.code, "STORYBOARD_SHOT_FIELDS_MISSING")
+
+    def test_every_required_shot_field_and_exact_timeline_are_enforced(self) -> None:
+        creative, production = constraints()
+        for field in sorted(SHOT_REQUIRED_FIELDS):
+            with self.subTest(field=field):
+                incomplete = structured_plan()
+                del incomplete["shots"][0][field]
+                with self.assertRaises(StoryboardError) as captured:
+                    self.derive(
+                        creative_constraints=creative,
+                        production_constraints={**production, "structured_plan": incomplete},
+                    )
+                self.assertEqual(captured.exception.code, "STORYBOARD_SHOT_FIELDS_MISSING")
+                self.assertIn(f"shots[0].{field}", captured.exception.field_paths)
+
+        missing_time = structured_plan()
+        del missing_time["shots"][0]["start_ms"]
+        with self.assertRaises(StoryboardError) as captured:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": missing_time},
+            )
+        self.assertEqual(captured.exception.code, "STORYBOARD_DURATION_MISMATCH")
+
+    def test_profile_transition_authorized_multisku_and_input_snapshot(self) -> None:
+        creative, production = constraints()
+        too_short = structured_plan()
+        too_short["shots"] = too_short["shots"][:4]
+        too_short["beats"] = too_short["beats"][:4]
+        too_short["total_duration_ms"] = 4000
+        with self.assertRaises(StoryboardError) as profile:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": too_short},
+            )
+        self.assertEqual(profile.exception.code, "STORYBOARD_PROFILE_INVALID")
+
+        overlap = structured_plan()
+        overlap["shots"][0]["transition"] = {
+            "kind": "cross_dissolve",
+            "duration_ms": 200,
+            "timing_policy": "overlap_next_shot",
+        }
+        with self.assertRaises(StoryboardError) as transition:
+            self.derive(
+                creative_constraints=creative,
+                production_constraints={**production, "structured_plan": overlap},
+            )
+        self.assertEqual(transition.exception.code, "STORYBOARD_TRANSITION_INVALID")
+
+        authorized = structured_plan()
+        authorized["product_scope"] = {
+            "mode": "multi_sku",
+            "active_product_id": "product-001",
+            "active_sku_id": "sku-001",
+            "allowed_sku_ids": ["sku-001", "sku-002"],
+        }
+        authorized["shots"][2]["visible_sku_ids"] = ["sku-001", "sku-002"]
+        original = deepcopy(authorized)
+        result = self.derive(
+            task_spec=task_spec(
+                constraints={
+                    "storyboard": {
+                        "product_scope": {
+                            "mode": "multi_sku",
+                            "allowed_sku_ids": ["sku-001", "sku-002"],
+                        }
+                    }
+                }
+            ),
+            creative_constraints=creative,
+            production_constraints={**production, "structured_plan": authorized},
+        )
+        self.assertEqual(result.production_storyboard_plan["product_scope"]["mode"], "multi_sku")
+        self.assertEqual(authorized, original)
+
+    def test_valid_keyframe_anchor_is_projected_without_duration(self) -> None:
+        creative, production = constraints()
+        anchored = structured_plan()
+        anchored["shots"][0]["panels"][0] = {
+            "beat_id": "B01",
+            "shot_id": "S01",
+            "panel_id": "S01-P01",
+            "panel_sequence": 1,
+            "panel_timing_mode": "KEYFRAME_ANCHOR",
+            "anchor_time_ms": 0,
+            "anchor_role": "clean_opening_frame",
+        }
+        result = self.derive(
+            creative_constraints=creative,
+            production_constraints={**production, "structured_plan": anchored},
+        )
+        panel = result.production_storyboard_panel_plan["panels"][0]
+        self.assertEqual(panel["panel_timing_mode"], "KEYFRAME_ANCHOR")
+        self.assertEqual(panel["anchor_role"], "clean_opening_frame")
+        self.assertNotIn("duration_ms", panel)
 
     def test_reference_mechanics_shape_order_without_copying_reference_identity(self) -> None:
         result = self.derive()

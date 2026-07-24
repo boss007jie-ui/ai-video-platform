@@ -22,6 +22,7 @@ from .production import (
     ProductionStoryboardResult,
     derive_production_storyboard,
 )
+from .structured_plan import SHOT_REQUIRED_FIELDS, validate_structured_storyboard
 
 __all__ = [
     "StoryboardArtifact",
@@ -40,4 +41,6 @@ __all__ = [
     "PRODUCTION_STORYBOARD_VERSION",
     "ProductionStoryboardResult",
     "derive_production_storyboard",
+    "SHOT_REQUIRED_FIELDS",
+    "validate_structured_storyboard",
 ]

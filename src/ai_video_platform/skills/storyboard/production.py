@@ -12,6 +12,7 @@ from ai_video_platform.contracts.serialization import content_digest, freeze_jso
 from ai_video_platform.contracts.validation import validate_envelope
 
 from .interface import StoryboardError, safe_field_segment
+from .structured_plan import validate_structured_storyboard
 
 
 PRODUCTION_STORYBOARD_VERSION = "1.0.0"
@@ -375,6 +376,12 @@ def derive_production_storyboard(
     _reject_protected_identity(production, "production_constraints", protected)
     pattern_by_beat = _replication_by_beat(replication)
     patterns = _replication_patterns(replication)
+    structured = None
+    if production.get("structured_plan") is not None:
+        structured = validate_structured_storyboard(
+            _object(production["structured_plan"], "production_constraints.structured_plan"),
+            {"constraints": thaw_json(validated_task.payload.constraints or {})},
+        )
 
     approved_assets = set(
         _string_list(
@@ -414,7 +421,7 @@ def derive_production_storyboard(
             field_paths=("creative_constraints.required_assets",),
         )
 
-    count = _panel_count(production, beats or patterns)
+    count = len(structured["shots"]) if structured is not None else _panel_count(production, beats or patterns)
     duration_ms = production.get("duration_ms", 4500)
     if not isinstance(duration_ms, int) or isinstance(duration_ms, bool) or duration_ms < count:
         raise StoryboardError(
@@ -470,7 +477,83 @@ def derive_production_storyboard(
     product_timeline: list[dict[str, Any]] = []
     reference_provenance: list[dict[str, Any]] = []
 
-    for index in range(count):
+    if structured is not None:
+        beat_plan = thaw_json(freeze_json(structured["beats"]))
+        shot_plan = []
+        panels = []
+        for shot in structured["shots"]:
+            projected_shot = thaw_json(freeze_json(shot))
+            shot_panels = projected_shot.pop("panels")
+            projected_shot["panel_ids"] = [panel["panel_id"] for panel in shot_panels]
+            shot_plan.append(projected_shot)
+            for panel in shot_panels:
+                timing = {
+                    key: panel[key]
+                    for key in ("panel_timing_mode", "start_ms", "end_ms", "duration_ms", "anchor_time_ms", "anchor_role")
+                    if key in panel
+                }
+                panels.append(
+                    {
+                        **thaw_json(freeze_json(panel)),
+                        "camera_motion": thaw_json(freeze_json(shot["camera_motion"])),
+                        "subject_motion": thaw_json(freeze_json(shot["subject_motion"])),
+                        "product_scope": thaw_json(freeze_json(structured["product_scope"])),
+                        "active_product_id": shot["active_product_id"],
+                        "active_sku_id": shot["active_sku_id"],
+                        "visible_sku_ids": list(shot["visible_sku_ids"]),
+                        "forbidden_sku_ids": list(shot["forbidden_sku_ids"]),
+                        "required_assets": list(shot["required_assets"]),
+                        "forbidden_assets": list(shot["forbidden_assets"]),
+                        "continuity": {
+                            key: thaw_json(freeze_json(shot[key]))
+                            for key in ("product_state", "package_state", "container_state", "scale_constraints", "character_state", "wardrobe_state", "scene_state")
+                        },
+                        "timing_projection": timing,
+                    }
+                )
+
+        plan_body = {
+            "artifact_type": "ProductionStoryboardPlan",
+            "contract_identity": PRODUCTION_STORYBOARD_PLAN_IDENTITY,
+            "schema_version": PRODUCTION_STORYBOARD_VERSION,
+            "producer": STORYBOARD_PRODUCER,
+            "task_id": task_id,
+            "product_id": product_id,
+            "workflow_profile": structured["workflow_profile"],
+            "total_duration_ms": structured["total_duration_ms"],
+            "product_scope": thaw_json(freeze_json(structured["product_scope"])),
+            "BeatPlan": beat_plan,
+            "ShotPlan": shot_plan,
+            "source_provenance": source_provenance,
+            "reference_analysis_provenance": reference_provenance,
+        }
+        plan_body["artifact_id"] = _artifact_id("production-storyboard-plan", plan_body)
+        plan_digest = content_digest(plan_body)
+        for panel in panels:
+            panel["source_plan"] = {
+                "artifact_id": plan_body["artifact_id"],
+                "revision": 1,
+                "schema_version": PRODUCTION_STORYBOARD_VERSION,
+                "digest": plan_digest,
+            }
+        panel_body = {
+            "artifact_type": "ProductionStoryboardPanelPlan",
+            "contract_identity": PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY,
+            "schema_version": PRODUCTION_STORYBOARD_VERSION,
+            "producer": STORYBOARD_PRODUCER,
+            "task_id": task_id,
+            "product_id": product_id,
+            "production_storyboard_plan_ref": plan_body["artifact_id"],
+            "production_storyboard_plan_digest": plan_digest,
+            "panel_order": [item["panel_id"] for item in panels],
+            "panels": panels,
+            "source_provenance": source_provenance,
+            "reference_analysis_provenance": reference_provenance,
+        }
+        panel_body["artifact_id"] = _artifact_id("production-storyboard-panel-plan", panel_body)
+    else:
+
+      for index in range(count):
         beat = beats[index % len(beats)] if beats else {}
         reference_beat_id = beat.get("beat_id") if isinstance(beat.get("beat_id"), str) else None
         pattern = (
@@ -562,49 +645,50 @@ def derive_production_storyboard(
         conversion_arc.append({"shot_id": shot_id, "conversion_role": conversion})
         product_timeline.append({"shot_id": shot_id, "start_ms": start_ms, "end_ms": end_ms, **product_state, "packaging_state": packaging_state, "container_state": container_state})
 
-    plan_body = {
-        "artifact_type": "ProductionStoryboardPlan",
-        "contract_identity": PRODUCTION_STORYBOARD_PLAN_IDENTITY,
-        "schema_version": PRODUCTION_STORYBOARD_VERSION,
-        "producer": STORYBOARD_PRODUCER,
-        "task_id": task_id,
-        "product_id": product_id,
-        "NarrativeArc": {"goal": narrative_goal, "ordered_scene_ids": [item["scene_id"] for item in scene_plan]},
-        "ScenePlan": scene_plan,
-        "BeatPlan": beat_plan,
-        "ShotPlan": shot_plan,
-        "EmotionArc": emotion_arc,
-        "AudiencePsychologyArc": psychology_arc,
-        "ConversionArc": conversion_arc,
-        "ContinuityBible": {
+    if structured is None:
+        plan_body = {
+            "artifact_type": "ProductionStoryboardPlan",
+            "contract_identity": PRODUCTION_STORYBOARD_PLAN_IDENTITY,
+            "schema_version": PRODUCTION_STORYBOARD_VERSION,
+            "producer": STORYBOARD_PRODUCER,
+            "task_id": task_id,
             "product_id": product_id,
-            "character_id": character_id,
-            "character_state": character_state,
-            "packaging_state": packaging_state,
-            "container_state": container_state,
-            "scale_constraints": scale_constraints,
-            "approved_assets": sorted(approved_assets),
-            "forbidden_assets": list(forbidden_assets),
-        },
-        "ProductStateTimeline": product_timeline,
-        "source_provenance": source_provenance,
-        "reference_analysis_provenance": reference_provenance,
-    }
-    plan_body["artifact_id"] = _artifact_id("production-storyboard-plan", plan_body)
-    panel_body = {
-        "artifact_type": "ProductionStoryboardPanelPlan",
-        "contract_identity": PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY,
-        "schema_version": PRODUCTION_STORYBOARD_VERSION,
-        "producer": STORYBOARD_PRODUCER,
-        "task_id": task_id,
-        "product_id": product_id,
-        "production_storyboard_plan_ref": plan_body["artifact_id"],
-        "panel_order": [item["panel_id"] for item in panels],
-        "panels": panels,
-        "source_provenance": source_provenance,
-        "reference_analysis_provenance": reference_provenance,
-    }
-    panel_body["artifact_id"] = _artifact_id("production-storyboard-panel-plan", panel_body)
+            "NarrativeArc": {"goal": narrative_goal, "ordered_scene_ids": [item["scene_id"] for item in scene_plan]},
+            "ScenePlan": scene_plan,
+            "BeatPlan": beat_plan,
+            "ShotPlan": shot_plan,
+            "EmotionArc": emotion_arc,
+            "AudiencePsychologyArc": psychology_arc,
+            "ConversionArc": conversion_arc,
+            "ContinuityBible": {
+                "product_id": product_id,
+                "character_id": character_id,
+                "character_state": character_state,
+                "packaging_state": packaging_state,
+                "container_state": container_state,
+                "scale_constraints": scale_constraints,
+                "approved_assets": sorted(approved_assets),
+                "forbidden_assets": list(forbidden_assets),
+            },
+            "ProductStateTimeline": product_timeline,
+            "source_provenance": source_provenance,
+            "reference_analysis_provenance": reference_provenance,
+        }
+        plan_body["artifact_id"] = _artifact_id("production-storyboard-plan", plan_body)
+        panel_body = {
+            "artifact_type": "ProductionStoryboardPanelPlan",
+            "contract_identity": PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY,
+            "schema_version": PRODUCTION_STORYBOARD_VERSION,
+            "producer": STORYBOARD_PRODUCER,
+            "task_id": task_id,
+            "product_id": product_id,
+            "production_storyboard_plan_ref": plan_body["artifact_id"],
+            "panel_order": [item["panel_id"] for item in panels],
+            "panels": panels,
+            "source_provenance": source_provenance,
+            "reference_analysis_provenance": reference_provenance,
+        }
+        panel_body["artifact_id"] = _artifact_id("production-storyboard-panel-plan", panel_body)
     source_contract_ids = (str(task_spec.contract_id), str(product_context.contract_id))
     source_hashes = (task_spec.payload_digest, product_context.payload_digest)
     execution_event = build_envelope(
