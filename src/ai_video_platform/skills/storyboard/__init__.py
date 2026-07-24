@@ -15,6 +15,13 @@ from .planning import (
     plan_shots_and_panels,
     validate_continuity_archive,
 )
+from .production import (
+    PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY,
+    PRODUCTION_STORYBOARD_PLAN_IDENTITY,
+    PRODUCTION_STORYBOARD_VERSION,
+    ProductionStoryboardResult,
+    derive_production_storyboard,
+)
 
 __all__ = [
     "StoryboardArtifact",
@@ -28,4 +35,9 @@ __all__ = [
     "decompose_raw_script",
     "plan_shots_and_panels",
     "validate_continuity_archive",
+    "PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY",
+    "PRODUCTION_STORYBOARD_PLAN_IDENTITY",
+    "PRODUCTION_STORYBOARD_VERSION",
+    "ProductionStoryboardResult",
+    "derive_production_storyboard",
 ]

@@ -16,6 +16,7 @@ from ai_video_platform.contracts.errors import ContractError
 from ai_video_platform.contracts.serialization import DEFAULT_MAX_JSON_BYTES, parse_json_object, thaw_json
 
 from .interface import StoryboardArtifact, StoryboardError, StoryboardRequest, StoryboardResult, StoryboardService
+from .production import derive_production_storyboard
 from .state import FileVersionStore, VersionStoreError
 
 
@@ -136,13 +137,56 @@ def run_cli_document(
 ) -> tuple[int, dict[str, Any]]:
     try:
         command = document.get("command")
-        if command not in {"create-storyboard", "create-storyboard-from-script", "revise-storyboard", "validate-continuity"}:
+        if command not in {"create-storyboard", "create-storyboard-from-script", "revise-storyboard", "validate-continuity", "derive-production-panels"}:
             raise StoryboardError(
                 "STORYBOARD_COMMAND_UNSUPPORTED",
                 "validation",
-                "CLI command must be create-storyboard, create-storyboard-from-script, revise-storyboard, or validate-continuity",
+                "CLI command is not a supported Storyboard public target",
                 field_paths=("command",),
             )
+        if command == "derive-production-panels":
+            result = derive_production_storyboard(
+                task_spec=_envelope(document.get("task_spec"), "task_spec"),
+                product_context=_envelope(document.get("product_context"), "product_context"),
+                reference_storyboard_analysis=document.get("reference_storyboard_analysis"),
+                replication_pattern=document.get("replication_pattern"),
+                creative_constraints=document.get("creative_constraints", {}),
+                production_constraints=document.get("production_constraints", {}),
+            )
+            output_root = document.get("output_root")
+            if not isinstance(output_root, str) or not output_root.strip():
+                raise StoryboardError(
+                    "STORYBOARD_OUTPUT_ROOT_REQUIRED",
+                    "state",
+                    "derive-production-panels requires output_root",
+                    field_paths=("output_root",),
+                )
+            output_directory = Path(output_root).resolve() / "production_storyboard_plan"
+            output_directory.mkdir(parents=True, exist_ok=True)
+            plan_path = output_directory / "production_storyboard_plan.json"
+            panel_path = output_directory / "production_storyboard_panel_plan.json"
+            plan_document = thaw_json(result.production_storyboard_plan)
+            panel_document = thaw_json(result.production_storyboard_panel_plan)
+            plan_path.write_text(
+                json.dumps(plan_document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            panel_path.write_text(
+                json.dumps(panel_document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            return 0, {
+                "status": "completed",
+                "production_storyboard_plan": plan_document,
+                "production_storyboard_panel_plan": panel_document,
+                "execution_event": result.execution_event.to_dict(),
+                "output_files": [str(plan_path), str(panel_path)],
+                "metrics": {
+                    "provider_calls": result.provider_calls,
+                    "network_calls": result.network_calls,
+                },
+                "error": None,
+            }
         if command == "validate-continuity":
             selected_service = service or StoryboardService()
             artifact = _artifact(document.get("artifact"))
@@ -240,7 +284,7 @@ def run_cli_document(
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         parser = _MachineArgumentParser(prog="storyboard", add_help=False)
-        parser.add_argument("command", choices=("create-storyboard", "create-storyboard-from-script", "revise-storyboard", "validate-continuity"))
+        parser.add_argument("command", choices=("create-storyboard", "create-storyboard-from-script", "revise-storyboard", "validate-continuity", "derive-production-panels"))
         parser.add_argument("--input", default="-", help="UTF-8 JSON request file or '-' for stdin")
         args = parser.parse_args(argv)
         if args.input == "-":
