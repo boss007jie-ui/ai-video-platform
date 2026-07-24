@@ -28,6 +28,19 @@ class VideoPlanningFailureTests(unittest.TestCase):
         request["production_storyboard_panel_set"]["panels"].pop()
         self.assert_code(request, PlanningErrorCode.ASSET_MAPPING_MISSING)
 
+    def test_non_selected_duplicate_asset_and_orphan_panel_fail_closed(self) -> None:
+        request = planning_request()
+        request["production_storyboard_panel_set"]["panels"][0]["usage_status"] = "SUPERSEDED"
+        self.assert_code(request, PlanningErrorCode.ASSET_NOT_APPROVED)
+
+        request = planning_request()
+        request["production_storyboard_panel_set"]["panels"][0]["asset_ref"] = request["production_storyboard_panel_set"]["panels"][1]["asset_ref"]
+        self.assert_code(request, PlanningErrorCode.ASSET_MAPPING_AMBIGUOUS)
+
+        request = planning_request()
+        request["production_storyboard_panel_set"]["panels"][0]["shot_id"] = "shot-orphan"
+        self.assert_code(request, PlanningErrorCode.ASSET_MAPPING_MISSING)
+
     def test_revision_product_or_order_divergence_fails_closed(self) -> None:
         mutations = (
             lambda request: request["production_storyboard_panel_set"].__setitem__("planning_revision", "other"),

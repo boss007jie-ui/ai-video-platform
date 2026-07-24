@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 from pathlib import Path
 import sys
@@ -12,11 +11,12 @@ from typing import Mapping, Sequence
 from .errors import PlanningError, PlanningErrorCode
 from .interface import VideoPlanningInterface
 from .models import canonical_json
+from .sheet_renderer import render_storyboard_sheets
 
-_PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
 
+def _write_outputs(output_root: Path, result: Mapping[str, object], document: Mapping[str, object]) -> None:
+    import base64
 
-def _write_outputs(output_root: Path, result: Mapping[str, object]) -> None:
     root = output_root / "video_generation_storyboard"
     root.mkdir(parents=True, exist_ok=False)
     names = {
@@ -27,7 +27,25 @@ def _write_outputs(output_root: Path, result: Mapping[str, object]) -> None:
     for key, name in names.items():
         (root / name).write_text(json.dumps(result["artifacts"][key], ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (root / "video_planning_provenance.json").write_text(json.dumps(result["provenance"], ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (root / "video_storyboard_master.png").write_bytes(_PNG)
+    encoded_panels = document.get("panel_bytes")
+    metadata = document.get("sheet_render_metadata")
+    if not isinstance(encoded_panels, Mapping) or not isinstance(metadata, Mapping):
+        raise PlanningError(PlanningErrorCode.INVALID_INPUT, "panel_bytes and sheet_render_metadata are required for Sheet rendering")
+    try:
+        panel_bytes = {
+            str(asset_id): base64.b64decode(value, validate=True)
+            for asset_id, value in encoded_panels.items()
+            if isinstance(value, str)
+        }
+    except ValueError as exc:
+        raise PlanningError(PlanningErrorCode.INVALID_INPUT, "panel_bytes must contain base64 PNG values") from exc
+    rendered = render_storyboard_sheets(result["artifacts"]["video_generation_storyboard_master"], panel_bytes, metadata)
+    (root / "storyboard_master_sheet_manifest.json").write_text(
+        json.dumps(rendered.manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    for page, page_record in zip(rendered.pages, rendered.manifest["pages"], strict=True):
+        (root / page_record["relative_path"]).write_bytes(page)
 
 
 def run_cli(command: str, document: Mapping[str, object]) -> dict[str, object]:
@@ -39,7 +57,7 @@ def run_cli(command: str, document: Mapping[str, object]) -> dict[str, object]:
         if output_root is not None:
             if not isinstance(output_root, str) or not output_root:
                 raise PlanningError(PlanningErrorCode.INVALID_INPUT, "output_root must be a path string")
-            _write_outputs(Path(output_root), result)
+            _write_outputs(Path(output_root), result, document)
         return {"ok": True, "exit_code": 0, "result": result}
     except (PlanningError, OSError) as error:
         failure = error if isinstance(error, PlanningError) else PlanningError(PlanningErrorCode.INVALID_INPUT, "Output tree could not be written")

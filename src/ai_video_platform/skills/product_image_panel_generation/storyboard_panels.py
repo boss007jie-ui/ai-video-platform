@@ -567,6 +567,8 @@ class ProductionStoryboardPanelService:
                                 },
                                 "semantic_provenance": thaw_json(panel.get("semantic_provenance", {})),
                                 "continuity": thaw_json(panel["continuity"]),
+                                "first_frame_role": panel.get("first_frame_role"),
+                                "provider_reference_role": panel.get("provider_reference_role"),
                             },
                             "approval_evidence": {
                                 "kind": "ApprovalRecord",
@@ -605,6 +607,7 @@ class ProductionStoryboardPanelService:
                 "producer": {"skill_id": "product-image-panel-generation", "workline_id": "codex-04"},
                 "product_id": request.generation_request.product_id,
                 "sku_id": request.generation_request.sku_id,
+                "planning_revision": request.panel_plan.get("planning_revision", request.panel_plan.get("plan_revision", 1)),
                 "status": outcome.status.value,
                 "panel_plan": {
                     "artifact_id": request.panel_plan.get("artifact_id"),

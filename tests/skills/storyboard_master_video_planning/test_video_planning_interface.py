@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import sys
@@ -13,6 +14,10 @@ if str(SOURCE_ROOT) not in sys.path:
 
 from ai_video_platform.skills.storyboard_master_video_planning import VideoPlanningInterface
 from ai_video_platform.skills.storyboard_master_video_planning.cli import run_cli
+from ai_video_platform.skills.storyboard_master_video_planning.sheet_renderer import render_storyboard_sheets
+
+
+PANEL_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 
 
 def planning_request() -> dict[str, object]:
@@ -67,6 +72,18 @@ def planning_request() -> dict[str, object]:
             "artifact_name": "ReferenceAnalysisBoardManifest", "schema_version": "1.0.0",
             "assets": [{"asset_ref": "asset://reference-analysis/board-001", "kind": "reference_analysis_board"}],
         },
+        "panel_bytes": {
+            "asset://panel/panel-001": PANEL_PNG_B64,
+            "asset://panel/panel-002": PANEL_PNG_B64,
+        },
+        "sheet_render_metadata": {
+            "renderer_code_commit": "codex-05-synthetic-commit",
+            "font_family": "AVP Bitmap Sans",
+            "font_fallback": "monospace",
+            "locale": "en-US",
+            "render_width": 1200,
+            "render_height": 720,
+        },
     }
 
 
@@ -116,9 +133,67 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
             root = Path(temporary) / "video_generation_storyboard"
             self.assertEqual(
                 {path.name for path in root.iterdir()},
-                {"video_generation_storyboard_master.json", "video_storyboard_master.png", "shot_motion_plan.json", "video_execution_package.json", "first_frame_mapping.json", "reference_role_mapping.json", "video_planning_provenance.json"},
+                {"video_generation_storyboard_master.json", "storyboard_master_sheet_001.png", "storyboard_master_sheet_manifest.json", "shot_motion_plan.json", "video_execution_package.json", "first_frame_mapping.json", "reference_role_mapping.json", "video_planning_provenance.json"},
             )
-            self.assertGreater((root / "video_storyboard_master.png").stat().st_size, 0)
+            self.assertGreater((root / "storyboard_master_sheet_001.png").stat().st_size, 0)
+            manifest = json.loads((root / "storyboard_master_sheet_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["renderer_version"], "1.0.0")
+            self.assertFalse(manifest["execution_policy"]["provider_execution_input"])
+
+    def test_renderer_paginates_ten_panels_and_replays_byte_for_byte(self) -> None:
+        entries = []
+        panel_bytes = {}
+        for index in range(10):
+            shot = "S01" if index < 3 else f"S{index - 1:02d}"
+            panel_id = f"{shot}-P{index + 1:02d}"
+            asset_id = f"panel-asset-{index + 1:02d}"
+            entries.append(
+                {
+                    "beat_id": "B01",
+                    "shot_id": shot,
+                    "panel_id": panel_id,
+                    "panel_asset_id": asset_id,
+                    "timing_mode": "KEYFRAME_ANCHOR" if index == 0 else "TEMPORAL_SEGMENT",
+                    "anchor_time_ms": 0,
+                    "anchor_role": "opening" if index == 0 else None,
+                    "start_ms": index * 100 if index else None,
+                    "end_ms": (index + 1) * 100 if index else None,
+                    "duration_ms": 100 if index else None,
+                    "camera_motion": {"structured_definition": "locked", "visual_annotation": {"label": "CAMERA", "line_style": "solid"}},
+                    "subject_motion": {"structured_definition": "lift", "visual_annotation": {"label": "SUBJECT", "line_style": "dashed"}},
+                    "conversion_function": "proof",
+                }
+            )
+            panel_bytes[asset_id] = base64.b64decode(PANEL_PNG_B64)
+        master = {"artifact_name": "VideoGenerationStoryboardMaster", "master_panel_entries": entries}
+        metadata = {"renderer_code_commit": "test-commit", "render_width": 1200, "render_height": 720}
+        first = render_storyboard_sheets(master, panel_bytes, metadata)
+        second = render_storyboard_sheets(master, panel_bytes, metadata)
+        self.assertEqual(first.pages, second.pages)
+        self.assertEqual(len(first.pages), 2)
+        self.assertEqual([page["panel_count"] for page in first.manifest["pages"]], [9, 1])
+        self.assertEqual(first.manifest["max_panels_per_page"], 9)
+        self.assertEqual(first.manifest["renderer_code_commit"], "test-commit")
+        self.assertFalse(first.manifest["execution_policy"]["first_frame_eligible"])
+
+    def test_one_shot_can_bind_multiple_selected_panel_assets(self) -> None:
+        request = planning_request()
+        second = dict(request["production_storyboard_panel_set"]["panels"][1])
+        second.update(
+            {
+                "panel_id": "panel-001-b",
+                "panel_asset_id": "asset://panel/panel-001-b",
+                "asset_ref": "asset://panel/panel-001-b",
+                "panel_sequence": 2,
+                "sequence": 3,
+            }
+        )
+        request["production_storyboard_panel_set"]["panels"].append(second)
+        request["approved_panel_results"].append({"panel_id": "panel-001-b", "approval_state": "approved"})
+        result = VideoPlanningInterface().build_storyboard_master(request)
+        entries = result["artifacts"]["video_generation_storyboard_master"]["master_panel_entries"]
+        self.assertEqual([entry["panel_id"] for entry in entries[:2]], ["panel-001", "panel-001-b"])
+        self.assertEqual([entry["shot_id"] for entry in entries[:2]], ["shot-001", "shot-001"])
 
 
 if __name__ == "__main__":

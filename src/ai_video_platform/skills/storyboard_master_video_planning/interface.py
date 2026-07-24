@@ -18,6 +18,13 @@ CONTRACT_IDS = {
     "ReferenceRoleMapping": "avp.contract.reference-role-mapping",
 }
 FORBIDDEN_FIRST_FRAME_MARKERS = ("analysis", "evidence", "replication", "contact_sheet", "contact-sheet")
+SHEET_EXECUTION_POLICY = {
+    "role": "human_review_only",
+    "first_frame_eligible": False,
+    "provider_execution_input": False,
+    "semantic_authority": False,
+    "ocr_semantic_writeback": False,
+}
 
 
 def _mapping(value: object, field: str) -> dict[str, Any]:
@@ -64,41 +71,73 @@ class VideoPlanningInterface:
         product = _mapping(value.get("product_context_bundle"), "product_context_bundle")
         self._identity(plan, "ProductionStoryboardPlan", "avp.contract.production-storyboard-plan")
         self._identity(panels, "ProductionStoryboardPanelSet", "avp.contract.production-storyboard-panel-set")
-        revision = _string(plan, "planning_revision", "production_storyboard_plan")
+        revision_value = plan.get("planning_revision", plan.get("plan_revision", 1))
+        revision = str(revision_value)
         product_id = _string(plan, "product_id", "production_storyboard_plan")
-        target_ratio = _string(plan, "target_aspect_ratio", "production_storyboard_plan")
-        if panels.get("planning_revision") != revision or panels.get("product_id") != product_id or product.get("product_id") != product_id:
+        target_ratio = str(plan.get("target_aspect_ratio", plan.get("aspect_ratio", ""))).strip()
+        if not target_ratio:
+            raise PlanningError(PlanningErrorCode.INVALID_INPUT, "production_storyboard_plan.target_aspect_ratio is required")
+        panel_revision = panels.get("planning_revision", panels.get("panel_plan", {}).get("plan_revision") if isinstance(panels.get("panel_plan"), Mapping) else revision_value)
+        if str(panel_revision) != revision or panels.get("product_id") != product_id or product.get("product_id") != product_id:
             raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Planning revision or product identity diverges")
 
         approved_results = {
             item.get("panel_id") for item in (_mapping(raw, "approved_panel_results") for raw in _list(value.get("approved_panel_results"), "approved_panel_results"))
             if item.get("approval_state") == "approved"
         }
-        panel_by_shot: dict[str, dict[str, Any]] = {}
+        panel_by_shot: dict[str, list[dict[str, Any]]] = {}
         panel_ids: set[str] = set()
+        asset_ids: set[str] = set()
         for raw in _list(panels.get("panels"), "production_storyboard_panel_set.panels"):
             panel = _mapping(raw, "production_storyboard_panel_set.panels")
             panel_id = _string(panel, "panel_id", "panel")
             shot_id = _string(panel, "shot_id", "panel")
-            if panel.get("approval_state") != "approved" or panel.get("panel_id") not in approved_results:
+            facts = _mapping(panel.get("panel_asset_facts", {}), "panel.panel_asset_facts")
+            binding = _mapping(panel.get("plan_binding_summary", {}), "panel.plan_binding_summary")
+            usage_status = panel.get("usage_status", "SELECTED")
+            approval_state = panel.get("approval_state", facts.get("approval_status"))
+            qa_status = panel.get("qa_status", facts.get("qa_status"))
+            approved_by_result = not approved_results or panel_id in approved_results
+            if usage_status != "SELECTED" or approval_state not in {"approved", "APPROVED"} or qa_status not in {None, "pass", "PASS"} or not approved_by_result:
                 raise PlanningError(PlanningErrorCode.ASSET_NOT_APPROVED, "Every execution panel must be approved")
-            if shot_id in panel_by_shot or panel_id in panel_ids:
-                raise PlanningError(PlanningErrorCode.ASSET_MAPPING_AMBIGUOUS, "Each shot must resolve to one panel")
-            _string(panel, "asset_ref", "panel")
-            _string(panel, "approval_ref", "panel")
-            _string(panel, "aspect_ratio", "panel")
-            digest = panel.get("sha256")
-            if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+            asset = _mapping(panel.get("asset", {}), "panel.asset")
+            asset_id = panel.get("panel_asset_id", facts.get("panel_asset_id", asset.get("asset_id", panel.get("asset_ref"))))
+            asset_ref = panel.get("asset_ref", asset.get("relative_path", asset_id))
+            aspect_ratio = panel.get("aspect_ratio", facts.get("aspect_ratio"))
+            digest = panel.get("sha256", facts.get("sha256", asset.get("sha256")))
+            if not isinstance(asset_id, str) or not asset_id or not isinstance(asset_ref, str) or not asset_ref or not isinstance(aspect_ratio, str):
+                raise PlanningError(PlanningErrorCode.INVALID_INPUT, "Panel asset facts are incomplete")
+            normalized_digest = digest.removeprefix("sha256:") if isinstance(digest, str) else ""
+            if re.fullmatch(r"[0-9a-f]{64}", normalized_digest) is None:
                 raise PlanningError(PlanningErrorCode.INVALID_INPUT, "Panel digest is invalid")
+            if panel_id in panel_ids or asset_id in asset_ids:
+                raise PlanningError(PlanningErrorCode.ASSET_MAPPING_AMBIGUOUS, "Panel and asset bindings must be unique")
             if isinstance(panel.get("sequence"), bool) or not isinstance(panel.get("sequence"), int) or panel["sequence"] < 1:
                 raise PlanningError(PlanningErrorCode.INVALID_SHOT_ORDER, "Panel sequence must be a positive integer")
             for flag in ("clean_full_frame", "contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot"):
-                if not isinstance(panel.get(flag), bool):
+                if flag in panel and not isinstance(panel.get(flag), bool):
                     raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"panel.{flag} must be boolean")
+            panel.update(
+                {
+                    "panel_asset_id": asset_id,
+                    "asset_ref": asset_ref,
+                    "aspect_ratio": aspect_ratio,
+                    "sha256": "sha256:" + normalized_digest,
+                    "approval_ref": panel.get("approval_ref", panel.get("approval_evidence", {}).get("record_contract_id") if isinstance(panel.get("approval_evidence"), Mapping) else None),
+                    "legacy_global_sequence": panel.get("panel_sequence") is None and binding.get("panel_sequence") is None,
+                    "panel_sequence": panel.get("panel_sequence", binding.get("panel_sequence", 1)),
+                    "timing_mode": panel.get("timing_mode", binding.get("timing_mode", "TEMPORAL_SEGMENT")),
+                    "first_frame_role": panel.get("first_frame_role", binding.get("first_frame_role")),
+                    "provider_reference_role": panel.get("provider_reference_role", binding.get("provider_reference_role")),
+                    "semantic_provenance": binding.get("semantic_provenance", panel.get("semantic_provenance", {})),
+                }
+            )
             panel_ids.add(panel_id)
-            panel_by_shot[shot_id] = panel
+            asset_ids.add(asset_id)
+            panel_by_shot.setdefault(shot_id, []).append(panel)
 
         ordered_shots: list[dict[str, object]] = []
+        master_panel_entries: list[dict[str, object]] = []
         shot_order: list[str] = []
         panel_order: list[str] = []
         sequences: set[int] = set()
@@ -118,11 +157,14 @@ class VideoPlanningInterface:
             if shot_id in shot_order or isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1 or sequence in sequences:
                 raise PlanningError(PlanningErrorCode.INVALID_SHOT_ORDER, "Shot identities and positive sequences must be unique")
             sequences.add(sequence)
-            panel = panel_by_shot.get(shot_id)
-            if panel is None:
-                raise PlanningError(PlanningErrorCode.ASSET_MAPPING_MISSING, "Every shot requires one approved panel")
-            if panel.get("sequence") != shot.get("sequence"):
-                raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Panel and shot order diverge")
+            shot_panels = panel_by_shot.get(shot_id)
+            if not shot_panels:
+                raise PlanningError(PlanningErrorCode.ASSET_MAPPING_MISSING, "Every shot requires at least one approved panel")
+            shot_panels = sorted(shot_panels, key=lambda item: item["panel_sequence"])
+            if [panel["panel_sequence"] for panel in shot_panels] != list(range(1, len(shot_panels) + 1)):
+                raise PlanningError(PlanningErrorCode.INVALID_SHOT_ORDER, "Panel sequence must be contiguous within its Shot")
+            if len(shot_panels) == 1 and shot_panels[0]["legacy_global_sequence"] and shot_panels[0]["sequence"] != shot["sequence"]:
+                raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Legacy Panel and Shot order diverge")
             for field in required:
                 if field not in shot:
                     raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"shot.{field} is required")
@@ -131,36 +173,79 @@ class VideoPlanningInterface:
                         raise PlanningError(PlanningErrorCode.INVALID_INPUT, "shot.duration_ms must be a positive integer")
                 elif not isinstance(shot[field], str) or (field != "cta" and not shot[field].strip()):
                     raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"shot.{field} must be text")
-            ordered_shots.append(snapshot({**shot, "panel_id": panel["panel_id"], "panel_asset_ref": panel["asset_ref"], "panel_sha256": panel["sha256"]}))
+            panel_entries = []
+            for panel in shot_panels:
+                entry = {
+                    "beat_id": panel.get("beat_id", shot.get("beat_id")),
+                    "shot_id": shot_id,
+                    "panel_id": panel["panel_id"],
+                    "panel_asset_id": panel["panel_asset_id"],
+                    "asset_ref": panel["asset_ref"],
+                    "sha256": panel["sha256"],
+                    "aspect_ratio": panel["aspect_ratio"],
+                    "approval_status": "APPROVED",
+                    "qa_status": "PASS",
+                    "usage_status": "SELECTED",
+                    "timing_mode": panel["timing_mode"],
+                    "camera_motion": shot.get("camera_motion"),
+                    "subject_motion": shot.get("subject_motion", shot.get("motion_path")),
+                    "conversion_function": shot.get("conversion_function", shot.get("cta")),
+                    "semantic_provenance": panel["semantic_provenance"],
+                    "first_frame_role": panel.get("first_frame_role"),
+                    "provider_reference_role": panel.get("provider_reference_role"),
+                }
+                timing = panel.get("timing_projection", {}) if isinstance(panel.get("timing_projection"), Mapping) else {}
+                for timing_field in ("start_ms", "end_ms", "duration_ms", "anchor_time_ms", "anchor_role"):
+                    if timing_field in panel:
+                        entry[timing_field] = panel[timing_field]
+                    elif timing_field in timing:
+                        entry[timing_field] = timing[timing_field]
+                if entry["timing_mode"] == "TEMPORAL_SEGMENT" and "duration_ms" not in entry:
+                    entry.update({"start_ms": sum(item["duration_ms"] for item in ordered_shots), "end_ms": sum(item["duration_ms"] for item in ordered_shots) + shot["duration_ms"], "duration_ms": shot["duration_ms"]})
+                panel_entries.append(snapshot(entry))
+                master_panel_entries.append(snapshot(entry))
+                panel_order.append(str(panel["panel_id"]))
+            ordered_shots.append(
+                snapshot(
+                    {
+                        **shot,
+                        "panel_id": panel_entries[0]["panel_id"],
+                        "panel_asset_ref": panel_entries[0]["asset_ref"],
+                        "panel_sha256": panel_entries[0]["sha256"],
+                        "master_panel_entries": panel_entries,
+                    }
+                )
+            )
             shot_order.append(shot_id)
-            panel_order.append(str(panel["panel_id"]))
         if not shot_order or sequences != set(range(1, len(shot_order) + 1)):
             raise PlanningError(PlanningErrorCode.INVALID_SHOT_ORDER, "Shots must form one contiguous non-empty sequence")
         if set(panel_by_shot) != set(shot_order):
             raise PlanningError(PlanningErrorCode.STALE_INPUT_VERSION, "Panel set contains unknown or unordered shots")
 
-        first_panel = panel_by_shot[shot_order[0]]
+        first_panel = sorted(panel_by_shot[shot_order[0]], key=lambda item: item["panel_sequence"])[0]
         self._validate_first_frame(first_panel, target_ratio)
         first_frame = _artifact("FirstFrameMapping", revision, {
             "shot_id": shot_order[0], "panel_id": first_panel["panel_id"], "asset_ref": first_panel["asset_ref"],
-            "sha256": first_panel["sha256"], "approval_ref": first_panel["approval_ref"], "asset_role": "clean_full_frame_panel", "aspect_ratio": first_panel["aspect_ratio"],
-            **{field: first_panel[field] for field in ("clean_full_frame", "contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")},
+            "panel_asset_id": first_panel["panel_asset_id"], "sha256": first_panel["sha256"], "approval_ref": first_panel.get("approval_ref"), "asset_role": "clean_full_frame_panel", "aspect_ratio": first_panel["aspect_ratio"],
+            **{field: first_panel.get(field, field == "clean_full_frame") for field in ("clean_full_frame", "contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")},
         })
         references = self._reference_roles(value)
         role_mapping = _artifact("ReferenceRoleMapping", revision, {"references": references})
         master = _artifact("VideoGenerationStoryboardMaster", revision, {
             "product_context_bundle": product, "target_aspect_ratio": target_ratio, "shots": ordered_shots,
             "first_frame_mapping_ref": first_frame["artifact_digest"], "reference_role_mapping_ref": role_mapping["artifact_digest"],
+            "master_panel_entries": master_panel_entries,
+            "sheet_outputs": {"execution_policy": SHEET_EXECUTION_POLICY, "source_semantics": "master_json_read_only_projection"},
         })
         motion = _artifact("ShotMotionPlan", revision, {"shots": [{"shot_id": shot["shot_id"], "sequence": shot["sequence"], "duration_ms": shot["duration_ms"], "start_state": shot["start_state"], "middle_state": shot["middle_state"], "end_state": shot["end_state"], "motion_path": shot["motion_path"], "camera_motion": shot["camera_motion"], "transition": shot["transition"]} for shot in ordered_shots]})
         execution = _artifact("VideoExecutionPackage", revision, {
             "package_id": "vep-" + content_digest({"revision": revision, "shots": shot_order}).removeprefix("sha256:")[:20],
             "video_generation_storyboard_master": master, "shot_motion_plan": motion, "first_frame_mapping": first_frame,
             "reference_role_mapping": role_mapping, "shot_order": shot_order, "panel_order": panel_order,
-            "approved_panel_refs": [panel_by_shot[shot]["asset_ref"] for shot in shot_order],
+            "approved_panel_refs": [entry["asset_ref"] for entry in master_panel_entries],
             "asset_mapping": [
-                {"shot_id": shot, "panel_id": panel_by_shot[shot]["panel_id"], "role": "production_panel", "asset_id": panel_by_shot[shot]["panel_id"], "uri": panel_by_shot[shot]["asset_ref"], "sha256": panel_by_shot[shot]["sha256"], "approval_state": "approved"}
-                for shot in shot_order
+                {"shot_id": entry["shot_id"], "panel_id": entry["panel_id"], "role": "production_panel", "asset_id": entry["panel_asset_id"], "uri": entry["asset_ref"], "sha256": entry["sha256"], "approval_state": "approved"}
+                for entry in master_panel_entries
             ] + [
                 {"role": item["role"], "asset_id": item["asset_ref"], "uri": item["asset_ref"], "sha256": item.get("sha256"), "approval_state": "approved", "provider_execution_input": item["provider_execution_input"]}
                 for item in references if item["provider_execution_input"]
@@ -172,14 +257,18 @@ class VideoPlanningInterface:
 
     @staticmethod
     def _identity(value: Mapping[str, object], name: str, contract_id: str) -> None:
-        if value.get("artifact_name") != name or value.get("contract_id") != contract_id or value.get("schema_version") != SCHEMA_VERSION:
+        artifact_name = value.get("artifact_name", value.get("artifact_type"))
+        identity = value.get("contract_id", value.get("contract_identity"))
+        if artifact_name != name or identity != contract_id or value.get("schema_version") != SCHEMA_VERSION:
             raise PlanningError(PlanningErrorCode.INVALID_INPUT, f"{name} identity/version is unsupported")
 
     @staticmethod
     def _validate_first_frame(panel: Mapping[str, object], target_ratio: str) -> None:
         asset_ref = str(panel.get("asset_ref", "")).lower()
         flags = ("contains_grid", "contains_number", "contains_label", "contains_caption", "contains_other_shot")
-        if panel.get("clean_full_frame") is not True or panel.get("aspect_ratio") != target_ratio or any(panel.get(flag) is not False for flag in flags) or any(marker in asset_ref for marker in FORBIDDEN_FIRST_FRAME_MARKERS):
+        explicit_clean = panel.get("clean_full_frame") is True or panel.get("first_frame_role") in {"clean_panel", "clean_first_frame", "clean_opening_frame"}
+        dirty = any(panel.get(flag) is True for flag in flags)
+        if not explicit_clean or panel.get("aspect_ratio") != target_ratio or dirty or any(marker in asset_ref for marker in FORBIDDEN_FIRST_FRAME_MARKERS):
             raise PlanningError(PlanningErrorCode.FIRST_FRAME_INELIGIBLE, "First frame must be one approved clean full-frame production panel")
         digest = panel.get("sha256")
         if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
