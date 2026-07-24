@@ -62,7 +62,13 @@ def task_context(*, active_skill_id: str = "storyboard", revision: int = 1):
     )
 
 
-def product_context(*, sku_id: str | None = "sku-001", pending: bool = False):
+def product_context(
+    *,
+    sku_id: str | None = "sku-001",
+    pending: bool = False,
+    product_id: str = "product-001",
+    approved_asset_refs: list[str] | None = None,
+):
     fact = {
         "fact_id": "fact-001",
         "name": "finish",
@@ -73,10 +79,12 @@ def product_context(*, sku_id: str | None = "sku-001", pending: bool = False):
     payload: dict[str, Any] = {
         "bundle_id": "bundle-001",
         "bundle_revision": 3,
-        "product_id": "product-001",
+        "product_id": product_id,
         "purpose": "storyboard",
         "facts": [fact],
-        "approved_asset_refs": ["asset-product-front"],
+        "approved_asset_refs": (
+            approved_asset_refs if approved_asset_refs is not None else ["asset-product-front"]
+        ),
         "rule_refs": [],
         "known_error_refs": [],
         "successful_pattern_refs": [],

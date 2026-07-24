@@ -1,6 +1,6 @@
 ---
 name: storyboard
-version: 1.1.0
+version: 1.2.0
 status: review
 ---
 
@@ -10,12 +10,15 @@ status: review
 
 Create and revise deterministic Story/Scene/Beat/Shot/Panel plans; decompose raw scripts into bounded automatic shot/panel plans; validate hierarchy, typed character/product/scene/prop continuity archives, emotional progression, configured `required_color`/`logo_visibility` product constraints, and declared continuity transitions. This Skill never generates images or video, submits or downloads Provider work, imports Planning implementation, or writes Product/Research Library state.
 
+The production-planning boundary translates optional `ReferenceStoryboardAnalysis` and `ReplicationPattern` mechanisms into the current `ProductContextBundle`. Reference pacing, camera, emotion, audience-psychology, and conversion mechanics may influence the plan; reference people, brands, products, packaging, protected identities, analysis boards, and evidence boards never become production identity or required panel assets.
+
 ## Public commands
 
 - `create-storyboard`: create version 1 with `expected_version: 0` and no prior artifact; a plan containing `raw_script` is materialized automatically.
 - `create-storyboard-from-script`: explicit raw-script alias; accepts top-level CLI `raw_script`, optional `planning_options`, and optional `continuity_archive`.
 - `revise-storyboard`: create the next immutable version from `prior_artifact` and an exact `expected_version`.
 - `validate-continuity`: validate one serialized owner-local artifact through CLI or `StoryboardService.validate_continuity(artifact)` with no side effects.
+- `derive-production-panels`: publish the canonical `ProductionStoryboardPlan` and `ProductionStoryboardPanelPlan` `1.0.0` business artifacts under an explicit output root.
 
 CLI entry point:
 
@@ -24,6 +27,7 @@ python -m ai_video_platform.skills.storyboard.cli create-storyboard --input requ
 python -m ai_video_platform.skills.storyboard.cli create-storyboard-from-script --input request.json
 python -m ai_video_platform.skills.storyboard.cli revise-storyboard --input request.json
 python -m ai_video_platform.skills.storyboard.cli validate-continuity --input artifact.json
+python -m ai_video_platform.skills.storyboard.cli derive-production-panels --input request.json
 ```
 
 The CLI writes exactly one compact UTF-8 JSON result to stdout. Create/revise request JSON must include explicit `task_workspace` and `state_file` paths; `task_workspace` must resolve to the operator-configured `AVP_TASK_WORKSPACE_ROOT` (or the CLI working directory when unset), and the resolved state path must remain inside it. The owner-local atomic state store provides cross-process exact replay and stale compare-and-set. Exit `0` means completed/cancelled; exit `2` means a stable validation, compatibility, reference, conflict, authorization, or state rejection.
@@ -32,7 +36,17 @@ The CLI writes exactly one compact UTF-8 JSON result to stdout. Create/revise re
 
 Required inputs are approved Foundation Contract envelopes: `TaskSpec`, `TaskContext`, and confirmed `ProductContextBundle`. Optional reference consumption is only through `ReferenceManifest`; a private Reference Analysis object is not accepted. Create/revise also receives an owner-local plan object and idempotency/version fields. A raw-script request may omit `scenes`; the Skill deterministically creates 6-12 Panels (default derived within that band), including `panel_type`, `layout`, and `key_moment`. Structured plan callers remain compatible. Typed continuity uses an additive `continuity_archive.entities` list with character, product, scene, and prop records plus validated entity relationships; generic per-Panel `continuity` remains valid.
 
-Outputs are an immutable owner-local `StoryboardArtifact`, task-owned `AssetManifest` reference, `FeedbackEvent`, and `SkillExecutionEvent`. `StoryboardArtifact.artifact_kind = storyboard-owner-local-draft` and the AssetManifest role/publication status explicitly mark it non-registered; neither is a Foundation Contract ID or approved cross-Skill identity. Cross-Skill publication remains blocked until Codex-00 registers the business artifact identity requested by `CR-FT-03-001-001`.
+Legacy create/revise outputs remain an immutable owner-local `StoryboardArtifact`, task-owned `AssetManifest` reference, `FeedbackEvent`, and `SkillExecutionEvent`. `StoryboardArtifact.artifact_kind = storyboard-owner-local-draft` remains an implementation detail.
+
+`derive-production-panels` publishes exactly these registered business identities without presenting them as Foundation `ContractEnvelope` types whose schemas are still pending: `ProductionStoryboardPlan` (`avp.contract.production-storyboard-plan`, `1.0.0`) and `ProductionStoryboardPanelPlan` (`avp.contract.production-storyboard-panel-plan`, `1.0.0`). It writes:
+
+```text
+production_storyboard_plan/
+  production_storyboard_plan.json
+  production_storyboard_panel_plan.json
+```
+
+The production plan contains `NarrativeArc`, `ScenePlan`, `BeatPlan`, `ShotPlan`, `EmotionArc`, `AudiencePsychologyArc`, `ConversionArc`, `ContinuityBible`, and `ProductStateTimeline`. Every panel binds ordered timing and frozen moment, camera/framing, current character/product/packaging/container state, emotion, approved/forbidden assets, scale constraints, continuity references, and reference-mechanism provenance.
 
 All artifacts retain source Contract IDs and payload SHA-256 digests. The task `AssetManifest` records the Storyboard content hash, canonical byte size, URI, and provenance.
 
@@ -80,4 +94,4 @@ Hermes creates approved Foundation envelopes, then invokes the public CLI with a
 
 ## Maintenance
 
-Owner: `codex-03`, current work item `FT-03-002`, branch `ft/codex-03-storyboard`. Source/tests/docs must remain under the Codex-03 owner allowlist. Shared Contract/Core/root CLI/release changes are requests to Codex-00.
+Owner: `codex-03`, current work item `FT-03-001`, branch `ft/codex-03-storyboard`. Source/tests/docs must remain under the Codex-03 owner allowlist. Shared Contract/Core/root CLI/release changes are requests to Codex-00.
