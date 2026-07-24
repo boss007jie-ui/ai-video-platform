@@ -47,3 +47,16 @@ class ComparisonResult:
 
     def to_dict(self) -> dict[str, object]:
         return {"status": self.status, "output_path": self.output_path, "artifact": _thaw(self.artifact)}
+
+
+@dataclass(frozen=True, slots=True)
+class StoryboardAnalysisResult:
+    status: str
+    output_root: str
+    artifact: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "artifact", _freeze(self.artifact))
+
+    def to_dict(self) -> dict[str, object]:
+        return {"status": self.status, "output_root": self.output_root, "artifact": _thaw(self.artifact)}
