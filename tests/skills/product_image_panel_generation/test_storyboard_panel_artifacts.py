@@ -17,6 +17,7 @@ from ai_video_platform.skills.product_image_panel_generation import (
     ImagePanelError,
     ImagePanelErrorCode,
     ProductionStoryboardPanelService,
+    calculate_model_profile_digest,
     generation_request_to_mapping,
     model_profile_to_mapping,
     storyboard_panel_request_from_mapping,
@@ -292,6 +293,40 @@ class StoryboardPanelArtifactTests(unittest.TestCase):
             self.assertEqual(qa_report["set_checks"]["panel_plan_coverage"], "pass")
             self.assertTrue((output_root / "panel_images" / "panel-001.png").is_file())
             self.assertFalse((output_root / "panel_images" / "panel-002.png").exists())
+
+    def test_generate_panels_cli_rejecting_adapter_writes_non_network_failure_artifacts(self) -> None:
+        document = _storyboard_document()
+        rejecting_profile = replace(profile(), provider_id="rejecting")
+        request = storyboard_panel_request_from_mapping(document).generation_request
+        document["request"] = generation_request_to_mapping(
+            rebind_request(
+                request,
+                model_profile_digest=calculate_model_profile_digest(rejecting_profile),
+            )
+        )
+        document["model_profile"] = model_profile_to_mapping(rejecting_profile)
+        output = StringIO()
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            input_path = workspace / "generate-panels.json"
+            input_path.write_text(json.dumps(document), encoding="utf-8")
+
+            exit_code = cli_main(
+                ["generate-panels", "--input", str(input_path), "--adapter", "rejecting"],
+                stdout=output,
+            )
+
+            payload = json.loads(output.getvalue())
+            output_root = workspace / "production_storyboard_panels"
+            panel_set = json.loads((output_root / "production_storyboard_panel_set.json").read_text(encoding="utf-8"))
+            provenance = json.loads((output_root / "panel_generation_provenance.json").read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 3)
+            self.assertEqual(payload["status"], "failed")
+            self.assertEqual(payload["provider_smoke"], "NOT_REQUIRED")
+            self.assertEqual(panel_set["status"], "failed")
+            self.assertEqual([panel["qa_status"] for panel in panel_set["panels"]], ["failed_generation", "failed_generation"])
+            self.assertFalse(provenance["provider_network_performed"])
 
 
 if __name__ == "__main__":

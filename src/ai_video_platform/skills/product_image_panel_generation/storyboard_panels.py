@@ -264,8 +264,6 @@ def _validate_panel_coverage(
     actual_sequences: list[int] = []
     previous_continuity: Mapping[str, Any] | None = None
     constraints = _object(anchor_set.get("relative_scale_constraints"), "anchor_set.relative_scale_constraints", ImagePanelErrorCode.CONTINUITY_INVALID)
-    aspect_ratio = _text(anchor_set.get("aspect_ratio", ""), "anchor_set.aspect_ratio", ImagePanelErrorCode.PANEL_PLAN_INVALID) if "aspect_ratio" in anchor_set else _text(requested_aspect_ratio := "", "unused", ImagePanelErrorCode.PANEL_PLAN_INVALID)
-    del aspect_ratio, requested_aspect_ratio
 
     for index, raw_panel in enumerate(panels):
         panel_path = f"panel_plan.panels[{index}]"
