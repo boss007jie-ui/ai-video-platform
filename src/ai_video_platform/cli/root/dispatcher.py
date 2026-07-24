@@ -24,6 +24,8 @@ from ai_video_platform.skills.video_generation import (
 
 
 _ROUTES = {
+    ("viral-research", "search"),
+    ("reference-analysis", "analyze-storyboard"),
     ("storyboard", "derive-production-panels"),
     ("image-panel", "generate-panels"),
     ("video-planning", "build-storyboard-master"),
@@ -65,6 +67,14 @@ def _output_arg(args: Sequence[str]) -> str:
         raise ValueError("root CLI route requires --output-dir") from exc
 
 
+def _flag_arg(args: Sequence[str], flag: str) -> str | None:
+    values = list(args)
+    try:
+        return values[values.index(flag) + 1]
+    except (ValueError, IndexError):
+        return None
+
+
 def _run_video_generation(args: Sequence[str]) -> int:
     parser = _Parser(prog="ai-video-platform video-generation run", add_help=True)
     parser.add_argument("--input", required=True, type=Path)
@@ -95,6 +105,19 @@ def dispatch(namespace: str, command: str, args: Sequence[str]) -> int:
     if namespace == "video-generation":
         return _run_video_generation(args)
 
+    if namespace == "viral-research":
+        from ai_video_platform.skills.viral_research_asset_collection.cli import main as owner_main
+        input_path = _input_path(args)
+        owner_args = ["research-viral", "--input", str(input_path)]
+        fixture_path = _flag_arg(args, "--fixture")
+        if fixture_path is not None:
+            owner_args.extend(["--provider", "fake", "--provider-fixture", fixture_path])
+        return owner_main(owner_args)
+    if namespace == "reference-analysis":
+        from ai_video_platform.skills.reference_analysis.cli import main as owner_main
+        input_path = _input_path(args)
+        workspace = _flag_arg(args, "--workspace") or "."
+        return owner_main([command, "--input", str(input_path), "--workspace", workspace])
     if namespace == "storyboard":
         from ai_video_platform.skills.storyboard.cli import main as owner_main
         return owner_main([command, *args])

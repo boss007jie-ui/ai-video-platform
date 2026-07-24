@@ -41,6 +41,102 @@ class RootCliRoutingTests(unittest.TestCase):
             exit_code = main(["video-generation", "run", "--input", str(request_path)])
             self.assertEqual(exit_code, 2)
 
+    def test_viral_research_routes_to_owner_with_fake_fixture(self) -> None:
+        fixture_path = (
+            Path(__file__).parents[1]
+            / "skills"
+            / "viral_research_asset_collection"
+            / "fixtures"
+            / "viral-research-pack-v1.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "request.json"
+            provider_fixture_path = Path(directory) / "provider-fixture.json"
+            request_path.write_text(json.dumps(fixture["request"]), encoding="utf-8")
+            provider_fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+            with patch(
+                "ai_video_platform.skills.viral_research_asset_collection.cli.main",
+                return_value=0,
+            ) as owner_main:
+                result = dispatch(
+                    "viral-research",
+                    "search",
+                    [
+                        "--input",
+                        str(request_path),
+                        "--fixture",
+                        str(provider_fixture_path),
+                    ],
+                )
+            self.assertEqual(result, 0)
+            owner_main.assert_called_once_with(
+                [
+                    "research-viral",
+                    "--input",
+                    str(request_path),
+                    "--provider",
+                    "fake",
+                    "--provider-fixture",
+                    str(provider_fixture_path),
+                ]
+            )
+
+    def test_reference_analysis_routes_to_owner(self) -> None:
+        fixture_path = (
+            Path(__file__).parents[1]
+            / "skills"
+            / "reference_analysis"
+            / "fixtures"
+            / "storyboard-analysis-v1.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "request.json"
+            workspace_path = Path(directory) / "workspace"
+            workspace_path.mkdir()
+            request_path.write_text(json.dumps(fixture["request"]), encoding="utf-8")
+            with patch(
+                "ai_video_platform.skills.reference_analysis.cli.main",
+                return_value=0,
+            ) as owner_main:
+                result = dispatch(
+                    "reference-analysis",
+                    "analyze-storyboard",
+                    [
+                        "--input",
+                        str(request_path),
+                        "--workspace",
+                        str(workspace_path),
+                    ],
+                )
+            self.assertEqual(result, 0)
+            owner_main.assert_called_once_with(
+                [
+                    "analyze-storyboard",
+                    "--input",
+                    str(request_path),
+                    "--workspace",
+                    str(workspace_path),
+                ]
+            )
+            self.assertNotIn("--output", owner_main.call_args.args[0])
+
+    def test_viral_research_search_defaults_to_rejecting_without_fixture(self) -> None:
+        fixture_path = (
+            Path(__file__).parents[1]
+            / "skills"
+            / "viral_research_asset_collection"
+            / "fixtures"
+            / "viral-research-pack-v1.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "request.json"
+            request_path.write_text(json.dumps(fixture["request"]), encoding="utf-8")
+            exit_code = main(["viral-research", "search", "--input", str(request_path)])
+            self.assertNotEqual(exit_code, 0)
+
     def test_video_generation_fake_route_is_available_offline(self) -> None:
         from tests.skills.video_generation.test_video_generation_interface import generation_request
 
