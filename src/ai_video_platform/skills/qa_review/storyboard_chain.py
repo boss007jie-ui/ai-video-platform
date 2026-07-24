@@ -55,6 +55,7 @@ def _failure(
     artifact: Mapping[str, Any] | None,
     *,
     owner: str = "unknown",
+    field_paths: tuple[str, ...] = (),
 ) -> dict[str, str]:
     artifact = artifact or {}
     artifact_type = str(artifact.get("artifact_type", "missing"))
@@ -68,6 +69,9 @@ def _failure(
         "offending_artifact": str(artifact.get("artifact_id", artifact.get("artifact_type", "missing"))),
         "artifact_type": artifact_type,
         "owning_producer": owner if owner != "unknown" else canonical_owner,
+        "artifact_id": str(artifact.get("artifact_id", artifact.get("artifact_type", "missing"))),
+        "field_paths": list(field_paths),
+        "severity": "error",
     }
 
 
@@ -98,8 +102,8 @@ def evaluate_storyboard_chain(
         )
     }
 
-    def fail(family: str, code: str, message: str, artifact: Mapping[str, Any] | None, owner: str = "unknown") -> None:
-        failures[family].append(_failure(family, code, message, artifact, owner=owner))
+    def fail(family: str, code: str, message: str, artifact: Mapping[str, Any] | None, owner: str = "unknown", *field_paths: str) -> None:
+        failures[family].append(_failure(family, code, message, artifact, owner=owner, field_paths=tuple(field_paths)))
 
     if request.command == "review-composition":
         for artifact_type in sorted(REQUIRED_COMPOSITION_TYPES - set(by_type)):
@@ -169,6 +173,25 @@ def evaluate_storyboard_chain(
             for item in panels
         ):
             fail("production-panel-identity-continuity", "QA_PANEL_SOURCE_ASSET_UNAPPROVED", "A production panel is not traced exclusively to approved product assets", panel_set)
+        layered_failures = []
+        layered_mode = any("usage_status" in item or "panel_asset_facts" in item or "approval_evidence" in item for item in panels)
+        for index, item in enumerate(panels):
+            if not layered_mode:
+                continue
+            if item.get("usage_status") != "SELECTED":
+                layered_failures.append(f"panels[{index}].usage_status")
+                continue
+            facts = item.get("panel_asset_facts")
+            evidence = item.get("approval_evidence")
+            if isinstance(facts, Mapping) and isinstance(evidence, Mapping):
+                if evidence.get("kind") not in {"ApprovalRecord", "QAReport"} or evidence.get("decision", "approved").casefold() not in {"approved", "pass"}:
+                    layered_failures.append(f"panels[{index}].approval_evidence")
+                if evidence.get("panel_asset_id") != facts.get("panel_asset_id") or evidence.get("asset_sha256") != facts.get("sha256"):
+                    layered_failures.append(f"panels[{index}].approval_evidence.asset_sha256")
+                if facts.get("approval_status") not in {"approved", "APPROVED"} or facts.get("qa_status") not in {"pass", "PASS"}:
+                    layered_failures.append(f"panels[{index}].panel_asset_facts")
+        if layered_failures:
+            fail("production-panel-identity-continuity", "QA_PANEL_VISUAL_EVIDENCE_INVALID", "Selected Panel lacks current hash-bound ApprovalRecord or QAReport visual evidence", panel_set, "product-image-panel-generation", *layered_failures)
 
     master = by_type.get("avp.contract.video-generation-storyboard-master")
     motion_plan = by_type.get("avp.contract.shot-motion-plan")

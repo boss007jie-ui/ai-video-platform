@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+import os
 
 from ai_video_platform.contracts.validation import validate_payload
 
@@ -290,6 +291,45 @@ def _build_artifacts(
         "issues": issues,
         "evidence_refs": list(request.evidence_refs),
         "operator_actions": ["inspect-evidence", "record-human-decision"] if outcome is ReviewOutcome.NEEDS_REVIEW else [],
+    }
+    findings = []
+    for issue in issues:
+        findings.append(
+            {
+                "error_code": issue.get("code"),
+                "severity": issue.get("severity", "error"),
+                "artifact_id": issue.get("artifact_id", issue.get("offending_artifact")),
+                "field_paths": list(issue.get("field_paths", ())),
+                "message": issue.get("message"),
+            }
+        )
+    evaluation_inputs = context.get("evaluation_inputs", context.get("input_revisions", {}))
+    if not isinstance(evaluation_inputs, Mapping):
+        evaluation_inputs = {}
+    readiness = "READY" if outcome is ReviewOutcome.PASS else ("REVOKED" if context.get("withdrawal_authorized") is True else "INVALIDATED")
+    package["qa_report"] = {
+        "artifact_type": "StoryboardArtifactChainQAReport",
+        "schema_version": request.schema_version,
+        "decision": outcome.value.upper(),
+        "findings": findings,
+        "evaluation_set": {
+            "task_id": request.task_id,
+            "execution_id": request.execution_id,
+            "schema_version": request.schema_version,
+            "criteria_version": request.criteria_version,
+            "evaluation_set_version": request.evaluation_set_version,
+            "input_revisions_digests": dict(evaluation_inputs),
+        },
+        "ruleset_version": request.criteria_version,
+        "qa_code_commit": str(context.get("qa_code_commit", "workspace")),
+        "execution_environment": {
+            "python": str(context.get("python_version", "3.14")),
+            "platform": os.name,
+        },
+        "readiness": readiness,
+        "execution_artifacts_suppressed": outcome is not ReviewOutcome.PASS,
+        "provider_execution_input": False,
+        "owner_artifacts_mutated": False,
     }
     return ReviewArtifacts(
         outcome=outcome,

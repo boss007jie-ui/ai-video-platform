@@ -486,6 +486,53 @@ class StoryboardArtifactChainQATests(unittest.TestCase):
                 self.assertNotIn("approval_record", package)
                 self.assertNotIn("provider_result", package)
 
+    def test_structured_qareport_binds_inputs_and_invalidates_readiness(self) -> None:
+        request = valid_composition_request()
+        request["context"].update(
+            {
+                "evaluation_inputs": {"panel-set-001": "sha256:" + "4" * 64, "master-001": "sha256:" + "5" * 64},
+                "qa_code_commit": "qa-test-commit",
+                "python_version": "3.14.0",
+            }
+        )
+        result = review(ReviewRequest.from_mapping(request))
+        report = result.human_review_package["qa_report"]
+        self.assertEqual(report["decision"], "PASS")
+        self.assertEqual(report["readiness"], "READY")
+        self.assertEqual(report["evaluation_set"]["input_revisions_digests"]["panel-set-001"], "sha256:" + "4" * 64)
+        self.assertEqual(report["qa_code_commit"], "qa-test-commit")
+        self.assertFalse(report["owner_artifacts_mutated"])
+
+        stale = valid_composition_request()
+        stale["context"].update({"evaluation_inputs": {"panel-set-001": "sha256:" + "0" * 64}})
+        stale["subject"]["artifacts"][2]["revision"] = "stale-revision"
+        stale_result = review(ReviewRequest.from_mapping(stale))
+        stale_report = stale_result.human_review_package["qa_report"]
+        self.assertEqual(stale_report["readiness"], "INVALIDATED")
+        self.assertTrue(stale_report["execution_artifacts_suppressed"])
+        self.assertTrue(stale_report["findings"])
+        self.assertTrue(all({"error_code", "severity", "artifact_id", "field_paths"} <= set(item) for item in stale_report["findings"]))
+
+        revoked = valid_composition_request()
+        revoked["context"]["withdrawal_authorized"] = True
+        revoked["subject"]["artifacts"][2]["revision"] = "stale-revision"
+        revoked_result = review(ReviewRequest.from_mapping(revoked))
+        self.assertEqual(revoked_result.human_review_package["qa_report"]["readiness"], "REVOKED")
+
+    def test_layered_panel_visual_evidence_hash_mismatch_fails_closed(self) -> None:
+        request = valid_composition_request()
+        panel = _artifact(request, "avp.contract.production-storyboard-panel-set")["panels"][0]
+        panel.update(
+            {
+                "usage_status": "SELECTED",
+                "panel_asset_facts": {"panel_asset_id": "asset-panel-001", "sha256": "sha256:" + "a" * 64, "approval_status": "approved", "qa_status": "pass"},
+                "approval_evidence": {"kind": "ApprovalRecord", "panel_asset_id": "asset-panel-001", "asset_sha256": "sha256:" + "b" * 64, "decision": "approved"},
+            }
+        )
+        result = review(ReviewRequest.from_mapping(request))
+        self.assertEqual(result.outcome, ReviewOutcome.FAIL)
+        self.assertIn("QA_PANEL_VISUAL_EVIDENCE_INVALID", {item["code"] for item in result.human_review_package["issues"]})
+
 
 def _artifact(request: dict[str, object], artifact_type: str) -> dict[str, object]:
     for artifact in request["subject"]["artifacts"]:
