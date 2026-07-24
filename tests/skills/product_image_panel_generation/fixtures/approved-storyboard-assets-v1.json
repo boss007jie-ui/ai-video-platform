@@ -1,0 +1,83 @@
+{
+  "fixture_version": "1.0.0",
+  "anchor_set": {
+    "anchor_set_id": "anchor-set:synthetic-v1",
+    "product_id": "product-synthetic-004",
+    "sku_id": null,
+    "anchors": {
+      "product": {
+        "anchor_id": "product-main",
+        "asset_ids": ["asset-product-004"]
+      },
+      "character": {
+        "anchor_id": "character-main",
+        "asset_ids": ["asset-character-004"]
+      },
+      "wardrobe": {
+        "anchor_id": "wardrobe-main",
+        "asset_ids": ["asset-wardrobe-004"]
+      },
+      "scene": {
+        "anchor_id": "scene-kitchen",
+        "asset_ids": ["asset-scene-004"]
+      },
+      "packaging": {
+        "anchor_id": "packaging-retail-box",
+        "asset_ids": ["asset-packaging-004"]
+      },
+      "container": {
+        "anchor_id": "container-bottle",
+        "asset_ids": ["asset-container-004"]
+      }
+    },
+    "relative_scale_constraints": {
+      "product_to_character": {"minimum": 0.15, "maximum": 0.25},
+      "packaging_to_product": {"minimum": 1.0, "maximum": 1.3},
+      "container_to_product": {"minimum": 0.9, "maximum": 1.1}
+    }
+  },
+  "approved_assets": [
+    {
+      "asset_id": "asset-product-004",
+      "role": "product",
+      "artifact_type": "ApprovedProductAsset",
+      "uri": "memory://synthetic/product.png",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "asset_id": "asset-character-004",
+      "role": "character",
+      "artifact_type": "ApprovedCharacterAsset",
+      "uri": "memory://synthetic/character.png",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "asset_id": "asset-wardrobe-004",
+      "role": "wardrobe",
+      "artifact_type": "ApprovedWardrobeAsset",
+      "uri": "memory://synthetic/wardrobe.png",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+      "asset_id": "asset-scene-004",
+      "role": "scene",
+      "artifact_type": "ApprovedSceneAsset",
+      "uri": "memory://synthetic/scene.png",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    {
+      "asset_id": "asset-packaging-004",
+      "role": "packaging",
+      "artifact_type": "ApprovedPackagingAsset",
+      "uri": "memory://synthetic/packaging.png",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "asset_id": "asset-container-004",
+      "role": "container",
+      "artifact_type": "ApprovedContainerAsset",
+      "uri": "memory://synthetic/container.png",
+      "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  ]
+}

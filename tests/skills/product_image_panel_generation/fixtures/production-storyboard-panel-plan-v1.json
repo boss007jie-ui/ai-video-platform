@@ -1,0 +1,80 @@
+{
+  "artifact_type": "ProductionStoryboardPanelPlan",
+  "contract_id": "avp.contract.production-storyboard-panel-plan",
+  "schema_version": "1.0.0",
+  "artifact_id": "production-storyboard-panel-plan:synthetic-v1",
+  "producer": {
+    "skill_id": "storyboard",
+    "workline_id": "codex-03"
+  },
+  "approval": {
+    "status": "approved",
+    "approval_ref": "approval://production-storyboard-panel-plan/synthetic-v1"
+  },
+  "product_id": "product-synthetic-004",
+  "sku_id": null,
+  "plan_revision": 1,
+  "aspect_ratio": "9:16",
+  "panels": [
+    {
+      "panel_id": "panel-001",
+      "shot_id": "shot-001",
+      "sequence": 1,
+      "prompt": "Presenter holds the current matte blue bottle front-facing in the approved kitchen scene.",
+      "width": 576,
+      "height": 1024,
+      "approved_asset_ids": [
+        "asset-product-004",
+        "asset-character-004",
+        "asset-wardrobe-004",
+        "asset-scene-004",
+        "asset-packaging-004",
+        "asset-container-004"
+      ],
+      "continuity": {
+        "character_anchor_id": "character-main",
+        "wardrobe_anchor_id": "wardrobe-main",
+        "scene_anchor_id": "scene-kitchen",
+        "product_state": "sealed",
+        "packaging_state": "retail-box-closed",
+        "container_state": "bottle-capped",
+        "relative_scale": {
+          "product_to_character": 0.18,
+          "packaging_to_product": 1.15,
+          "container_to_product": 1.0
+        }
+      },
+      "continuity_changes": {}
+    },
+    {
+      "panel_id": "panel-002",
+      "shot_id": "shot-002",
+      "sequence": 2,
+      "prompt": "Close view of the same current matte blue bottle and retail box in the approved kitchen scene.",
+      "width": 576,
+      "height": 1024,
+      "approved_asset_ids": [
+        "asset-product-004",
+        "asset-character-004",
+        "asset-wardrobe-004",
+        "asset-scene-004",
+        "asset-packaging-004",
+        "asset-container-004"
+      ],
+      "continuity": {
+        "character_anchor_id": "character-main",
+        "wardrobe_anchor_id": "wardrobe-main",
+        "scene_anchor_id": "scene-kitchen",
+        "product_state": "sealed",
+        "packaging_state": "retail-box-closed",
+        "container_state": "bottle-capped",
+        "relative_scale": {
+          "product_to_character": 0.18,
+          "packaging_to_product": 1.15,
+          "container_to_product": 1.0
+        }
+      },
+      "continuity_changes": {}
+    }
+  ]
+}

@@ -50,6 +50,7 @@ class ImagePanelService:
         now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] | None = None,
         max_concurrency: int = 1,
+        asset_sink: Callable[[ProviderInvocation, ProviderAsset], None] | None = None,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be positive")
@@ -60,6 +61,7 @@ class ImagePanelService:
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._sleep = sleep or time.sleep
         self._max_concurrency = max_concurrency
+        self._asset_sink = asset_sink
         self._slots = BoundedSemaphore(max_concurrency)
         self._ledger_lock = Lock()
         self._ledger: dict[str, tuple[str, GenerationOutcome | None]] = {}
@@ -199,6 +201,8 @@ class ImagePanelService:
                     provider_asset = self._invoke_provider(invocation, cancellation)
                     if not isinstance(provider_asset, ProviderAsset):
                         raise TypeError("Adapter returned an invalid result type")
+                    if self._asset_sink is not None:
+                        self._asset_sink(invocation, provider_asset)
                     digest = hashlib.sha256(provider_asset.content).hexdigest()
                     generated = GeneratedAsset(
                         asset_id=f"asset:{request.request_id}:{item.item_id}",
