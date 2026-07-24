@@ -24,6 +24,11 @@ from .product_data import (
     to_product_facts,
 )
 from .service import ImagePanelService
+from .storyboard_panels import (
+    ProductionStoryboardPanelService,
+    StoryboardPanelRequest,
+    storyboard_panel_request_from_mapping,
+)
 
 __all__ = [
     "FakeImageProviderAdapter",
@@ -43,7 +48,9 @@ __all__ = [
     "ModelProfile",
     "PreflightInspection",
     "ProductFacts",
+    "ProductionStoryboardPanelService",
     "RejectingImageProviderAdapter",
+    "StoryboardPanelRequest",
     "calculate_request_hash",
     "calculate_model_profile_digest",
     "derive_product_mode",
@@ -52,5 +59,6 @@ __all__ = [
     "model_profile_from_mapping",
     "model_profile_to_mapping",
     "repair_story_context",
+    "storyboard_panel_request_from_mapping",
     "to_product_facts",
 ]

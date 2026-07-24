@@ -9,6 +9,7 @@ from typing import Callable, Mapping
 
 from .errors import ImagePanelError, ImagePanelErrorCode
 from .models import CancellationToken, GenerationItem, ModelProfile
+from .png import deterministic_png
 
 
 def _bypass_error() -> ImagePanelError:
@@ -75,15 +76,15 @@ class ImageProviderAdapter(ABC):
 @dataclass(frozen=True, slots=True)
 class FakeProviderStep:
     kind: str
-    content: bytes = b"synthetic-offline-image"
+    content: bytes | None = None
     content_type: str = "image/png"
     message: str = "Synthetic Provider failure"
     retryable: bool = False
     details: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
-    def success(cls, *, content: bytes = b"synthetic-offline-image", content_type: str = "image/png") -> "FakeProviderStep":
-        return cls("success", content=bytes(content), content_type=content_type)
+    def success(cls, *, content: bytes | None = None, content_type: str = "image/png") -> "FakeProviderStep":
+        return cls("success", content=None if content is None else bytes(content), content_type=content_type)
 
     @classmethod
     def failure(cls, message: str, *, retryable: bool, details: Mapping[str, object] | None = None) -> "FakeProviderStep":
@@ -141,10 +142,19 @@ class FakeImageProviderAdapter(ImageProviderAdapter):
         step_index = self._attempts[invocation.item.item_id] - 1
         step = steps[step_index] if step_index < len(steps) else FakeProviderStep.success()
         if step.kind == "success":
+            content = step.content
+            if content is None:
+                content = deterministic_png(
+                    invocation.item.width,
+                    invocation.item.height,
+                    seed=f"{invocation.request_hash}:{invocation.item.item_id}:{invocation.attempt}",
+                )
             return ProviderAsset(
                 provider_asset_id=f"fake:{invocation.request_id}:{invocation.item.item_id}:{invocation.attempt}",
-                content=bytes(step.content),
+                content=bytes(content),
                 content_type=step.content_type,
+                width=invocation.item.width,
+                height=invocation.item.height,
             )
         if step.kind == "timeout":
             raise ImagePanelError(

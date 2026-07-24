@@ -17,6 +17,7 @@ from .cli_ledger import CliExecutionLedger, assert_task_workspace
 from .errors import ImagePanelError, ImagePanelErrorCode
 from .models import GenerationCommand, GenerationOutcome, GenerationStatus
 from .service import ImagePanelService
+from .storyboard_panels import ProductionStoryboardPanelService, storyboard_panel_request_from_mapping
 from .yunwu_adapters import YunwuImage2Adapter, YunwuNanoBananaAdapter
 
 
@@ -38,6 +39,7 @@ def _parser() -> argparse.ArgumentParser:
             GenerationCommand.GENERATE_PRODUCT_IMAGE.value,
             GenerationCommand.GENERATE_PANEL.value,
             GenerationCommand.INSPECT_GENERATION_REQUEST.value,
+            "generate-panels",
         ],
     )
     parser.add_argument("--input", required=True)
@@ -182,9 +184,37 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         args = _parser().parse_args(list(argv) if argv is not None else None)
         input_path = assert_task_workspace(Path(args.input)).resolve()
         document = parse_json_object(input_path.read_bytes())
-        request = generation_request_from_mapping(document.get("request"))
         profile = model_profile_from_mapping(document.get("model_profile"))
         output_dir = _resolve_output_directory(input_path, args.output_dir)
+        if args.command == "generate-panels":
+            if args.adapter not in {"fake", "rejecting"}:
+                raise ImagePanelError(
+                    ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED,
+                    "Production storyboard panels require a deterministic offline adapter",
+                    category="authorization",
+                    field_paths=("adapter",),
+                )
+            adapter = _adapter_from_name(args.adapter)
+            panel_service = ProductionStoryboardPanelService(
+                provider=adapter,
+                profiles=(profile,),
+                max_concurrency=profile.max_concurrency,
+            )
+            outcome = panel_service.generate_panels(
+                storyboard_panel_request_from_mapping(document),
+                output_root=output_dir / "production_storyboard_panels",
+            )
+            _write(
+                output,
+                {
+                    "status": outcome.status.value,
+                    "output_root": str(output_dir / "production_storyboard_panels"),
+                    "provider_network_performed": False,
+                    "provider_smoke": "NOT_REQUIRED",
+                },
+            )
+            return 0 if outcome.status is GenerationStatus.COMPLETED else 3
+        request = generation_request_from_mapping(document.get("request"))
         if args.command == GenerationCommand.INSPECT_GENERATION_REQUEST.value:
             adapter = _adapter_from_name(args.adapter)
             service = ImagePanelService(
