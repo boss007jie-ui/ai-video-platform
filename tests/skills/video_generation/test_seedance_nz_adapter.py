@@ -154,6 +154,47 @@ class SeedanceNzFakeAdapterTests(unittest.TestCase):
         )
         self.assertEqual(adapter.network_calls, 0)
 
+    def test_fake_image_submit_is_deterministic_and_never_uses_network(self) -> None:
+        adapter = FakeSeedanceNzVideoProviderAdapter()
+        request = {"prompt": "High-end skincare product", "idempotency_key": "img-001"}
+
+        first = adapter.submit_image(request)
+        second = adapter.submit_image(request)
+
+        self.assertEqual(first, second)
+        self.assertTrue(first.startswith("fake-sd-nz-img-"))
+        self.assertEqual(adapter.network_calls, 0)
+
+    def test_fake_image_poll_advances_to_success(self) -> None:
+        adapter = FakeSeedanceNzVideoProviderAdapter(
+            image_poll_statuses=("SUBMITTED", "IN_PROGRESS", "SUCCESS"),
+        )
+        job_id = adapter.submit_image({"prompt": "High-end skincare product"})
+
+        self.assertEqual(adapter.poll_image(job_id)["data"]["status"], "SUBMITTED")
+        self.assertEqual(adapter.poll_image(job_id)["data"]["status"], "IN_PROGRESS")
+        completed = adapter.poll_image(job_id)
+
+        self.assertEqual(completed["code"], "success")
+        self.assertEqual(completed["data"]["status"], "SUCCESS")
+        self.assertEqual(completed["data"]["result_url"], f"fake://{job_id}.jpeg")
+        self.assertEqual(adapter.network_calls, 0)
+
+    def test_fake_image_download_returns_deterministic_jpeg(self) -> None:
+        adapter = FakeSeedanceNzVideoProviderAdapter(image_poll_statuses=("SUCCESS",))
+        job_id = adapter.submit_image({"prompt": "High-end skincare product"})
+        adapter.poll_image(job_id)
+
+        artifact = adapter.download_image(job_id)
+
+        self.assertEqual(artifact["bytes"], b"synthetic-jpeg")
+        self.assertEqual(artifact["content_type"], "image/jpeg")
+        self.assertEqual(
+            artifact["sha256"],
+            "sha256:" + hashlib.sha256(b"synthetic-jpeg").hexdigest(),
+        )
+        self.assertEqual(adapter.network_calls, 0)
+
     def test_fake_failures_cancel_and_corrupt_download_are_injectable(self) -> None:
         adapter = FakeSeedanceNzVideoProviderAdapter(submit_failures=1)
         request = {"request_hash": "sha256:request", "idempotency_key": "idem-001"}
@@ -403,6 +444,136 @@ class SeedanceNzProductionAdapterTests(unittest.TestCase):
                 self.assertNotIn("skills.", node.module)
             if isinstance(node, ast.Import):
                 self.assertTrue(all("ai_video_platform.skills." not in item.name for item in node.names))
+
+    def test_submit_image_uses_fixed_endpoint_model_and_metadata(self) -> None:
+        transport = RecordingTransport()
+        transport.response = {"id": "task-image-12345678", "status": "queued"}
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+
+        job_id = adapter.submit_image({
+            "prompt": "High-end skincare product",
+            "model": "must-not-override",
+            "metadata": {"resolution": "must-not-override"},
+        })
+
+        self.assertEqual(job_id, "task-image-12345678")
+        self.assertEqual(
+            transport.calls[0],
+            {
+                "method": "POST",
+                "path": "/v1/image/generations",
+                "credential": "sk-test-key",
+                "payload": {
+                    "model": "seedream-v5-pro-t2i",
+                    "prompt": "High-end skincare product",
+                    "metadata": {"resolution": "1k", "output_format": "jpeg"},
+                },
+            },
+        )
+
+    def test_submit_image_to_image_uses_fixed_model_and_one_to_ten_references(self) -> None:
+        transport = RecordingTransport()
+        transport.response = {"id": "task-image-12345678", "status": "queued"}
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+            remaining_attempts=2,
+        )
+        images = ["https://assets.example/reference-1.jpeg", "https://assets.example/reference-2.jpeg"]
+
+        adapter.submit_image({"prompt": "Match the approved product", "images": images})
+
+        self.assertEqual(transport.calls[0]["payload"]["model"], "seedream-v5-pro-i2i")
+        self.assertEqual(transport.calls[0]["payload"]["images"], images)
+        with self.assertRaises(AdapterFailure) as too_many:
+            adapter.submit_image({
+                "prompt": "Match the approved product",
+                "images": [f"https://assets.example/reference-{index}.jpeg" for index in range(11)],
+            })
+        self.assertEqual(too_many.exception.code, "REQUEST_INVALID")
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_poll_image_success_downloads_signed_url_and_supports_nested_fallback(self) -> None:
+        transport = RecordingTransport()
+        transport.response = {"id": "task-image-12345678", "status": "queued"}
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        job_id = adapter.submit_image({"prompt": "High-end skincare product"})
+        transport.response = {
+            "code": "success",
+            "data": {
+                "task_id": job_id,
+                "status": "SUCCESS",
+                "data": {"content": {"image_url": "https://download.example/signed-image.jpeg"}},
+            },
+        }
+
+        completed = adapter.poll_image(job_id)
+        artifact = adapter.download_image(job_id)
+
+        self.assertEqual(completed["data"]["result_url"], "https://download.example/signed-image.jpeg")
+        self.assertEqual(artifact["bytes"], b"production-video")
+        self.assertEqual(artifact["content_type"], "image/jpeg")
+        self.assertEqual(
+            artifact["sha256"],
+            "sha256:" + hashlib.sha256(b"production-video").hexdigest(),
+        )
+        self.assertEqual(transport.download_calls, ["https://download.example/signed-image.jpeg"])
+
+    def test_image_unauthorized_and_failure_paths_are_fail_closed(self) -> None:
+        credential = "sk-test-key"
+        transport = RecordingTransport()
+        transport.failure = AdapterFailure(
+            "PROVIDER_FORBIDDEN",
+            "Seedance.nz rejected " + credential,
+            retryable=False,
+            http_status=401,
+            provider_error_summary={"authorization": credential},
+        )
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": credential},
+            ),
+            remaining_attempts=2,
+        )
+
+        with self.assertRaises(AdapterFailure) as unauthorized:
+            adapter.submit_image({"prompt": "High-end skincare product"})
+        self.assertEqual(unauthorized.exception.code, "PROVIDER_FORBIDDEN")
+        self.assertFalse(unauthorized.exception.retryable)
+        self.assertNotIn(credential, str(unauthorized.exception.provider_error_summary))
+
+        transport.failure = None
+        transport.response = {"id": "task-image-12345678", "status": "queued"}
+        job_id = adapter.submit_image({"prompt": "High-end skincare product"})
+        transport.response = {
+            "code": "success",
+            "data": {
+                "task_id": job_id,
+                "status": "FAILURE",
+                "error": {"code": "content_policy", "message": "request rejected"},
+            },
+        }
+
+        result = adapter.poll_image(job_id)
+
+        self.assertEqual(result["data"]["status"], "FAILURE")
+        with self.assertRaises(AdapterFailure) as not_ready:
+            adapter.download_image(job_id)
+        self.assertEqual(not_ready.exception.code, "DOWNLOAD_NOT_READY")
+        self.assertEqual(transport.download_calls, [])
 
 
 class SeedanceNzUploaderTests(unittest.TestCase):

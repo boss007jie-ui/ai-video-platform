@@ -118,6 +118,8 @@ class UrllibSeedanceNzHttpTransport:
         valid_target = (
             (method == "POST" and path == "/v1/videos")
             or (method == "GET" and re.fullmatch(r"/v1/videos/[A-Za-z0-9_-]{8,128}", path) is not None)
+            or (method == "POST" and path == "/v1/image/generations")
+            or (method == "GET" and re.fullmatch(r"/v1/image/generations/[A-Za-z0-9_-]{8,128}", path) is not None)
         )
         if not valid_target:
             raise AdapterFailure("REQUEST_INVALID", "Seedance.nz request target is invalid", retryable=False)
@@ -180,7 +182,7 @@ class UrllibSeedanceNzHttpTransport:
     def download(self, uri: str) -> bytes:
         if not _safe_https_uri(uri):
             raise AdapterFailure("DOWNLOAD_INVALID", "Seedance.nz artifact URL is invalid", retryable=False)
-        request = Request(uri, method="GET", headers={"Accept": "video/mp4,video/*,*/*;q=0.5"})
+        request = Request(uri, method="GET", headers={"Accept": "video/mp4,image/*,*/*;q=0.5"})
         return self._open(request, credential=None)
 
     def _open(self, request: Request, *, credential: str | None) -> bytes:
@@ -375,6 +377,8 @@ class SeedanceNzVideoProviderAdapter:
         self._clock = clock
         self._started_at: dict[str, float] = {}
         self._completed: dict[str, dict[str, object]] = {}
+        self._image_started_at: dict[str, float] = {}
+        self._image_completed: dict[str, dict[str, object]] = {}
         self.network_calls = 0
 
     def submit(self, request: Mapping[str, object]) -> str:
@@ -527,6 +531,152 @@ class SeedanceNzVideoProviderAdapter:
             "content_type": "video/mp4",
         }
 
+    def submit_image(self, request: Mapping[str, object]) -> str:
+        if not isinstance(request, Mapping):
+            raise AdapterFailure("REQUEST_INVALID", "Seedance.nz image request is invalid", retryable=False)
+        prompt = request.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or contains_sensitive_text(prompt):
+            raise AdapterFailure("REQUEST_INVALID", "Seedance.nz image prompt is invalid", retryable=False)
+        payload: dict[str, object] = {
+            "model": "seedream-v5-pro-t2i",
+            "prompt": prompt,
+            "metadata": {"resolution": "1k", "output_format": "jpeg"},
+        }
+        images = request.get("images")
+        if images is not None:
+            if (
+                not isinstance(images, list)
+                or not 1 <= len(images) <= 10
+                or any(not _safe_https_uri(image) for image in images)
+            ):
+                raise AdapterFailure("REQUEST_INVALID", "Seedance.nz image references are invalid", retryable=False)
+            payload["model"] = "seedream-v5-pro-i2i"
+            payload["images"] = list(images)
+        credential = self._credential_resolver.resolve()
+        if self.remaining_attempts <= 0:
+            raise AdapterFailure(
+                "PROVIDER_FORBIDDEN",
+                "Seedance.nz submission attempt budget is exhausted",
+                retryable=False,
+            )
+        self.remaining_attempts -= 1
+        try:
+            self.network_calls += 1
+            response = self._transport.request_json(
+                "POST",
+                "/v1/image/generations",
+                credential,
+                payload=payload,
+            )
+        except AdapterFailure as error:
+            raise AdapterFailure(
+                error.code,
+                "Seedance.nz image submission failed with no safe automatic retry",
+                retryable=False,
+                http_status=error.http_status,
+                provider_error_summary=_provider_summary(error.provider_error_summary, credential),
+            ) from None
+        except Exception:
+            raise AdapterFailure(
+                "PROVIDER_FORBIDDEN",
+                "Seedance.nz image transport failed unexpectedly",
+                retryable=False,
+            ) from None
+        task_id = response.get("id") if isinstance(response, Mapping) else None
+        task_id = self._validated_task_id(task_id, credential)
+        self._image_started_at[task_id] = self._clock()
+        return task_id
+
+    def poll_image(self, provider_job_id: str) -> Mapping[str, object]:
+        credential = self._credential_resolver.resolve()
+        task_id = self._validated_task_id(provider_job_id, credential)
+        started_at = self._image_started_at.get(task_id)
+        if started_at is None:
+            raise AdapterFailure("NOT_FOUND", "Seedance.nz image task is absent", retryable=False)
+        if self._clock() - started_at > self._timeout_seconds:
+            raise AdapterFailure("TIMEOUT", "Seedance.nz image task exceeded 600 seconds", retryable=False)
+        try:
+            self.network_calls += 1
+            response = self._transport.request_json(
+                "GET",
+                f"/v1/image/generations/{task_id}",
+                credential,
+            )
+        except AdapterFailure as error:
+            raise AdapterFailure(
+                error.code,
+                "Seedance.nz image polling stopped after the first anomaly",
+                retryable=False,
+                http_status=error.http_status,
+                provider_error_summary=_provider_summary(error.provider_error_summary, credential),
+            ) from None
+        except Exception:
+            raise AdapterFailure(
+                "PROVIDER_FORBIDDEN",
+                "Seedance.nz image polling transport failed unexpectedly",
+                retryable=False,
+            ) from None
+        if not isinstance(response, Mapping) or response.get("code") != "success":
+            raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz image poll response is invalid", retryable=False)
+        data = response.get("data")
+        if not isinstance(data, Mapping):
+            raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz image poll data is invalid", retryable=False)
+        status = data.get("status")
+        if status not in {"NOT_START", "SUBMITTED", "IN_PROGRESS", "SUCCESS", "FAILURE"}:
+            raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz image status is unsupported", retryable=False)
+        if status in {"NOT_START", "SUBMITTED", "IN_PROGRESS"}:
+            return {"code": "success", "data": {"status": status}}
+        if status == "FAILURE":
+            error = data.get("error")
+            result = {"code": "success", "data": {"status": status}}
+            if isinstance(error, Mapping):
+                result["data"] = {"status": status, "error": dict(error)}
+            return result
+        result_url = data.get("result_url")
+        if not _safe_https_uri(result_url):
+            nested = data.get("data")
+            content = nested.get("content") if isinstance(nested, Mapping) else None
+            result_url = content.get("image_url") if isinstance(content, Mapping) else None
+        if not _safe_https_uri(result_url):
+            raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz image result URL is invalid", retryable=False)
+        late = self._clock() - started_at > self._timeout_seconds
+        self._image_completed[task_id] = {"result_uri": result_url, "late": late}
+        if late:
+            raise AdapterFailure("TIMEOUT", "Seedance.nz image completed after the deadline", retryable=False)
+        return {"code": "success", "data": {"status": status, "result_url": result_url}}
+
+    def download_image(self, provider_job_id: str) -> Mapping[str, object]:
+        task_id = self._validated_task_id(provider_job_id)
+        completed = self._image_completed.get(task_id)
+        if completed is None:
+            raise AdapterFailure("DOWNLOAD_NOT_READY", "Seedance.nz image has no completed artifact", retryable=False)
+        if completed.get("late") is True:
+            raise AdapterFailure("LATE_ARTIFACT", "Seedance.nz late image cannot be downloaded", retryable=False)
+        result_uri = completed.get("result_uri")
+        if not _safe_https_uri(result_uri):
+            raise AdapterFailure("DOWNLOAD_INVALID", "Seedance.nz image URL is invalid", retryable=False)
+        try:
+            self.network_calls += 1
+            content = self._transport.download(str(result_uri))
+        except AdapterFailure as error:
+            raise AdapterFailure(
+                error.code,
+                "Seedance.nz image download failed with no safe automatic retry",
+                retryable=False,
+                http_status=error.http_status,
+                provider_error_summary=_provider_summary(error.provider_error_summary, None),
+            ) from None
+        except Exception:
+            raise AdapterFailure("DOWNLOAD_FAILED", "Seedance.nz image download failed unexpectedly", retryable=False) from None
+        if not isinstance(content, bytes) or not content:
+            raise AdapterFailure("DOWNLOAD_INVALID", "Seedance.nz image artifact is empty", retryable=False)
+        return {
+            "bytes": content,
+            "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
+            "uri": f"memory://seedance-nz/{task_id}.jpeg",
+            "content_type": "image/jpeg",
+        }
+
     def _submission_payload(self, request: Mapping[str, object]) -> dict[str, object]:
         output = request.get("output", request)
         if not isinstance(output, Mapping):
@@ -594,6 +744,8 @@ class FakeSeedanceNzVideoProviderAdapter:
         corrupt_download: bool = False,
         artifact_content: bytes = b"synthetic-mp4",
         artifact_content_type: str = "video/mp4",
+        image_poll_statuses: tuple[str, ...] = ("SUBMITTED", "IN_PROGRESS", "SUCCESS"),
+        image_content: bytes = b"synthetic-jpeg",
     ) -> None:
         if not poll_statuses or any(
             status not in {"queued", "in_progress", "completed", "failed"}
@@ -606,7 +758,15 @@ class FakeSeedanceNzVideoProviderAdapter:
         self._corrupt_download = corrupt_download
         self._artifact_content = bytes(artifact_content)
         self._artifact_content_type = artifact_content_type
+        if not image_poll_statuses or any(
+            status not in {"NOT_START", "SUBMITTED", "IN_PROGRESS", "SUCCESS", "FAILURE"}
+            for status in image_poll_statuses
+        ):
+            raise ValueError("image_poll_statuses contains an unsupported status")
+        self._image_poll_statuses = image_poll_statuses
+        self._image_content = bytes(image_content)
         self._jobs: dict[str, dict[str, object]] = {}
+        self._image_jobs: dict[str, dict[str, object]] = {}
         self.network_calls = 0
 
     def submit(self, request: Mapping[str, object]) -> str:
@@ -683,3 +843,40 @@ class FakeSeedanceNzVideoProviderAdapter:
                 "Seedance.nz task is absent",
                 retryable=False,
             ) from None
+
+    def submit_image(self, request: Mapping[str, object]) -> str:
+        identity = json.dumps(dict(request), sort_keys=True, separators=(",", ":"))
+        provider_job_id = "fake-sd-nz-img-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+        self._image_jobs.setdefault(provider_job_id, {"poll_index": 0, "completed": False})
+        return provider_job_id
+
+    def poll_image(self, provider_job_id: str) -> Mapping[str, object]:
+        try:
+            job = self._image_jobs[provider_job_id]
+        except KeyError:
+            raise AdapterFailure("NOT_FOUND", "Seedance.nz image task is absent", retryable=False) from None
+        index = int(job["poll_index"])
+        status = self._image_poll_statuses[min(index, len(self._image_poll_statuses) - 1)]
+        job["poll_index"] = index + 1
+        data: dict[str, object] = {"task_id": provider_job_id, "status": status}
+        if status == "SUCCESS":
+            job["completed"] = True
+            data["result_url"] = f"fake://{provider_job_id}.jpeg"
+        elif status == "FAILURE":
+            data["error"] = {"code": "synthetic_failure", "message": "Synthetic Seedance.nz failure"}
+        return {"code": "success", "data": data}
+
+    def download_image(self, provider_job_id: str) -> Mapping[str, object]:
+        try:
+            job = self._image_jobs[provider_job_id]
+        except KeyError:
+            raise AdapterFailure("NOT_FOUND", "Seedance.nz image task is absent", retryable=False) from None
+        if job["completed"] is not True:
+            raise AdapterFailure("DOWNLOAD_NOT_READY", "Seedance.nz image is not completed", retryable=False)
+        content = self._image_content
+        return {
+            "bytes": content,
+            "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
+            "uri": f"memory://seedance-nz/{provider_job_id}.jpeg",
+            "content_type": "image/jpeg",
+        }
