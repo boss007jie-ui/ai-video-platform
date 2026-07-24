@@ -73,6 +73,14 @@ def _assert_offline_downloader(downloader: DownloadAdapter) -> None:
         )
 
 
+def _collection_adapter_id(provider: CollectionProvider) -> str:
+    if type(provider) is FakeCollectionAdapter:
+        return "offline-fake"
+    if type(provider) is ApifyCollectionAdapter:
+        return "apify"
+    return type(provider).__name__
+
+
 def _research_result_from_dict(value: Mapping[str, object]) -> ResearchResult:
     try:
         raw_candidates = value["candidates"]
@@ -98,6 +106,9 @@ def _research_result_from_dict(value: Mapping[str, object]) -> ResearchResult:
                 content_digest=str(raw["content_digest"]), lifecycle_state=str(raw["lifecycle_state"]),
                 rights_status=str(raw["rights_status"]), pii_detected=bool(raw["pii_detected"]),
                 expires_at=str(raw["expires_at"]), score=score, reasons=tuple(str(item) for item in reasons),
+                source_metadata=dict(raw.get("source_metadata", {})) if isinstance(raw.get("source_metadata", {}), Mapping) else {},
+                comment_evidence=dict(raw.get("comment_evidence", {})) if isinstance(raw.get("comment_evidence", {}), Mapping) else {},
+                source_provenance=dict(raw.get("source_provenance", {})) if isinstance(raw.get("source_provenance", {}), Mapping) else {},
             ))
         return ResearchResult(
             status=str(value["status"]), request_digest=str(value["request_digest"]),
@@ -231,11 +242,54 @@ def _number(row: Mapping[str, object], name: str, default: float = 0.0) -> float
     return max(0.0, float(value))
 
 
+def _comment_evidence(value: object) -> dict[str, object]:
+    if value is None:
+        return {"schema_version": "1.0.0", "status": "UNAVAILABLE", "comments": []}
+    if not isinstance(value, Mapping):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "comment_evidence must be an object", field_paths=("comment_evidence",))
+    if set(value) != {"schema_version", "status", "comments"} or value.get("schema_version") != "1.0.0":
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "comment_evidence schema is invalid", field_paths=("comment_evidence",))
+    status = value.get("status")
+    comments = value.get("comments")
+    if status not in {"AVAILABLE", "UNAVAILABLE"} or not isinstance(comments, Sequence) or isinstance(comments, (str, bytes)):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "comment_evidence status or comments are invalid", field_paths=("comment_evidence",))
+    normalized: list[dict[str, object]] = []
+    keys = {"comment_id", "text", "like_count", "published_at", "retrieved_at", "provenance"}
+    for index, item in enumerate(comments):
+        field = f"comment_evidence.comments[{index}]"
+        if not isinstance(item, Mapping) or set(item) != keys:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Comment evidence fields are invalid", field_paths=(field,))
+        for name in ("comment_id", "text", "published_at", "retrieved_at"):
+            if not isinstance(item.get(name), str) or not str(item[name]).strip():
+                raise SkillError(ErrorCode.VALIDATION_FAILED, "Comment evidence text is invalid", field_paths=(f"{field}.{name}",))
+        _parse_z(item["published_at"], f"{field}.published_at")
+        _parse_z(item["retrieved_at"], f"{field}.retrieved_at")
+        like_count = item.get("like_count")
+        if isinstance(like_count, bool) or not isinstance(like_count, int) or like_count < 0:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Comment like count is invalid", field_paths=(f"{field}.like_count",))
+        provenance = item.get("provenance")
+        if not isinstance(provenance, Mapping) or not provenance:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Comment provenance is required", field_paths=(f"{field}.provenance",))
+        normalized.append({
+            "comment_id": str(item["comment_id"]).strip(),
+            "text": str(item["text"]).strip(),
+            "like_count": like_count,
+            "published_at": item["published_at"],
+            "retrieved_at": item["retrieved_at"],
+            "provenance": {str(key): nested for key, nested in provenance.items()},
+        })
+    if (status == "AVAILABLE") != bool(normalized):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Comment evidence availability does not match its records", field_paths=("comment_evidence.status",))
+    return {"schema_version": "1.0.0", "status": status, "comments": normalized}
+
+
 def _normalized_candidate(row: Mapping[str, object]) -> dict[str, object]:
     required = ("source_id", "source_url", "title", "published_at", "rights_status", "expires_at")
     missing = tuple(name for name in required if not isinstance(row.get(name), str) or not str(row.get(name)).strip())
     if missing:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "Provider result is missing normalized fields", field_paths=missing)
+    if row.get("retrieved_at") is not None:
+        _parse_z(row.get("retrieved_at"), "retrieved_at")
     if not isinstance(row.get("pii_detected"), bool):
         raise SkillError(ErrorCode.VALIDATION_FAILED, "pii_detected must be boolean", field_paths=("pii_detected",))
     brand_safety = row.get("brand_safety")
@@ -247,7 +301,9 @@ def _normalized_candidate(row: Mapping[str, object]) -> dict[str, object]:
         "production_feasibility", "platform_fit", "brand_safety", "rights_status",
         "pii_detected", "expires_at",
     )
-    return {name: row.get(name) for name in safe_names}
+    normalized = {name: row.get(name) for name in safe_names}
+    normalized["comment_evidence"] = _comment_evidence(row.get("comment_evidence"))
+    return normalized
 
 
 def _score(row: Mapping[str, object], queries: Sequence[str], now: datetime) -> ResearchScore:
@@ -388,7 +444,30 @@ def _research_viral_claimed(
             source_id=str(row["source_id"]), source_url=str(row["source_url"]), title=str(row["title"]),
             content_digest=content_digest, lifecycle_state=state, rights_status=str(row["rights_status"]),
             pii_detected=row.get("pii_detected") is True, expires_at=str(row["expires_at"]),
-            score=_score(row, inspection.expanded_queries, current), reasons=reasons,
+            score=_score(row, inspection.expanded_queries, current),
+            source_metadata={
+                "description": row.get("description") if isinstance(row.get("description"), str) else "UNAVAILABLE",
+                "published_at": row["published_at"],
+                "retrieved_at": row.get("retrieved_at") if isinstance(row.get("retrieved_at"), str) else "UNAVAILABLE",
+                "engagement": {
+                    "views": _number(row, "views"),
+                    "likes": _number(row, "likes"),
+                    "comments": _number(row, "comments"),
+                    "shares": _number(row, "shares"),
+                },
+                "comment_count": _number(row, "comments"),
+                "brand_safety": _number(row, "brand_safety"),
+            },
+            comment_evidence=dict(row["comment_evidence"]),
+            source_provenance={
+                "source_id": row["source_id"],
+                "source_url": row["source_url"],
+                "published_at": row["published_at"],
+                "retrieved_at": row.get("retrieved_at") if isinstance(row.get("retrieved_at"), str) else "UNAVAILABLE",
+                "platform": request["platform"],
+                "collection_adapter": _collection_adapter_id(provider),
+            },
+            reasons=reasons,
         )
         candidates.append(candidate)
     candidates.sort(key=lambda item: (-item.score.total, item.source_id))

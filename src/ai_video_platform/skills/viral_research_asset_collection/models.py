@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Mapping
+from typing import Any, Mapping
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze(nested) for key, nested in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw(nested) for key, nested in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +74,15 @@ class ResearchCandidate:
     pii_detected: bool
     expires_at: str
     score: ResearchScore
+    source_metadata: Mapping[str, object] = field(default_factory=dict)
+    comment_evidence: Mapping[str, object] = field(default_factory=dict)
+    source_provenance: Mapping[str, object] = field(default_factory=dict)
     reasons: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source_metadata", _freeze(self.source_metadata))
+        object.__setattr__(self, "comment_evidence", _freeze(self.comment_evidence))
+        object.__setattr__(self, "source_provenance", _freeze(self.source_provenance))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -71,6 +95,9 @@ class ResearchCandidate:
             "pii_detected": self.pii_detected,
             "expires_at": self.expires_at,
             "score": self.score.to_dict(),
+            "source_metadata": _thaw(self.source_metadata),
+            "comment_evidence": _thaw(self.comment_evidence),
+            "source_provenance": _thaw(self.source_provenance),
             "reasons": list(self.reasons),
         }
 
@@ -91,6 +118,17 @@ class ResearchResult:
             "partial": self.partial,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ViralResearchPack:
+    artifact: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "artifact", _freeze(self.artifact))
+
+    def to_dict(self) -> dict[str, object]:
+        return _thaw(self.artifact)
 
 
 @dataclass(frozen=True, slots=True)

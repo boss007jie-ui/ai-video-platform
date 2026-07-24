@@ -1,0 +1,112 @@
+{
+  "fixture_version": "1.0.0",
+  "fixture_kind": "VERSIONED_SYNTHETIC_PROVIDER_RESULTS",
+  "fixture_id": "viral-research-pack-synthetic-v1",
+  "request": {
+    "platform": "tiktok",
+    "market": "US",
+    "region": "en-US",
+    "time_window": {
+      "start": "2026-07-01T00:00:00Z",
+      "end": "2026-07-23T00:00:00Z",
+      "expires_at": "2026-08-01T00:00:00Z"
+    },
+    "campaign_goal": "conversion",
+    "target_audience": "home organization shoppers",
+    "content_format": "short-video",
+    "search_budget": {
+      "max_queries": 2,
+      "max_results": 10,
+      "max_provider_calls": 2,
+      "timeout_seconds": 30
+    },
+    "download_policy": {
+      "mode": "METADATA_ONLY",
+      "public_or_authorized_only": true,
+      "no_drm_bypass": true,
+      "no_login_bypass": true,
+      "no_private_content": true,
+      "no_unauthorized_reposting": true
+    },
+    "seed_queries": [
+      "desk organizer reveal",
+      "small space organization"
+    ],
+    "idempotency_key": "viral-pack-synthetic-v1",
+    "retry_limit": 0
+  },
+  "provider_rows": [
+    {
+      "source_id": "synthetic-video-001",
+      "source_url": "https://www.tiktok.com/@synthetic/video/1001",
+      "title": "Fast desk organizer reveal",
+      "description": "A compact desk changes from cluttered to organized.",
+      "published_at": "2026-07-20T09:00:00Z",
+      "retrieved_at": "2026-07-23T12:00:00Z",
+      "views": 120000,
+      "likes": 18000,
+      "comments": 842,
+      "shares": 2100,
+      "comment_quality": 0.92,
+      "reproducibility": 0.9,
+      "production_feasibility": 0.88,
+      "platform_fit": 0.96,
+      "brand_safety": 0.98,
+      "rights_status": "PUBLIC",
+      "pii_detected": false,
+      "expires_at": "2026-08-01T00:00:00Z",
+      "comment_evidence": {
+        "schema_version": "1.0.0",
+        "status": "AVAILABLE",
+        "comments": [
+          {
+            "comment_id": "synthetic-comment-001",
+            "text": "The reveal makes the benefit immediately clear.",
+            "like_count": 73,
+            "published_at": "2026-07-20T10:00:00Z",
+            "retrieved_at": "2026-07-23T12:00:00Z",
+            "provenance": {
+              "fixture_id": "viral-research-pack-synthetic-v1",
+              "source_id": "synthetic-video-001"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "source_id": "synthetic-video-002",
+      "source_url": "https://www.tiktok.com/@synthetic/video/1002",
+      "title": "Small space organization routine",
+      "description": "A slower category-level organization demonstration.",
+      "published_at": "2026-07-18T08:00:00Z",
+      "retrieved_at": "2026-07-23T12:00:00Z",
+      "views": 72000,
+      "likes": 7600,
+      "comments": 0,
+      "shares": 430,
+      "comment_quality": 0.0,
+      "reproducibility": 0.86,
+      "production_feasibility": 0.9,
+      "platform_fit": 0.84,
+      "brand_safety": 0.97,
+      "rights_status": "UNKNOWN",
+      "pii_detected": false,
+      "expires_at": "2026-08-01T00:00:00Z",
+      "comment_evidence": {
+        "schema_version": "1.0.0",
+        "status": "UNAVAILABLE",
+        "comments": []
+      }
+    }
+  ],
+  "expected": {
+    "contract_identity": "avp.contract.viral-research-pack",
+    "contract_version": "1.0.0",
+    "external_provider_calls": 0,
+    "network_calls": 0,
+    "ranked_source_ids": [
+      "synthetic-video-001",
+      "synthetic-video-002"
+    ]
+  }
+}
