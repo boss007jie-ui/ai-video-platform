@@ -1,58 +1,48 @@
-# Storyboard Master / Video Planning
+# Video Planning
 
-Status: `RC_OFFLINE`; version `0.1.0`; DV status `CLEAN_ROOM_ONLY`.
+Status: `RC_OFFLINE`; canonical artifact version `1.0.0`; contract status
+`IDENTITY_REGISTERED_SCHEMA_PENDING`; DV status `CLEAN_ROOM_ONLY`.
 
-This Skill deterministically composes a StoryboardMaster, shot-to-asset mapping,
-visual anchors, motion plan, and VideoExecutionPackage from an already-versioned
-Storyboard plus approved AssetManifest-style input. It validates stale revisions,
-mapping completeness, asset approval, continuity, and package integrity.
+This Skill deterministically converts an approved `ProductionStoryboardPlan`,
+`ProductionStoryboardPanelSet`, `ProductContextBundle`, and approved panel results
+into five independent canonical artifacts:
 
-It does not generate media, call or expose a Provider adapter, read credentials,
-use the network, search Legacy, write a Library, publish Foundation payloads, or
-submit video work. All business artifacts are explicitly `DRAFT_UNREGISTERED`
-until Codex-00 completes the Business Artifact Registry request.
+- `VideoGenerationStoryboardMaster`
+- `ShotMotionPlan`
+- `VideoExecutionPackage`
+- `FirstFrameMapping`
+- `ReferenceRoleMapping`
 
-## Public interface and commands
-
-- `VideoPlanningInterface.compose_storyboard_master(request)`
-- `VideoPlanningInterface.build_video_plan(request)`
-- `VideoPlanningInterface.validate_video_plan(package)`
-- `python -m ai_video_platform.skills.storyboard_master_video_planning.cli <compose-storyboard-master|build-video-plan|validate-video-plan> <file|->`
-
-The CLI emits one machine-readable JSON result and exits `0` on success or `2`
-on validation rejection. Hermes may call only these public surfaces and must not
-interpret a draft output as a registered Contract or completed Provider action.
-
-## Inputs, outputs, and boundaries
-
-Inputs are JSON-compatible mappings. Revisions and source digests are locked into
-each output. Same logical input produces the same canonical digest regardless of
-mapping key order. Outputs are isolated snapshots; no caller object is retained.
-The interface reads only supplied task data and returns in-memory planning output.
-The CLI additionally reads exactly the explicitly named local JSON file (or stdin)
-and writes only its JSON response to stdout.
-
-Stable errors cover invalid input, stale versions, missing/unapproved/ambiguous
-assets, continuity conflict, invalid shot ordering, malformed/tampered packages,
-and forbidden Provider-submission markers. Rejections happen before output and are
-non-retryable until inputs change. Successful calls are naturally idempotent.
-
-There is no fake Provider success mode because Provider work is outside Planning;
-the execution package records `planning_provider_submission_performed: false`.
-
-Hermes example: call `build-video-plan` with an existing Storyboard revision and
-approved AssetManifest revision, retain the returned package digest, and route the
-draft package reference to Video Generation only after the Business Artifact
-Registry gate. Hermes must treat exit `2` as a blocked task, not fill missing data.
-
-## Tests, release, and rollback
-
-Run:
+The public Python surface is
+`VideoPlanningInterface.build_storyboard_master(request)`. The public CLI is:
 
 ```text
-python -m unittest -v tests.skills.storyboard_master_video_planning.test_video_planning_interface
-python -m unittest -v tests.skills.storyboard_master_video_planning.test_video_planning_failures
+python -m ai_video_platform.skills.storyboard_master_video_planning.cli build-storyboard-master <file|->
 ```
 
-Rollback is the owning commit revert/removal of this isolated Skill and tests.
-There is no external state, Provider job, credential, or Library write to undo.
+With `output_root`, the CLI writes the frozen `video_generation_storyboard/`
+tree containing the five JSON artifacts, local review PNG, and provenance JSON.
+It never calls a Provider, reads credentials, uses the network, searches Legacy,
+or writes a Product Library.
+
+The first frame is always the first shot's approved clean full-frame production
+panel at the target ratio. Grids, numbers, labels, captions, other shots, contact
+sheets, analysis boards, evidence boards, and replication boards are ineligible.
+Approved character/product/style references may be Provider inputs; analysis-board
+assets are forced to `global_structure_reference`,
+`provider_execution_input=false`, and `first_frame_eligible=false`.
+
+The five identities are registered, but their shared schemas/validators remain a
+Codex-00 publication dependency. These owner-local artifacts must not be described
+as formal production-ready `ContractEnvelope` exchange until that gate closes.
+Planning always records `planning_provider_submission_performed: false`.
+
+## Tests and rollback
+
+```text
+py -3.14 -m unittest -v tests.skills.storyboard_master_video_planning.test_video_planning_interface
+py -3.14 -m unittest -v tests.skills.storyboard_master_video_planning.test_video_planning_failures
+```
+
+Rollback by reverting the owning commit. There is no Provider job, remote asset,
+credential, or Library write to undo.

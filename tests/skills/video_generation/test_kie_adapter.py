@@ -149,16 +149,42 @@ def kie_request() -> dict[str, object]:
 
 
 class KieAdapterTests(unittest.TestCase):
+    @staticmethod
+    def _with_reference_assets(package, assets):
+        role_map = package["reference_role_mapping"]
+        role_map["references"] = [
+            {
+                "asset_ref": item["uri"],
+                "sha256": item["sha256"],
+                "role": item["role"],
+                "provider_execution_input": True,
+                "first_frame_eligible": False,
+            }
+            for item in assets
+        ]
+        role_map["artifact_digest"] = digest({key: value for key, value in role_map.items() if key != "artifact_digest"})
+        master = package["video_generation_storyboard_master"]
+        master["reference_role_mapping_ref"] = role_map["artifact_digest"]
+        master["artifact_digest"] = digest({key: value for key, value in master.items() if key != "artifact_digest"})
+        production_panels = [item for item in package["asset_mapping"] if item.get("role") == "production_panel"]
+        package["asset_mapping"] = production_panels + [
+            {
+                "role": item["role"],
+                "asset_id": item["asset_id"],
+                "uri": item["uri"],
+                "sha256": item["sha256"],
+                "approval_state": "approved",
+                "provider_execution_input": True,
+            }
+            for item in assets
+        ]
+        package["artifact_digest"] = digest({key: value for key, value in package.items() if key != "artifact_digest"})
+        return package
+
     def test_smoke_request_is_fixed_to_revision_d_envelope(self) -> None:
         package = generation_request()["execution_package"]
         digest = package["asset_mapping"][0]["sha256"]
-        package["asset_mapping"].append({
-            "shot_id": "shot-001",
-            "role": "detail",
-            "asset_id": "asset-002",
-            "uri": "memory://detail.png",
-            "sha256": "sha256:" + "4" * 64,
-        })
+        self._with_reference_assets(package, [{"role": "product_reference", "asset_id": "asset-002", "uri": "memory://detail.png", "sha256": "sha256:" + "4" * 64}])
         validate_reference_digests(package, [digest, "sha256:" + "4" * 64])
         request = build_smoke_request(
             package,
@@ -218,26 +244,19 @@ class KieAdapterTests(unittest.TestCase):
         second_digest = "sha256:" + hashlib.sha256(second_content).hexdigest()
         asset_mapping = [
             {
-                "shot_id": "shot-001",
-                "role": "hero",
+                "role": "product_reference",
                 "asset_id": "asset-001",
                 "uri": "memory://one.jpg",
                 "sha256": first_digest,
             },
             {
-                "shot_id": "shot-001",
-                "role": "detail",
+                "role": "style_reference",
                 "asset_id": "asset-002",
                 "uri": "memory://two.jpg",
                 "sha256": second_digest,
             },
         ]
-        master = package["storyboard_master"]
-        master["shots"][0]["required_asset_roles"] = ["hero", "detail"]
-        master["asset_mapping"] = asset_mapping
-        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
-        package["asset_mapping"] = asset_mapping
-        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        self._with_reference_assets(package, asset_mapping)
         transport = HexTaskTransport()
         resolver = KieCredentialResolver(environ={"KIE_API_KEY": credential})
         with tempfile.TemporaryDirectory() as directory:
@@ -595,15 +614,10 @@ class KieAdapterTests(unittest.TestCase):
         second_digest = "sha256:" + hashlib.sha256(second_content).hexdigest()
         package = generation_request()["execution_package"]
         asset_mapping = [
-            {"shot_id": "shot-001", "role": "hero", "asset_id": "asset-001", "uri": "memory://one.jpg", "sha256": first_digest},
-            {"shot_id": "shot-001", "role": "detail", "asset_id": "asset-002", "uri": "memory://two.jpg", "sha256": second_digest},
+            {"role": "product_reference", "asset_id": "asset-001", "uri": "memory://one.jpg", "sha256": first_digest},
+            {"role": "style_reference", "asset_id": "asset-002", "uri": "memory://two.jpg", "sha256": second_digest},
         ]
-        master = package["storyboard_master"]
-        master["shots"][0]["required_asset_roles"] = ["hero", "detail"]
-        master["asset_mapping"] = asset_mapping
-        master["master_digest"] = digest({key: value for key, value in master.items() if key != "master_digest"})
-        package["asset_mapping"] = asset_mapping
-        package["package_digest"] = digest({key: value for key, value in package.items() if key != "package_digest"})
+        self._with_reference_assets(package, asset_mapping)
 
         transport = Download403Transport()
         resolver = KieCredentialResolver(environ={"KIE_API_KEY": "synthetic-value"})

@@ -7,8 +7,8 @@ import json
 from typing import Any
 
 
-SCHEMA_VERSION = "0.1.0"
-CONTRACT_STATUS = "DRAFT_UNREGISTERED"
+SCHEMA_VERSION = "1.0.0"
+CONTRACT_STATUS = "IDENTITY_REGISTERED_SCHEMA_PENDING"
 
 
 def canonical_json(value: object) -> str:

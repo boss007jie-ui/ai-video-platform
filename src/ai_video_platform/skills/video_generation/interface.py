@@ -298,7 +298,7 @@ class VideoGenerationInterface:
         manifest_request = {
             "artifact_name": "AssetManifestRequest",
             "schema_version": "0.1.0",
-            "contract_status": CONTRACT_STATUS,
+            "contract_status": "DRAFT_UNREGISTERED",
             "source_job_id": job_id,
             "uri": uri,
             "sha256": actual,

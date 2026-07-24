@@ -29,7 +29,7 @@ def run_cli(
 ) -> dict[str, object]:
     service = interface or VideoGenerationInterface()
     try:
-        if command == "inspect-video-request":
+        if command in {"inspect-video-request", "run"}:
             result = service.inspect_video_request(document, now=now)
         elif command == "submit-video":
             result = service.submit_video(document, now=now)
@@ -54,7 +54,7 @@ def run_cli(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _JsonArgumentParser(prog="video-generation")
     parser.add_argument("command", choices=(
-        "inspect-video-request", "submit-video", "poll-video", "cancel-video",
+        "inspect-video-request", "run", "submit-video", "poll-video", "cancel-video",
         "download-video", "recover-video",
     ))
     parser.add_argument("input", help="UTF-8 JSON request file or '-' for stdin")
