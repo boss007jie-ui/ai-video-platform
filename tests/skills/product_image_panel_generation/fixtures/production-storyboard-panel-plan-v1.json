@@ -19,6 +19,7 @@
     {
       "panel_id": "panel-001",
       "shot_id": "shot-001",
+      "usage_status": "SELECTED",
       "sequence": 1,
       "prompt": "Presenter holds the current matte blue bottle front-facing in the approved kitchen scene.",
       "width": 576,
@@ -49,6 +50,7 @@
     {
       "panel_id": "panel-002",
       "shot_id": "shot-002",
+      "usage_status": "SELECTED",
       "sequence": 2,
       "prompt": "Close view of the same current matte blue bottle and retail box in the approved kitchen scene.",
       "width": 576,

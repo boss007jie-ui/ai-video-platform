@@ -167,6 +167,16 @@ def _validate_plan_identity(plan: Mapping[str, Any], request: GenerationRequest)
     return panels
 
 
+def _validate_usage_status(panel: Mapping[str, Any], panel_path: str) -> None:
+    status = panel.get("usage_status")
+    if status != "SELECTED":
+        _fail(
+            ImagePanelErrorCode.PANEL_USAGE_INVALID,
+            "Only final SELECTED Panels may enter the production PanelSet",
+            f"{panel_path}.usage_status",
+        )
+
+
 def _validate_reference_board_boundary(request: StoryboardPanelRequest) -> None:
     generation = request.generation_request
     candidates: list[object] = [request.panel_plan.get("production_master"), generation.reference_manifest.payload if generation.reference_manifest else None]
@@ -268,6 +278,7 @@ def _validate_panel_coverage(
     for index, raw_panel in enumerate(panels):
         panel_path = f"panel_plan.panels[{index}]"
         panel = _object(raw_panel, panel_path, ImagePanelErrorCode.PANEL_PLAN_INVALID)
+        _validate_usage_status(panel, panel_path)
         panel_id = _text(panel.get("panel_id"), f"{panel_path}.panel_id", ImagePanelErrorCode.PANEL_PLAN_INVALID)
         _text(panel.get("shot_id"), f"{panel_path}.shot_id", ImagePanelErrorCode.PANEL_PLAN_INVALID)
         _text(panel.get("prompt"), f"{panel_path}.prompt", ImagePanelErrorCode.PANEL_PLAN_INVALID)
@@ -437,9 +448,12 @@ class ProductionStoryboardPanelService:
             generated_at = _utc_text(self._now())
             asset_metadata = _panel_asset_by_item(outcome)
             records = {record.item_id: record for record in outcome.generation_record.items}
+            plan_digest = content_digest(request.panel_plan)
+            source_assets = _manifest_assets(request.generation_request)
             prompt_records: list[dict[str, Any]] = []
             panel_records: list[dict[str, Any]] = []
             qa_panels: list[dict[str, Any]] = []
+            approval_payload = thaw_json(request.generation_request.approval_record.payload) if request.generation_request.approval_record is not None else None
 
             for panel, item in zip(panels, request.generation_request.items, strict=True):
                 record = records[item.item_id]
@@ -487,21 +501,6 @@ class ProductionStoryboardPanelService:
                         "provider_execution_input": True,
                     }
                     qa_status = "pass"
-                panel_records.append(
-                    {
-                        "panel_id": panel["panel_id"],
-                        "shot_id": panel["shot_id"],
-                        "sequence": panel["sequence"],
-                        "generation_status": record.status.value,
-                        "qa_status": qa_status,
-                        "asset": asset_record,
-                        "prompt_ref": f"panel_prompts.json#{panel['panel_id']}",
-                        "approved_source_asset_ids": list(panel["approved_asset_ids"]),
-                        "continuity": thaw_json(panel["continuity"]),
-                        "continuity_changes": thaw_json(panel.get("continuity_changes", {})),
-                        "error": thaw_json(record.error) if record.error is not None else None,
-                    }
-                )
                 qa_panels.append(
                     {
                         "panel_id": panel["panel_id"],
@@ -513,8 +512,78 @@ class ProductionStoryboardPanelService:
                             "approved_anchor_coverage": "pass" if qa_status == "pass" else "not_run",
                             "relative_scale": "pass" if qa_status == "pass" else "not_run",
                         },
+                        "usage_status": "SELECTED" if qa_status == "pass" else "FAILED",
+                        "error": thaw_json(record.error) if record.error is not None else None,
                     }
                 )
+                if qa_status == "pass" and asset_record is not None:
+                    panel_records.append(
+                        {
+                            "panel_id": panel["panel_id"],
+                            "shot_id": panel["shot_id"],
+                            "sequence": panel["sequence"],
+                            "generation_status": record.status.value,
+                            "qa_status": qa_status,
+                            "usage_status": "SELECTED",
+                            "asset": asset_record,
+                            "panel_asset_facts": {
+                                "panel_asset_id": asset_record["asset_id"],
+                                "media_type": asset_record["content_type"],
+                                "byte_size": asset_record["byte_size"],
+                                "sha256": asset_record["sha256"],
+                                "dimensions": asset_record["dimensions"],
+                                "aspect_ratio": request.panel_plan["aspect_ratio"],
+                                "rendered_product_id": request.generation_request.product_id,
+                                "rendered_sku_id": request.generation_request.sku_id,
+                                "generation_status": record.status.value,
+                                "approval_status": "approved",
+                                "qa_status": qa_status,
+                                "source_asset_hashes": {
+                                    asset_id: source_assets.get(asset_id, {}).get("sha256")
+                                    for asset_id in panel["approved_asset_ids"]
+                                },
+                                "generation_configuration": {
+                                    "request_hash": request.generation_request.request_hash,
+                                    "model_profile_id": profile.profile_id,
+                                    "model_profile_digest": request.generation_request.model_profile_digest,
+                                    "provider_id": profile.provider_id,
+                                    "model_id": profile.model_id,
+                                    "model_version": profile.version,
+                                },
+                            },
+                            "plan_binding_summary": {
+                                "plan_artifact_id": request.panel_plan.get("artifact_id"),
+                                "plan_revision": request.panel_plan.get("plan_revision"),
+                                "plan_schema_version": request.panel_plan.get("schema_version"),
+                                "plan_digest": plan_digest,
+                                "beat_id": panel.get("beat_id"),
+                                "shot_id": panel["shot_id"],
+                                "panel_id": panel["panel_id"],
+                                "timing_mode": panel.get("panel_timing_mode", panel.get("timing_mode", "TEMPORAL_SEGMENT")),
+                                "timing_projection": {
+                                    key: thaw_json(panel[key])
+                                    for key in ("start_ms", "end_ms", "duration_ms", "anchor_time_ms", "anchor_role")
+                                    if key in panel
+                                },
+                                "semantic_provenance": thaw_json(panel.get("semantic_provenance", {})),
+                                "continuity": thaw_json(panel["continuity"]),
+                            },
+                            "approval_evidence": {
+                                "kind": "ApprovalRecord",
+                                "record_contract_id": str(request.generation_request.approval_record.contract_id),
+                                "approval_id": approval_payload.get("approval_id") if isinstance(approval_payload, Mapping) else None,
+                                "subject_ref": thaw_json(approval_payload.get("subject_ref", {})) if isinstance(approval_payload, Mapping) else {},
+                                "panel_asset_id": asset_record["asset_id"],
+                                "asset_sha256": asset_record["sha256"],
+                                "decision": "approved",
+                                "effective_at": generated_at,
+                            },
+                            "prompt_ref": f"panel_prompts.json#{panel['panel_id']}",
+                            "approved_source_asset_ids": list(panel["approved_asset_ids"]),
+                            "continuity": thaw_json(panel["continuity"]),
+                            "continuity_changes": thaw_json(panel.get("continuity_changes", {})),
+                        }
+                    )
 
             contact_sheet_bytes = deterministic_png(
                 max(panel["width"] for panel in panels),
@@ -527,7 +596,6 @@ class ProductionStoryboardPanelService:
                 stream.flush()
                 os.fsync(stream.fileno())
 
-            plan_digest = content_digest(request.panel_plan)
             panel_set = {
                 "artifact_type": PANEL_SET_ARTIFACT,
                 "contract_id": PANEL_SET_CONTRACT_ID,

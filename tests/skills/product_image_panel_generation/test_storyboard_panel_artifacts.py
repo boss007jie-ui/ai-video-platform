@@ -178,6 +178,12 @@ class StoryboardPanelArtifactTests(unittest.TestCase):
             self.assertEqual(panel_set["contract_status"], "IDENTITY_REGISTERED_SCHEMA_PENDING")
             self.assertEqual([panel["panel_id"] for panel in panel_set["panels"]], ["panel-001", "panel-002"])
             self.assertEqual([panel["shot_id"] for panel in panel_set["panels"]], ["shot-001", "shot-002"])
+            self.assertTrue(all(panel["usage_status"] == "SELECTED" for panel in panel_set["panels"]))
+            self.assertTrue(all(panel["panel_asset_facts"]["panel_asset_id"] == panel["asset"]["asset_id"] for panel in panel_set["panels"]))
+            self.assertTrue(all(panel["plan_binding_summary"]["panel_id"] == panel["panel_id"] for panel in panel_set["panels"]))
+            self.assertTrue(all(panel["approval_evidence"]["kind"] == "ApprovalRecord" for panel in panel_set["panels"]))
+            self.assertTrue(all(panel["approval_evidence"]["panel_asset_id"] == panel["panel_asset_facts"]["panel_asset_id"] for panel in panel_set["panels"]))
+            self.assertTrue(all(panel["approval_evidence"]["asset_sha256"] == panel["panel_asset_facts"]["sha256"] for panel in panel_set["panels"]))
             self.assertEqual(qa_report["overall_status"], "pass")
             self.assertEqual(qa_report["set_checks"]["panel_plan_coverage"], "pass")
             self.assertEqual(qa_report["set_checks"]["cross_panel_continuity"], "pass")
@@ -287,12 +293,13 @@ class StoryboardPanelArtifactTests(unittest.TestCase):
             qa_report = json.loads((output_root / "panel_qa_report.json").read_text(encoding="utf-8"))
 
             self.assertEqual(outcome.status.value, "partial_failure")
-            self.assertEqual([panel["generation_status"] for panel in panel_set["panels"]], ["completed", "failed"])
-            self.assertEqual([panel["qa_status"] for panel in panel_set["panels"]], ["pass", "failed_generation"])
+            self.assertEqual([panel["generation_status"] for panel in panel_set["panels"]], ["completed"])
+            self.assertEqual([panel["qa_status"] for panel in panel_set["panels"]], ["pass"])
             self.assertEqual(qa_report["overall_status"], "fail")
             self.assertEqual(qa_report["set_checks"]["panel_plan_coverage"], "pass")
             self.assertTrue((output_root / "panel_images" / "panel-001.png").is_file())
             self.assertFalse((output_root / "panel_images" / "panel-002.png").exists())
+            self.assertEqual(qa_report["panels"][1]["qa_status"], "failed_generation")
 
     def test_generate_panels_cli_rejecting_adapter_writes_non_network_failure_artifacts(self) -> None:
         document = _storyboard_document()
@@ -325,8 +332,37 @@ class StoryboardPanelArtifactTests(unittest.TestCase):
             self.assertEqual(payload["status"], "failed")
             self.assertEqual(payload["provider_smoke"], "NOT_REQUIRED")
             self.assertEqual(panel_set["status"], "failed")
-            self.assertEqual([panel["qa_status"] for panel in panel_set["panels"]], ["failed_generation", "failed_generation"])
+            self.assertEqual(panel_set["panels"], [])
             self.assertFalse(provenance["provider_network_performed"])
+
+    def test_non_selected_usage_status_is_rejected_before_provider(self) -> None:
+        for status in ("ALTERNATE", "FAILED", "DISCARDED", "SUPERSEDED"):
+            document = _storyboard_document()
+            document["panel_plan"]["panels"][0]["usage_status"] = status
+            adapter = FakeImageProviderAdapter()
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(ImagePanelError) as captured:
+                    _service(adapter).generate_panels(
+                        storyboard_panel_request_from_mapping(document),
+                        output_root=Path(directory) / "production_storyboard_panels",
+                    )
+            self.assertEqual(captured.exception.code, ImagePanelErrorCode.PANEL_USAGE_INVALID)
+            self.assertEqual(adapter.total_attempts, 0)
+
+    def test_selected_panel_requires_current_approval_evidence(self) -> None:
+        document = _storyboard_document()
+        request = storyboard_panel_request_from_mapping(document).generation_request
+        request = replace(request, approval_record=None)
+        document["request"] = generation_request_to_mapping(request)
+        adapter = FakeImageProviderAdapter()
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ImagePanelError) as captured:
+                _service(adapter).generate_panels(
+                    storyboard_panel_request_from_mapping(document),
+                    output_root=Path(directory) / "production_storyboard_panels",
+                )
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.APPROVAL_REQUIRED)
+        self.assertEqual(adapter.total_attempts, 0)
 
 
 if __name__ == "__main__":
