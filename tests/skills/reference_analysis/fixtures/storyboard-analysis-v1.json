@@ -1,0 +1,143 @@
+{
+  "fixture_version": "1.0.0",
+  "fixture_kind": "VERSIONED_SYNTHETIC_MEDIA",
+  "fixture_id": "reference-storyboard-analysis-synthetic-v1",
+  "media": {
+    "path": "inputs/reference.mp4",
+    "bytes_hex": "000000186674797069736f6d0000020069736f6d69736f32"
+  },
+  "keyframes": [
+    {
+      "keyframe_id": "kf-001",
+      "path": "inputs/keyframes/kf-001.png",
+      "timestamp_ms": 500,
+      "width": 48,
+      "height": 72,
+      "rgb": [220, 52, 68]
+    },
+    {
+      "keyframe_id": "kf-002",
+      "path": "inputs/keyframes/kf-002.png",
+      "timestamp_ms": 2200,
+      "width": 48,
+      "height": 72,
+      "rgb": [42, 139, 87]
+    }
+  ],
+  "request": {
+    "analysis_version": "1.0.0",
+    "selected_reference_video": {
+      "reference_id": "ref-video-001",
+      "media_path": "inputs/reference.mp4",
+      "sha256": "$MEDIA_SHA256",
+      "source_platform": "tiktok",
+      "source_url": "https://www.tiktok.com/@synthetic/video/123",
+      "source_id": "123",
+      "published_at": "2026-07-01T08:00:00Z",
+      "collected_at": "2026-07-20T08:00:00Z",
+      "category": "desk organization",
+      "reference_brand": "ExampleCo",
+      "reference_product": "Example Organizer",
+      "reference_people": ["Reference Presenter"],
+      "provenance": {
+        "fixture_id": "reference-storyboard-analysis-synthetic-v1",
+        "selected_by": "user"
+      }
+    },
+    "viral_research_pack": {
+      "contract_identity": "avp.contract.viral-research-pack",
+      "contract_version": "1.0.0",
+      "artifact_ref": "contract://viral-research-pack/synthetic-v1",
+      "provenance": {
+        "fixture_id": "reference-storyboard-analysis-synthetic-v1"
+      }
+    },
+    "video_metadata": {
+      "duration_ms": 4000,
+      "width": 1080,
+      "height": 1920,
+      "aspect_ratio": "9:16",
+      "media_type": "video/mp4",
+      "codec": "synthetic-isom"
+    },
+    "popular_comments": [
+      {
+        "comment_id": "comment-001",
+        "text": "The quick reveal made the benefit obvious.",
+        "collected_at": "2026-07-20T08:00:00Z",
+        "provenance": {
+          "fixture_id": "reference-storyboard-analysis-synthetic-v1"
+        }
+      }
+    ],
+    "analysis_configuration": {
+      "current_product": {
+        "product_id": "current-product-001",
+        "category": "home organization",
+        "display_name": "Current Organizer"
+      },
+      "keyframes": [
+        {
+          "keyframe_id": "kf-001",
+          "timestamp_ms": 500,
+          "path": "inputs/keyframes/kf-001.png",
+          "sha256": "$KF_001_SHA256"
+        },
+        {
+          "keyframe_id": "kf-002",
+          "timestamp_ms": 2200,
+          "path": "inputs/keyframes/kf-002.png",
+          "sha256": "$KF_002_SHA256"
+        }
+      ],
+      "timeline": [
+        {
+          "beat_id": "beat-001",
+          "start_ms": 0,
+          "end_ms": 1500,
+          "stage_title": "Immediate problem hook",
+          "keyframe_ids": ["kf-001"],
+          "scene": {"value": "Compact desk setup", "evidence_refs": ["keyframe:kf-001"]},
+          "shot_scale": {"value": "Close-up", "evidence_refs": ["keyframe:kf-001"]},
+          "camera_motion": {"value": "Static hold", "evidence_refs": ["media:selected-reference", "keyframe:kf-001"]},
+          "character_action": {"value": "Presenter points to visible clutter", "evidence_refs": ["keyframe:kf-001"]},
+          "product_action": {"value": "Reference product enters from frame right", "evidence_refs": ["keyframe:kf-001"]},
+          "product_state": {"value": "Closed and empty", "evidence_refs": ["keyframe:kf-001"]},
+          "emotion": {"value": "Frustration changing to curiosity", "evidence_refs": ["keyframe:kf-001"]},
+          "audience_psychology": {"value": "Recognize a familiar friction quickly", "evidence_refs": ["keyframe:kf-001"]},
+          "conversion_function": {"value": "Stops the scroll with a recognizable problem", "evidence_refs": ["media:selected-reference", "keyframe:kf-001"]},
+          "viral_mechanism": {"value": "Fast visual contrast before explanation", "evidence_refs": ["media:selected-reference", "keyframe:kf-001"]},
+          "comment_evidence": {"value": "Viewers noticed the quick reveal", "evidence_refs": ["comment:comment-001"]},
+          "actual_reference_behavior": {"value": "Shows clutter before introducing the reference product", "evidence_refs": ["keyframe:kf-001"]},
+          "reusable_pattern": {"value": "Lead with an instantly legible problem state", "evidence_refs": ["media:selected-reference", "keyframe:kf-001"]},
+          "product_transfer_suggestion": {"value": "Show the current product beside the unresolved clutter without copying reference identity", "evidence_refs": ["keyframe:kf-001"]}
+        },
+        {
+          "beat_id": "beat-002",
+          "start_ms": 1500,
+          "end_ms": 4000,
+          "stage_title": "Benefit reveal",
+          "keyframe_ids": ["kf-002"],
+          "scene": {"value": "Same compact desk setup", "evidence_refs": ["keyframe:kf-002"]},
+          "shot_scale": {"value": "Medium close-up", "evidence_refs": ["keyframe:kf-002"]},
+          "camera_motion": {"value": "Short push-in", "evidence_refs": ["media:selected-reference", "keyframe:kf-002"]},
+          "character_action": {"value": "Presenter opens compartments and places items", "evidence_refs": ["keyframe:kf-002"]},
+          "product_action": {"value": "Reference product organizes the visible items", "evidence_refs": ["keyframe:kf-002"]},
+          "product_state": {"value": "Open, filled, and orderly", "evidence_refs": ["keyframe:kf-002"]},
+          "emotion": {"value": "Relief and confidence", "evidence_refs": ["keyframe:kf-002"]},
+          "audience_psychology": {"value": "Benefit becomes easy to imagine", "evidence_refs": ["keyframe:kf-002", "comment:comment-001"]},
+          "conversion_function": {"value": "Demonstrates the payoff before the close", "evidence_refs": ["media:selected-reference", "keyframe:kf-002"]},
+          "viral_mechanism": {"value": "Compressed before-and-after transformation", "evidence_refs": ["media:selected-reference", "keyframe:kf-002"]},
+          "comment_evidence": {"value": "Comment explicitly identifies reveal clarity", "evidence_refs": ["comment:comment-001"]},
+          "actual_reference_behavior": {"value": "Opens the reference product and resolves the clutter", "evidence_refs": ["keyframe:kf-002"]},
+          "reusable_pattern": {"value": "Resolve the opening friction in the same visual setting", "evidence_refs": ["media:selected-reference", "keyframe:kf-002"]},
+          "product_transfer_suggestion": {"value": "Demonstrate the current product resolving the same category-level friction", "evidence_refs": ["keyframe:kf-002"]}
+        }
+      ],
+      "bottom_line_formula": {
+        "value": "Recognizable friction + fast reveal + visible resolved state",
+        "evidence_refs": ["media:selected-reference", "keyframe:kf-001", "keyframe:kf-002", "comment:comment-001"]
+      }
+    }
+  }
+}
