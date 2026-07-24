@@ -74,6 +74,7 @@ class ReviewRequest:
         command = str(value["command"])
         supported_commands = {
             "review-asset", "review-storyboard", "review-video-plan", "review-video-result",
+            "review-artifact", "review-composition",
         }
         if command not in supported_commands:
             raise QAError(

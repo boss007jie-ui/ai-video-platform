@@ -8,6 +8,7 @@ from ai_video_platform.contracts.validation import validate_payload
 
 from .errors import QAError, QAErrorCode
 from .models import ReviewArtifacts, ReviewOutcome, ReviewRequest, _freeze
+from .storyboard_chain import evaluate_storyboard_chain
 
 
 SKILL_ID = "qa-review"
@@ -37,6 +38,10 @@ def review(request: ReviewRequest) -> ReviewArtifacts:
     context = request.context
     results: list[dict[str, Any]] = []
     issues: list[dict[str, str]] = []
+
+    if request.command in {"review-artifact", "review-composition"}:
+        results, issues = evaluate_storyboard_chain(request)
+        return _build_artifacts(request, results, issues)
 
     def record(
         criterion_id: str,
@@ -184,6 +189,17 @@ def review(request: ReviewRequest) -> ReviewArtifacts:
     if subject.get("partial_failure") is True:
         record("partial-failure", ReviewOutcome.NEEDS_REVIEW, code="QA_PARTIAL_FAILURE", message="Upstream output is partial")
 
+    return _build_artifacts(request, results, issues)
+
+
+def _build_artifacts(
+    request: ReviewRequest,
+    results: list[dict[str, Any]],
+    issues: list[dict[str, str]],
+) -> ReviewArtifacts:
+    subject = request.subject
+    criteria = request.criteria
+    context = request.context
     issue_outcomes = {item["outcome"] for item in issues}
     if ReviewOutcome.FAIL.value in issue_outcomes:
         outcome = ReviewOutcome.FAIL

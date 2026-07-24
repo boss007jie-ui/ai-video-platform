@@ -81,7 +81,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qa-review")
     parser.add_argument(
         "command",
-        choices=("review-asset", "review-storyboard", "review-video-plan", "review-video-result"),
+        choices=(
+            "review-asset", "review-storyboard", "review-video-plan", "review-video-result",
+            "review-artifact", "review-composition",
+        ),
     )
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)

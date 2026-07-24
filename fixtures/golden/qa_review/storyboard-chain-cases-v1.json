@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "fixture_version": "storyboard-chain-qa-golden-v1",
+  "fixture_kind": "VERSIONED_SYNTHETIC_NO_PROVIDER",
+  "thresholds": {
+    "max_false_positive_rate": 0.0,
+    "max_false_negative_rate": 0.0
+  },
+  "cases": [
+    {"case_id": "reference-evidence-pass", "family": "reference-analysis-evidence", "mutation": "none", "expected_outcome": "pass"},
+    {"case_id": "reference-evidence-fail", "family": "reference-analysis-evidence", "mutation": "remove-keyframes", "expected_outcome": "fail", "expected_code": "QA_REFERENCE_EVIDENCE_INCOMPLETE"},
+    {"case_id": "translation-pass", "family": "reference-to-production-translation", "mutation": "none", "expected_outcome": "pass"},
+    {"case_id": "translation-fail", "family": "reference-to-production-translation", "mutation": "copy-reference-brand", "expected_outcome": "fail", "expected_code": "QA_REFERENCE_IDENTITY_COPIED"},
+    {"case_id": "panel-continuity-pass", "family": "production-panel-identity-continuity", "mutation": "none", "expected_outcome": "pass"},
+    {"case_id": "panel-continuity-fail", "family": "production-panel-identity-continuity", "mutation": "break-scene-continuity", "expected_outcome": "fail", "expected_code": "QA_PANEL_CONTINUITY_INCOMPLETE"},
+    {"case_id": "master-completeness-pass", "family": "video-storyboard-master-completeness", "mutation": "none", "expected_outcome": "pass"},
+    {"case_id": "master-completeness-fail", "family": "video-storyboard-master-completeness", "mutation": "remove-shot-motion", "expected_outcome": "fail", "expected_code": "QA_MASTER_FIELD_MISSING"},
+    {"case_id": "first-frame-pass", "family": "first-frame-correctness", "mutation": "none", "expected_outcome": "pass"},
+    {"case_id": "first-frame-fail", "family": "first-frame-correctness", "mutation": "first-frame-grid", "expected_outcome": "fail", "expected_code": "QA_FIRST_FRAME_NOT_CLEAN"},
+    {"case_id": "reference-role-pass", "family": "reference-role-mapping", "mutation": "none", "expected_outcome": "pass"},
+    {"case_id": "reference-role-fail", "family": "reference-role-mapping", "mutation": "make-analysis-board-executable", "expected_outcome": "fail", "expected_code": "QA_REFERENCE_ROLE_INVALID"},
+    {"case_id": "misuse-prevention-pass", "family": "artifact-misuse-prevention", "mutation": "none", "expected_outcome": "pass"},
+    {"case_id": "misuse-prevention-fail", "family": "artifact-misuse-prevention", "mutation": "analysis-board-as-panel", "expected_outcome": "fail", "expected_code": "QA_ANALYSIS_BOARD_USED_AS_PANEL"},
+    {"case_id": "provenance-pass", "family": "end-to-end-provenance", "mutation": "none", "expected_outcome": "pass"},
+    {"case_id": "provenance-fail", "family": "end-to-end-provenance", "mutation": "mismatch-revision", "expected_outcome": "fail", "expected_code": "QA_ARTIFACT_REVISION_MISMATCH"},
+    {"case_id": "partial-chain-fail", "family": "end-to-end-provenance", "mutation": "remove-motion-plan", "expected_outcome": "fail", "expected_code": "QA_CHAIN_ARTIFACT_MISSING"},
+    {"case_id": "stale-version-fail", "family": "end-to-end-provenance", "mutation": "stale-execution-version", "expected_outcome": "fail", "expected_code": "QA_ARTIFACT_VERSION_UNSUPPORTED"}
+  ],
+  "provider_calls": 0
+}
