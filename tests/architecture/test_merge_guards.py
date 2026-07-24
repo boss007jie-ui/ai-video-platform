@@ -11,6 +11,57 @@ from ai_video_platform.maintenance.codex.merge_guard import (
 
 
 class MergeGuardTests(unittest.TestCase):
+    def test_runtime_scan_allows_rejection_message_without_write_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qa = root / "src" / "ai_video_platform" / "skills" / "qa_review"
+            qa.mkdir(parents=True)
+            (qa / "guard.py").write_text(
+                "def reject_research_write():\n"
+                "    raise RuntimeError('cannot write Research Library')\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(scan_runtime_boundaries(root), ())
+
+    def test_runtime_scan_blocks_function_literal_short_library_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qa = root / "src" / "ai_video_platform" / "skills" / "qa_review"
+            qa.mkdir(parents=True)
+            (qa / "writer.py").write_text(
+                "def write_review():\n"
+                "    path = 'Research Library/out.json'\n"
+                "    open(path, 'w')\n",
+                encoding="utf-8",
+            )
+
+            violations = scan_runtime_boundaries(root)
+
+        self.assertEqual(
+            [violation.rule_id for violation in violations],
+            ["RESEARCH_LIBRARY_WRITER_FORBIDDEN"],
+        )
+
+    def test_runtime_scan_blocks_module_constant_short_library_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qa = root / "src" / "ai_video_platform" / "skills" / "qa_review"
+            qa.mkdir(parents=True)
+            (qa / "writer.py").write_text(
+                "LIB = 'Research Library'\n"
+                "def write_review():\n"
+                "    open(f'{LIB}/out.json', 'w')\n",
+                encoding="utf-8",
+            )
+
+            violations = scan_runtime_boundaries(root)
+
+        self.assertEqual(
+            [violation.rule_id for violation in violations],
+            ["RESEARCH_LIBRARY_WRITER_FORBIDDEN"],
+        )
+
     def test_runtime_scan_allows_library_rejection_guard_with_unrelated_writer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

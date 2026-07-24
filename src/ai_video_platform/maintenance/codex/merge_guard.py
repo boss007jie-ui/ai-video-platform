@@ -232,8 +232,11 @@ def _cross_skill_imports(tree: ast.AST, owner_skill: str | None, source_root: Pa
 
 
 _LIBRARY_MARKERS = {
-    "product": "ai video product library",
-    "research": "ai video research library",
+    # Match both canonical roots and their short policy names.  The AST
+    # scope analysis below ensures a marker is only actionable when it reaches
+    # a write target in the same scope (or through a propagated helper).
+    "product": ("ai video product library", "product library"),
+    "research": ("ai video research library", "research library"),
 }
 _PATH_WRITE_METHODS = {"write_text", "write_bytes", "mkdir", "touch", "unlink"}
 _PATH_RELOCATION_METHODS = {"rename", "replace"}
@@ -325,7 +328,11 @@ def _expression_library_markers(
         return frozenset()
     if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
         lowered = expression.value.lower()
-        return frozenset(kind for kind, marker in _LIBRARY_MARKERS.items() if marker in lowered)
+        return frozenset(
+            kind
+            for kind, markers in _LIBRARY_MARKERS.items()
+            if any(marker in lowered for marker in markers)
+        )
     binding_key = _binding_key(expression) if isinstance(expression, (ast.Name, ast.Attribute)) else None
     if binding_key is not None:
         bound = bindings.get(binding_key, frozenset())
