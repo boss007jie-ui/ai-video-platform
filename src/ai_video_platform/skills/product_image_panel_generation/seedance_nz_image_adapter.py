@@ -288,6 +288,74 @@ def _image_shape(content: bytes) -> tuple[str, int, int]:
     )
 
 
+def _task_status(document: Mapping[str, object]) -> str:
+    value = document.get("status")
+    if value is None:
+        data = document.get("data")
+        if not isinstance(data, Mapping):
+            raise ImagePanelError(
+                ImagePanelErrorCode.PROVIDER_FAILED,
+                "Provider task response did not contain a valid status",
+                category="provider",
+            )
+        value = data.get("status")
+    if not isinstance(value, str) or not value.strip():
+        raise ImagePanelError(
+            ImagePanelErrorCode.PROVIDER_FAILED,
+            "Provider task response did not contain a valid status",
+            category="provider",
+        )
+    return value.strip().upper()
+
+
+def _task_result_url(document: Mapping[str, object]) -> str | None:
+    data = document.get("data")
+    if isinstance(data, Mapping):
+        result_url = data.get("result_url")
+        if isinstance(result_url, str) and result_url.strip():
+            return result_url.strip()
+        nested_data = data.get("data")
+        if isinstance(nested_data, Mapping):
+            content = nested_data.get("content")
+            if isinstance(content, Mapping):
+                image_url = content.get("image_url")
+                if isinstance(image_url, str) and image_url.strip():
+                    return image_url.strip()
+    result_url = document.get("result_url")
+    if isinstance(result_url, str) and result_url.strip():
+        return result_url.strip()
+    return None
+
+
+def _task_failure_summary(document: Mapping[str, object]) -> str | None:
+    data = document.get("data")
+    candidates = []
+    if isinstance(data, Mapping):
+        candidates.append(data.get("fail_reason"))
+    candidates.extend((document.get("fail_reason"), document.get("message")))
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()[:512]
+    return None
+
+
+def _require_https_result_url(value: str | None) -> str:
+    if not value:
+        raise ImagePanelError(
+            ImagePanelErrorCode.PROVIDER_FAILED,
+            "Provider success response did not contain result_url",
+            category="provider",
+        )
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ImagePanelError(
+            ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED,
+            "Provider result URL is not an authorized HTTPS URL",
+            category="authorization",
+        )
+    return value
+
+
 class SeedanceNzImageAdapter(ImageProviderAdapter):
     def __init__(
         self,
@@ -420,27 +488,27 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
                     details={"http_status": last_poll.status},
                 )
             poll_document = _json_object(last_poll)
-            status = str(poll_document.get("status", "")).upper()
+            status = _task_status(poll_document)
             if status == "SUCCESS":
-                data = poll_document.get("data")
-                if isinstance(data, Mapping):
-                    result_url = data.get("result_url") if isinstance(data.get("result_url"), str) else None
+                result_url = _task_result_url(poll_document)
                 break
             if status == "FAILURE":
                 raise ImagePanelError(
                     ImagePanelErrorCode.PROVIDER_FAILED,
                     "Seedance.nz image generation failed",
                     category="provider",
-                    details={"task_id": task_id},
+                    details={
+                        "task_id": task_id,
+                        "provider_summary": _task_failure_summary(poll_document),
+                    },
                 )
-            if status not in {"NOT_START", "IN_PROGRESS"}:
+            if status not in {"NOT_START", "SUBMITTED", "IN_PROGRESS"}:
                 raise ImagePanelError(ImagePanelErrorCode.PROVIDER_FAILED, "Provider returned an unknown task status", category="provider")
             self._sleep(0.05)
         else:
             raise ImagePanelError(ImagePanelErrorCode.PROVIDER_TIMEOUT, "Seedance.nz image task polling timed out", category="provider")
 
-        if not result_url:
-            raise ImagePanelError(ImagePanelErrorCode.PROVIDER_FAILED, "Provider success response did not contain result_url", category="provider")
+        result_url = _require_https_result_url(result_url)
         content = self._transport.get_bytes(
             result_url,
             headers=self._headers(),

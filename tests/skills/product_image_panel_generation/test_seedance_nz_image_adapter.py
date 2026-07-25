@@ -132,6 +132,136 @@ class SeedanceNzImageAdapterTests(unittest.TestCase):
         self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
         self.assertEqual(len(transport.calls), 2)
 
+    def test_nested_taskdto_in_progress_then_success_downloads(self) -> None:
+        content = _png()
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"data":{"task_id":"task-nested-001"}}', 1),
+                SeedanceNzHttpResponse(200, {}, b'{"code":"success","data":{"status":"IN_PROGRESS"}}', 1),
+                SeedanceNzHttpResponse(
+                    200,
+                    {},
+                    b'{"code":"success","data":{"status":"SUCCESS","result_url":"https://cdn.seedance.nz/nested-001.png"}}',
+                    1,
+                ),
+            ],
+            download_body=content,
+        )
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        asset = adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(asset.content, content)
+        self.assertEqual((asset.width, asset.height), (1024, 1024))
+        self.assertEqual(asset.provider_metadata["sha256"], __import__("hashlib").sha256(content).hexdigest())
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 1)
+
+    def test_nested_taskdto_uses_content_image_url_fallback(self) -> None:
+        content = _png()
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-nested-002"}', 1),
+                SeedanceNzHttpResponse(
+                    200,
+                    {},
+                    b'{"code":"success","data":{"status":"SUCCESS","data":{"status":"succeeded","content":{"image_url":"https://cdn.seedance.nz/nested-002.png"}}}}',
+                    1,
+                ),
+            ],
+            download_body=content,
+        )
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        asset = adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(asset.content, content)
+        self.assertEqual(transport.calls[-1]["endpoint"], "https://cdn.seedance.nz/nested-002.png")
+
+    def test_nested_taskdto_failure_fails_closed_without_download(self) -> None:
+        transport = RecordingTransport([
+            SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-nested-fail"}', 1),
+            SeedanceNzHttpResponse(
+                200,
+                {},
+                b'{"code":"success","data":{"status":"FAILURE","fail_reason":"synthetic nested failure"}}',
+                1,
+            ),
+        ])
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertEqual(captured.exception.details["provider_summary"], "synthetic nested failure")
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 0)
+
+    def test_nested_taskdto_unknown_status_fails_closed(self) -> None:
+        transport = RecordingTransport([
+            SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-nested-unknown"}', 1),
+            SeedanceNzHttpResponse(200, {}, b'{"code":"success","data":{"status":"QUEUED_ELSEWHERE"}}', 1),
+        ])
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 0)
+
+    def test_nested_taskdto_submitted_is_a_processing_status(self) -> None:
+        content = _png()
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-submitted"}', 1),
+                SeedanceNzHttpResponse(200, {}, b'{"data":{"status":"SUBMITTED"}}', 1),
+                SeedanceNzHttpResponse(
+                    200,
+                    {},
+                    b'{"data":{"status":"SUCCESS","result_url":"https://cdn.seedance.nz/submitted.png"}}',
+                    1,
+                ),
+            ],
+            download_body=content,
+        )
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        asset = adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(asset.content, content)
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 1)
+
+    def test_nested_taskdto_non_https_url_fails_before_download(self) -> None:
+        transport = RecordingTransport([
+            SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-http-url"}', 1),
+            SeedanceNzHttpResponse(
+                200,
+                {},
+                b'{"data":{"status":"SUCCESS","result_url":"http://cdn.seedance.nz/insecure.png"}}',
+                1,
+            ),
+        ])
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED)
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 0)
+
+    def test_nested_taskdto_non_string_status_fails_closed(self) -> None:
+        transport = RecordingTransport([
+            SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-bad-status"}', 1),
+            SeedanceNzHttpResponse(200, {}, b'{"data":{"status":17}}', 1),
+        ])
+        adapter = SeedanceNzImageAdapter(api_key="sk-synthetic", transport=transport, sleep=lambda _: None)
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 0)
+
     def test_fake_adapter_is_memory_only_and_supports_failure(self) -> None:
         fake = FakeSeedanceNzImageAdapter(terminal_status="SUCCESS", content=_png())
         asset = fake._generate(_invocation(), cancellation=CancellationToken())
