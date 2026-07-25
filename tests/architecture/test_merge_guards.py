@@ -481,6 +481,7 @@ class MergeGuardTests(unittest.TestCase):
             "viral_research_asset_collection/apify.py",
             "viral_research_asset_collection/media.py",
             "video_generation/kie_adapter.py",
+            "video_generation/seedance_nz_adapter.py",
             "product_image_panel_generation/yunwu_adapters.py",
         )
         with tempfile.TemporaryDirectory() as temporary:
