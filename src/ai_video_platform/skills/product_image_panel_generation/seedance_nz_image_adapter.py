@@ -7,7 +7,7 @@ through the validated ImagePanelService orchestration path.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import http.client
 import json
@@ -35,7 +35,9 @@ SEEDANCE_NZ_ALLOWED_MODELS = frozenset(
 SEEDANCE_NZ_ALLOWED_ENDPOINTS = frozenset({SEEDANCE_NZ_IMAGE_SUBMIT_ENDPOINT})
 MAX_TIMEOUT_SECONDS = 300.0
 MAX_IMAGE_BYTES = 33_554_432
-MAX_POLL_ATTEMPTS = 120
+POLL_INTERVAL_SECONDS = 4.0
+MAX_POLL_ATTEMPTS = 75
+SAFE_TASK_STATUSES = frozenset({"NOT_START", "SUBMITTED", "IN_PROGRESS", "SUCCESS", "FAILURE"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +64,9 @@ class SeedanceNzProviderReceipt:
     width: int | None = None
     height: int | None = None
     error_body: str | None = None
+    poll_count: int = 0
+    last_status: str | None = None
+    terminal_stage: str = "submit"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -79,6 +84,9 @@ class SeedanceNzProviderReceipt:
             "width": self.width,
             "height": self.height,
             "error_body": self.error_body,
+            "poll_count": self.poll_count,
+            "last_status": self.last_status,
+            "terminal_stage": self.terminal_stage,
         }
 
 
@@ -363,6 +371,7 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
         *,
         transport: SeedanceNzTransport | None = None,
         sleep: Callable[[float], None] | None = None,
+        clock: Callable[[], float] | None = None,
         max_poll_attempts: int = MAX_POLL_ATTEMPTS,
         reference_image_urls: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
@@ -374,6 +383,7 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
         self._api_key = key
         self._transport = transport or SeedanceNzHttpClient()
         self._sleep = sleep or time.sleep
+        self._clock = clock or time.monotonic
         self._max_poll_attempts = max_poll_attempts
         self._reference_image_urls = {
             str(item_id): tuple(urls)
@@ -404,6 +414,11 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
             "Accept": "application/json",
         }
 
+    def _update_receipt(self, **changes: object) -> None:
+        if self._last_receipt is None:
+            raise RuntimeError("No Seedance.nz Provider receipt is available")
+        self._last_receipt = replace(self._last_receipt, **changes)
+
     def _generate(self, invocation: ProviderInvocation, *, cancellation: CancellationToken) -> ProviderAsset:
         if cancellation.cancelled:
             raise ImagePanelError(ImagePanelErrorCode.CANCELLED, "Generation was cancelled", category="state")
@@ -413,6 +428,7 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
                 "Provider model binding is not authorized for Seedance.nz",
                 category="authorization",
             )
+        deadline = self._clock() + min(invocation.timeout_seconds, MAX_TIMEOUT_SECONDS)
         payload: dict[str, object] = {
             "model": invocation.profile.model_id,
             "prompt": invocation.compiled_prompt,
@@ -433,7 +449,7 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
             payload=payload,
             timeout_seconds=min(invocation.timeout_seconds, MAX_TIMEOUT_SECONDS),
         )
-        error_body = submit.body.decode("utf-8", errors="replace").replace(self._api_key, "[REDACTED]")
+        error_body = submit.body.decode("utf-8", errors="replace").replace(self._api_key, "[REDACTED]")[:512]
         self._last_receipt = SeedanceNzProviderReceipt(
             endpoint=SEEDANCE_NZ_IMAGE_SUBMIT_ENDPOINT,
             model_id=invocation.profile.model_id,
@@ -463,16 +479,32 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
                 task_id = nested_data.get("task_id") or nested_data.get("id")
         if not isinstance(task_id, str) or not task_id:
             raise ImagePanelError(ImagePanelErrorCode.PROVIDER_FAILED, "Provider response did not contain a task_id", category="provider")
+        self._update_receipt(task_id=task_id)
 
         result_url: str | None = None
         last_poll: SeedanceNzHttpResponse | None = None
-        for _ in range(self._max_poll_attempts):
+        poll_count = 0
+        for poll_index in range(self._max_poll_attempts):
             if cancellation.cancelled:
                 raise ImagePanelError(ImagePanelErrorCode.CANCELLED, "Generation was cancelled", category="state")
+            remaining_seconds = deadline - self._clock()
+            if remaining_seconds <= 0:
+                raise ImagePanelError(ImagePanelErrorCode.PROVIDER_TIMEOUT, "Seedance.nz image task polling timed out", category="provider")
+            poll_count += 1
+            poll_endpoint = SEEDANCE_NZ_IMAGE_TASK_ENDPOINT.format(task_id=task_id)
+            self._update_receipt(
+                endpoint=poll_endpoint,
+                poll_count=poll_count,
+                terminal_stage="poll",
+            )
             last_poll = self._transport.get_json(
-                SEEDANCE_NZ_IMAGE_TASK_ENDPOINT.format(task_id=task_id),
+                poll_endpoint,
                 headers=self._headers(),
-                timeout_seconds=min(invocation.timeout_seconds, MAX_TIMEOUT_SECONDS),
+                timeout_seconds=remaining_seconds,
+            )
+            self._update_receipt(
+                http_status=last_poll.status,
+                elapsed_ms=last_poll.elapsed_ms,
             )
             if last_poll.status == 401 or last_poll.status == 403:
                 raise ImagePanelError(
@@ -489,6 +521,9 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
                 )
             poll_document = _json_object(last_poll)
             status = _task_status(poll_document)
+            self._update_receipt(
+                last_status=status if status in SAFE_TASK_STATUSES else "UNKNOWN",
+            )
             if status == "SUCCESS":
                 result_url = _task_result_url(poll_document)
                 break
@@ -504,19 +539,39 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
                 )
             if status not in {"NOT_START", "SUBMITTED", "IN_PROGRESS"}:
                 raise ImagePanelError(ImagePanelErrorCode.PROVIDER_FAILED, "Provider returned an unknown task status", category="provider")
-            self._sleep(0.05)
+            if poll_index + 1 >= self._max_poll_attempts:
+                break
+            remaining_seconds = deadline - self._clock()
+            if remaining_seconds <= 0:
+                raise ImagePanelError(ImagePanelErrorCode.PROVIDER_TIMEOUT, "Seedance.nz image task polling timed out", category="provider")
+            self._sleep(min(POLL_INTERVAL_SECONDS, remaining_seconds))
         else:
             raise ImagePanelError(ImagePanelErrorCode.PROVIDER_TIMEOUT, "Seedance.nz image task polling timed out", category="provider")
+        if result_url is None:
+            raise ImagePanelError(ImagePanelErrorCode.PROVIDER_TIMEOUT, "Seedance.nz image task polling timed out", category="provider")
 
+        self._update_receipt(terminal_stage="download")
+        remaining_seconds = deadline - self._clock()
+        if remaining_seconds <= 0:
+            raise ImagePanelError(ImagePanelErrorCode.PROVIDER_TIMEOUT, "Seedance.nz image task polling timed out", category="provider")
         result_url = _require_https_result_url(result_url)
         content = self._transport.get_bytes(
             result_url,
             headers=self._headers(),
-            timeout_seconds=min(invocation.timeout_seconds, MAX_TIMEOUT_SECONDS),
+            timeout_seconds=remaining_seconds,
         )
         if not content or len(content) > MAX_IMAGE_BYTES:
             raise ImagePanelError(ImagePanelErrorCode.PROVIDER_FAILED, "Provider image bytes were empty or too large", category="provider")
+        self._update_receipt(terminal_stage="dimension_check")
         content_type, width, height = _image_shape(content)
+        digest = hashlib.sha256(content).hexdigest()
+        self._update_receipt(
+            content_type=content_type,
+            byte_size=len(content),
+            sha256=digest,
+            width=width,
+            height=height,
+        )
         if width != invocation.item.width or height != invocation.item.height:
             raise ImagePanelError(
                 ImagePanelErrorCode.PROVIDER_FAILED,
@@ -529,7 +584,6 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
                     "actual_height": height,
                 },
             )
-        digest = hashlib.sha256(content).hexdigest()
         self._last_receipt = SeedanceNzProviderReceipt(
             endpoint=SEEDANCE_NZ_IMAGE_TASK_ENDPOINT.format(task_id=task_id),
             model_id=invocation.profile.model_id,
@@ -543,6 +597,9 @@ class SeedanceNzImageAdapter(ImageProviderAdapter):
             sha256=digest,
             width=width,
             height=height,
+            poll_count=poll_count,
+            last_status="SUCCESS",
+            terminal_stage="dimension_check",
         )
         return ProviderAsset(
             provider_asset_id=task_id,

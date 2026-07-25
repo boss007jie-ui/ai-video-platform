@@ -35,9 +35,15 @@ def _png(width: int = 1024, height: int = 1024) -> bytes:
 
 
 class RecordingTransport:
-    def __init__(self, responses: list[SeedanceNzHttpResponse], download_body: bytes = b"") -> None:
+    def __init__(
+        self,
+        responses: list[SeedanceNzHttpResponse],
+        download_body: bytes = b"",
+        download_error: ImagePanelError | None = None,
+    ) -> None:
         self.responses = list(responses)
         self.download_body = download_body
+        self.download_error = download_error
         self.calls: list[dict[str, object]] = []
 
     def post_json(self, endpoint, *, headers, payload, timeout_seconds):
@@ -50,10 +56,29 @@ class RecordingTransport:
 
     def get_bytes(self, endpoint, *, headers, timeout_seconds):
         self.calls.append({"method": "GET_BYTES", "endpoint": endpoint, "headers": dict(headers)})
+        if self.download_error is not None:
+            raise self.download_error
         return self.download_body
 
 
-def _invocation(*, model_id: str = "seedream-v5-pro-t2i") -> ProviderInvocation:
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _invocation(
+    *,
+    model_id: str = "seedream-v5-pro-t2i",
+    timeout_seconds: float = 5.0,
+) -> ProviderInvocation:
     request = make_request()
     return ProviderInvocation(
         request_id=request.request_id,
@@ -62,11 +87,164 @@ def _invocation(*, model_id: str = "seedream-v5-pro-t2i") -> ProviderInvocation:
         profile=replace(profile(), provider_id="seedance-nz-image", model_id=model_id),
         compiled_prompt="Synthetic Seedance product panel",
         attempt=1,
-        timeout_seconds=5.0,
+        timeout_seconds=timeout_seconds,
     )
 
 
 class SeedanceNzImageAdapterTests(unittest.TestCase):
+    def test_production_poll_interval_uses_four_seconds_with_injected_clock(self) -> None:
+        clock = FakeClock()
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-clock-001"}', 1),
+                SeedanceNzHttpResponse(200, {}, b'{"status":"IN_PROGRESS"}', 1),
+                SeedanceNzHttpResponse(
+                    200,
+                    {},
+                    b'{"status":"SUCCESS","data":{"result_url":"https://cdn.seedance.nz/clock-001.png"}}',
+                    1,
+                ),
+            ],
+            download_body=_png(),
+        )
+        adapter = SeedanceNzImageAdapter(
+            api_key="sk-synthetic",
+            transport=transport,
+            sleep=clock.sleep,
+            clock=clock,
+        )
+
+        adapter._generate(_invocation(timeout_seconds=300.0), cancellation=CancellationToken())
+
+        self.assertEqual(clock.sleeps, [4.0])
+
+    def test_deadline_allows_long_running_task_before_success(self) -> None:
+        clock = FakeClock()
+        progress_responses = [
+            SeedanceNzHttpResponse(200, {}, b'{"status":"IN_PROGRESS"}', 1)
+            for _ in range(70)
+        ]
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-long-001"}', 1),
+                *progress_responses,
+                SeedanceNzHttpResponse(
+                    200,
+                    {},
+                    b'{"status":"SUCCESS","data":{"result_url":"https://cdn.seedance.nz/long-001.png"}}',
+                    1,
+                ),
+            ],
+            download_body=_png(),
+        )
+        adapter = SeedanceNzImageAdapter(
+            api_key="sk-synthetic",
+            transport=transport,
+            sleep=clock.sleep,
+            clock=clock,
+        )
+
+        asset = adapter._generate(
+            _invocation(timeout_seconds=300.0),
+            cancellation=CancellationToken(),
+        )
+
+        self.assertEqual(asset.provider_asset_id, "task-long-001")
+        self.assertEqual(clock.now, 280.0)
+        self.assertEqual([call["method"] for call in transport.calls].count("GET"), 71)
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 1)
+
+    def test_deadline_timeout_preserves_task_id_and_last_status(self) -> None:
+        clock = FakeClock()
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-timeout-001"}', 1),
+                SeedanceNzHttpResponse(200, {}, b'{"status":"IN_PROGRESS"}', 1),
+                SeedanceNzHttpResponse(200, {}, b'{"status":"IN_PROGRESS"}', 1),
+                SeedanceNzHttpResponse(200, {}, b'{"status":"IN_PROGRESS"}', 1),
+            ]
+        )
+        adapter = SeedanceNzImageAdapter(
+            api_key="sk-synthetic",
+            transport=transport,
+            sleep=clock.sleep,
+            clock=clock,
+        )
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(
+                _invocation(timeout_seconds=10.0),
+                cancellation=CancellationToken(),
+            )
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_TIMEOUT)
+        self.assertEqual(adapter.last_receipt.task_id, "task-timeout-001")
+        self.assertEqual(adapter.last_receipt.poll_count, 3)
+        self.assertEqual(adapter.last_receipt.last_status, "IN_PROGRESS")
+        self.assertEqual(adapter.last_receipt.terminal_stage, "poll")
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 0)
+
+    def test_poll_failure_preserves_submitted_task_id(self) -> None:
+        transport = RecordingTransport([
+            SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-failure-identity"}', 1),
+            SeedanceNzHttpResponse(
+                200,
+                {},
+                b'{"status":"FAILURE","message":"synthetic failure"}',
+                1,
+            ),
+        ])
+        adapter = SeedanceNzImageAdapter(
+            api_key="sk-synthetic",
+            transport=transport,
+            sleep=lambda _: None,
+        )
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertEqual(adapter.last_receipt.task_id, "task-failure-identity")
+        self.assertEqual(adapter.last_receipt.poll_count, 1)
+        self.assertEqual(adapter.last_receipt.last_status, "FAILURE")
+        self.assertEqual(adapter.last_receipt.terminal_stage, "poll")
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 0)
+
+    def test_download_failure_preserves_submitted_task_id(self) -> None:
+        transport = RecordingTransport(
+            [
+                SeedanceNzHttpResponse(200, {}, b'{"task_id":"task-download-identity"}', 1),
+                SeedanceNzHttpResponse(
+                    200,
+                    {},
+                    b'{"status":"SUCCESS","data":{"result_url":"https://cdn.seedance.nz/signed.png?token=secret"}}',
+                    1,
+                ),
+            ],
+            download_error=ImagePanelError(
+                ImagePanelErrorCode.PROVIDER_FAILED,
+                "Synthetic download failure",
+                category="provider",
+            ),
+        )
+        adapter = SeedanceNzImageAdapter(
+            api_key="sk-synthetic",
+            transport=transport,
+            sleep=lambda _: None,
+        )
+
+        with self.assertRaises(ImagePanelError) as captured:
+            adapter._generate(_invocation(), cancellation=CancellationToken())
+
+        self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertEqual(adapter.last_receipt.task_id, "task-download-identity")
+        self.assertEqual(adapter.last_receipt.poll_count, 1)
+        self.assertEqual(adapter.last_receipt.last_status, "SUCCESS")
+        self.assertEqual(adapter.last_receipt.terminal_stage, "download")
+        self.assertIsNone(adapter.last_receipt.result_url)
+        self.assertNotIn("token=secret", json.dumps(adapter.last_receipt.to_dict()))
+        self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 1)
+
     def test_happy_path_submits_polls_downloads_and_records_provenance(self) -> None:
         content = _png()
         transport = RecordingTransport(
@@ -207,6 +385,9 @@ class SeedanceNzImageAdapterTests(unittest.TestCase):
             adapter._generate(_invocation(), cancellation=CancellationToken())
 
         self.assertEqual(captured.exception.code, ImagePanelErrorCode.PROVIDER_FAILED)
+        self.assertEqual(adapter.last_receipt.task_id, "task-nested-unknown")
+        self.assertEqual(adapter.last_receipt.last_status, "UNKNOWN")
+        self.assertEqual(adapter.last_receipt.terminal_stage, "poll")
         self.assertEqual([call["method"] for call in transport.calls].count("GET_BYTES"), 0)
 
     def test_nested_taskdto_submitted_is_a_processing_status(self) -> None:
