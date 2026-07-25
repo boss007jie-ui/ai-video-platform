@@ -353,6 +353,196 @@ class SeedanceNzProductionAdapterTests(unittest.TestCase):
         )
         self.assertEqual(transport.download_calls, ["https://download.example/signed-video.mp4"])
 
+    def test_poll_maps_nested_task_dto_states_progress_and_result_url(self) -> None:
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        task_id = adapter.submit(self._request())
+
+        transport.response = {"data": {"status": "SUBMITTED", "progress": 0}}
+        self.assertEqual(
+            adapter.poll(task_id),
+            {"state": "running", "status": "submitted", "progress": 0},
+        )
+        transport.response = {"data": {"status": "IN_PROGRESS", "progress": "50%"}}
+        self.assertEqual(
+            adapter.poll(task_id),
+            {"state": "running", "status": "in_progress", "progress": 50},
+        )
+        transport.response = {
+            "data": {
+                "status": "SUCCESS",
+                "progress": 99,
+                "result_url": "https://download.example/nested-video.mp4?signature=opaque",
+            },
+        }
+
+        completed = adapter.poll(task_id)
+
+        self.assertEqual(completed, {"state": "succeeded", "status": "success", "progress": 100})
+        adapter.download(task_id)
+        self.assertEqual(
+            transport.download_calls,
+            ["https://download.example/nested-video.mp4?signature=opaque"],
+        )
+
+    def test_poll_uses_nested_video_url_fallback(self) -> None:
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        task_id = adapter.submit(self._request())
+        transport.response = {
+            "data": {
+                "status": "success",
+                "data": {
+                    "content": {
+                        "video_url": "https://download.example/nested-content-video.mp4",
+                    },
+                },
+            },
+        }
+
+        completed = adapter.poll(task_id)
+
+        self.assertEqual(completed["state"], "succeeded")
+        self.assertEqual(completed["status"], "success")
+        adapter.download(task_id)
+        self.assertEqual(transport.download_calls, ["https://download.example/nested-content-video.mp4"])
+
+    def test_poll_status_matching_is_case_insensitive_and_normalized(self) -> None:
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        task_id = adapter.submit(self._request())
+
+        transport.response = {"status": "QuEuEd"}
+        self.assertEqual(
+            adapter.poll(task_id),
+            {"state": "running", "status": "queued", "progress": 0},
+        )
+        transport.response = {
+            "status": "CoMpLeTeD",
+            "metadata": {"url": "https://download.example/mixed-case.mp4"},
+        }
+        completed = adapter.poll(task_id)
+        self.assertEqual(completed, {"state": "succeeded", "status": "completed", "progress": 100})
+
+    def test_nested_progress_percent_is_strict_and_fail_closed(self) -> None:
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        task_id = adapter.submit(self._request())
+        transport.response = {"data": {"status": "IN_PROGRESS", "progress": "50 %"}}
+
+        with self.assertRaises(AdapterFailure) as malformed:
+            adapter.poll(task_id)
+
+        self.assertEqual(malformed.exception.code, "RESPONSE_INVALID")
+        diagnostic = json.loads(malformed.exception.provider_error_summary)
+        self.assertEqual(diagnostic["raw_status"], "IN_PROGRESS")
+        self.assertEqual(diagnostic["response_keys"], ["data"])
+        self.assertEqual(diagnostic["nested_data_keys"], ["progress", "status"])
+
+    def test_nested_failure_is_terminal_and_never_downloads(self) -> None:
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        task_id = adapter.submit(self._request())
+        transport.response = {
+            "data": {
+                "status": "FAILURE",
+                "error": {"code": "content_policy", "message": "request rejected"},
+            },
+        }
+
+        result = adapter.poll(task_id)
+
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["status"], "failure")
+        self.assertEqual(result["progress"], 100)
+        with self.assertRaises(AdapterFailure) as download:
+            adapter.download(task_id)
+        self.assertEqual(download.exception.code, "DOWNLOAD_NOT_READY")
+        self.assertEqual(transport.download_calls, [])
+
+    def test_unknown_poll_status_preserves_only_safe_diagnostic_shape(self) -> None:
+        credential = "sk-test-key"
+        signed_url = "https://download.example/video.mp4?signature=super-secret"
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": credential},
+            ),
+        )
+        task_id = adapter.submit(self._request())
+        transport.response = {
+            "status": "MYSTERY_STATE",
+            "authorization": credential,
+            "metadata": {"url": signed_url},
+            "data": {
+                "status": "MYSTERY_STATE",
+                "progress": 10,
+                "api_key": credential,
+            },
+        }
+
+        with self.assertRaises(AdapterFailure) as unsupported:
+            adapter.poll(task_id)
+
+        self.assertEqual(unsupported.exception.code, "RESPONSE_INVALID")
+        summary = unsupported.exception.provider_error_summary
+        diagnostic = json.loads(summary)
+        self.assertEqual(diagnostic["raw_status"], "MYSTERY_STATE")
+        self.assertIn("status", diagnostic["response_keys"])
+        self.assertIn("metadata", diagnostic["response_keys"])
+        self.assertIn("status", diagnostic["nested_data_keys"])
+        self.assertIn("progress", diagnostic["nested_data_keys"])
+        self.assertNotIn(credential, summary)
+        self.assertNotIn(signed_url, summary)
+        self.assertNotIn("authorization", summary.lower())
+        self.assertNotIn("api_key", summary.lower())
+
+    def test_non_string_poll_status_fails_closed_with_null_raw_status(self) -> None:
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        task_id = adapter.submit(self._request())
+        transport.response = {"data": {"status": 7, "progress": 0}}
+
+        with self.assertRaises(AdapterFailure) as invalid:
+            adapter.poll(task_id)
+
+        self.assertEqual(invalid.exception.code, "RESPONSE_INVALID")
+        diagnostic = json.loads(invalid.exception.provider_error_summary)
+        self.assertIsNone(diagnostic["raw_status"])
+        self.assertEqual(diagnostic["response_keys"], ["data"])
+        self.assertEqual(diagnostic["nested_data_keys"], ["progress", "status"])
+
     def test_failed_poll_is_terminal_and_never_downloads(self) -> None:
         transport = RecordingTransport()
         adapter = SeedanceNzVideoProviderAdapter(

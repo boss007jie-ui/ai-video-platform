@@ -22,6 +22,21 @@ MODEL_ID = "seedance-2.0-fast-multi"
 BASE_URL = "https://api.seedance.nz"
 _TASK_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _API_KEY = re.compile(r"^sk-[A-Za-z0-9_-]{4,}$")
+_PERCENT_PROGRESS = re.compile(r"^(?:0|[1-9][0-9]?|100)%$")
+_SAFE_DIAGNOSTIC_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+_SENSITIVE_DIAGNOSTIC_KEY = re.compile(
+    r"(?i)(authorization|credential|api[_-]?key|token|secret|password|private[_-]?key|signature|sig)"
+)
+_VIDEO_STATUS = {
+    "queued": ("running", "queued"),
+    "not_start": ("running", "not_start"),
+    "submitted": ("running", "submitted"),
+    "in_progress": ("running", "in_progress"),
+    "completed": ("succeeded", "completed"),
+    "success": ("succeeded", "success"),
+    "failed": ("failed", "failed"),
+    "failure": ("failed", "failure"),
+}
 
 
 def _provider_summary(value: object, credential: str | None) -> str:
@@ -50,6 +65,87 @@ def _safe_https_uri(value: object) -> bool:
         and not parsed.password
         and not parsed.fragment
     )
+
+
+def _safe_diagnostic_keys(value: object) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    return sorted(
+        key
+        for key in value
+        if (
+            isinstance(key, str)
+            and _SAFE_DIAGNOSTIC_KEY.fullmatch(key) is not None
+            and _SENSITIVE_DIAGNOSTIC_KEY.search(key) is None
+        )
+    )
+
+
+def _safe_raw_status(value: object) -> str | None:
+    if not isinstance(value, str) or contains_sensitive_text(value):
+        return None
+    return value[:256]
+
+
+def _poll_diagnostic_summary(response: object, raw_status: object) -> str:
+    nested = response.get("data") if isinstance(response, Mapping) else None
+    return json.dumps(
+        {
+            "raw_status": _safe_raw_status(raw_status),
+            "response_keys": _safe_diagnostic_keys(response),
+            "nested_data_keys": _safe_diagnostic_keys(nested),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _poll_response_failure(message: str, response: object, raw_status: object = None) -> AdapterFailure:
+    return AdapterFailure(
+        "RESPONSE_INVALID",
+        message,
+        retryable=False,
+        provider_error_summary=_poll_diagnostic_summary(response, raw_status),
+    )
+
+
+def _parse_video_progress(
+    value: object,
+    *,
+    nested: bool,
+    default: int | None,
+    response: object,
+    raw_status: object,
+) -> int:
+    if value is None:
+        if default is not None:
+            return default
+        raise _poll_response_failure("Seedance.nz progress is invalid", response, raw_status)
+    if isinstance(value, bool):
+        raise _poll_response_failure("Seedance.nz progress is invalid", response, raw_status)
+    if isinstance(value, int):
+        progress = value
+    elif nested and isinstance(value, str) and _PERCENT_PROGRESS.fullmatch(value) is not None:
+        progress = int(value[:-1])
+    else:
+        raise _poll_response_failure("Seedance.nz progress is invalid", response, raw_status)
+    if not 0 <= progress <= 100:
+        raise _poll_response_failure("Seedance.nz progress is invalid", response, raw_status)
+    return progress
+
+
+def _video_result_uri(response: Mapping[str, object], nested: Mapping[str, object] | None) -> object:
+    candidates: list[object] = []
+    if nested is not None:
+        candidates.append(nested.get("result_url"))
+        nested_metadata = nested.get("metadata")
+        candidates.append(nested_metadata.get("url") if isinstance(nested_metadata, Mapping) else None)
+        nested_data = nested.get("data")
+        content = nested_data.get("content") if isinstance(nested_data, Mapping) else None
+        candidates.append(content.get("video_url") if isinstance(content, Mapping) else None)
+    metadata = response.get("metadata")
+    candidates.append(metadata.get("url") if isinstance(metadata, Mapping) else None)
+    return next((candidate for candidate in candidates if _safe_https_uri(candidate)), None)
 
 
 class SeedanceNzCredentialResolver:
@@ -448,44 +544,60 @@ class SeedanceNzVideoProviderAdapter:
                 retryable=False,
             ) from None
         if not isinstance(response, Mapping):
-            raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz poll response is invalid", retryable=False)
-        status = response.get("status")
-        if status not in {"queued", "in_progress", "completed", "failed"}:
-            raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz poll status is unsupported", retryable=False)
-        progress = response.get("progress", 0 if status == "queued" else 100 if status in {"completed", "failed"} else None)
-        if isinstance(progress, bool) or not isinstance(progress, int) or not 0 <= progress <= 100:
-            raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz progress is invalid", retryable=False)
-        if status in {"queued", "in_progress"}:
-            return {"state": "running", "status": status, "progress": progress}
-        if status == "failed":
-            error = response.get("error")
+            raise _poll_response_failure("Seedance.nz poll response is invalid", response)
+        nested_data = response.get("data")
+        if nested_data is not None and not isinstance(nested_data, Mapping):
+            raise _poll_response_failure("Seedance.nz poll data is invalid", response)
+        nested = nested_data if isinstance(nested_data, Mapping) else None
+        status_source = (
+            nested
+            if nested is not None and "status" in nested
+            else response
+        )
+        raw_status = status_source.get("status")
+        if not isinstance(raw_status, str):
+            raise _poll_response_failure("Seedance.nz poll status is invalid", response, raw_status)
+        normalized = _VIDEO_STATUS.get(raw_status.casefold())
+        if normalized is None:
+            raise _poll_response_failure("Seedance.nz poll status is unsupported", response, raw_status)
+        state, status = normalized
+        default_progress = 0 if status in {"queued", "not_start", "submitted"} else 100 if state in {"succeeded", "failed"} else None
+        progress = _parse_video_progress(
+            status_source.get("progress"),
+            nested=nested is not None,
+            default=default_progress,
+            response=response,
+            raw_status=raw_status,
+        )
+        if state == "running":
+            return {"state": state, "status": status, "progress": progress}
+        if state == "failed":
+            error = status_source.get("error")
             if not isinstance(error, Mapping):
-                raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz failure metadata is invalid", retryable=False)
+                raise _poll_response_failure("Seedance.nz failure metadata is invalid", response, raw_status)
             code = error.get("code")
             message = error.get("message")
             if not isinstance(code, str) or not code or not isinstance(message, str):
-                raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz failure metadata is invalid", retryable=False)
+                raise _poll_response_failure("Seedance.nz failure metadata is invalid", response, raw_status)
             return {
                 "state": "failed",
                 "status": status,
-                "progress": progress,
+                "progress": 100,
                 "error_code": code,
                 "provider_error_summary": _provider_summary(error, credential),
                 "refund_expected": True,
             }
-        metadata = response.get("metadata")
-        result_uri = metadata.get("url") if isinstance(metadata, Mapping) else None
-        if not isinstance(metadata, Mapping) or not _safe_https_uri(result_uri):
-            raise AdapterFailure("RESPONSE_INVALID", "Seedance.nz completion metadata is invalid", retryable=False)
+        result_uri = _video_result_uri(response, nested)
+        if not _safe_https_uri(result_uri):
+            raise _poll_response_failure("Seedance.nz completion metadata is invalid", response, raw_status)
         late = self._clock() - started_at > self._timeout_seconds
         self._completed[task_id] = {
             "result_uri": result_uri,
-            "metadata": dict(metadata),
             "late": late,
         }
         if late:
             raise AdapterFailure("TIMEOUT", "Seedance.nz completed after the deadline", retryable=False)
-        return {"state": "succeeded", "status": status, "progress": progress}
+        return {"state": "succeeded", "status": status, "progress": 100}
 
     def cancel(self, provider_job_id: str) -> None:
         self._validated_task_id(provider_job_id)
