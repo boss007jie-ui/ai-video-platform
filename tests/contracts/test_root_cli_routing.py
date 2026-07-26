@@ -10,6 +10,61 @@ from ai_video_platform.cli.root.dispatcher import dispatch, main
 
 
 class RootCliRoutingTests(unittest.TestCase):
+    def test_seedance_routes_forward_to_owner_public_clis(self) -> None:
+        image_cases = (
+            "generate-product-image",
+            "generate-panel",
+            "inspect-generation-request",
+        )
+        for command in image_cases:
+            with self.subTest(command=command), patch(
+                "ai_video_platform.skills.product_image_panel_generation.cli.main", return_value=11
+            ) as owner_main:
+                result = dispatch("seedance-nz-image", command, ["--input", "request.json", "--adapter", "seedance-nz-image"])
+            self.assertEqual(result, 11)
+            owner_main.assert_called_once_with([command, "--input", "request.json", "--adapter", "seedance-nz-image"])
+
+        with patch("ai_video_platform.skills.video_generation.cli.main", return_value=12) as owner_main:
+            result = dispatch("seedance-nz-video", "execute-seedance-nz", ["request.json", "--output-dir", "out"])
+        self.assertEqual(result, 12)
+        owner_main.assert_called_once_with(["execute-seedance-nz", "request.json", "--output-dir", "out"])
+
+    def test_seedance_video_rejects_unsupported_command(self) -> None:
+        self.assertEqual(main(["seedance-nz-video", "run", "request.json"]), 2)
+
+    def test_seedance_image_missing_key_fails_closed_before_transport(self) -> None:
+        from ai_video_platform.skills.product_image_panel_generation import generation_request_to_mapping, model_profile_to_mapping
+        from tests.skills.product_image_panel_generation._support import make_request, profile
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"SEEDANCE_NZ_API_KEY": ""}):
+            request_path = Path(directory) / "request.json"
+            request_path.write_text(
+                json.dumps({"request": generation_request_to_mapping(make_request()), "model_profile": model_profile_to_mapping(profile())}),
+                encoding="utf-8",
+            )
+            exit_code = main([
+                "seedance-nz-image",
+                "generate-product-image",
+                "--input",
+                str(request_path),
+                "--adapter",
+                "seedance-nz-image",
+            ])
+        self.assertEqual(exit_code, 2)
+
+    def test_seedance_image_default_remains_rejecting(self) -> None:
+        from ai_video_platform.skills.product_image_panel_generation import generation_request_to_mapping, model_profile_to_mapping
+        from tests.skills.product_image_panel_generation._support import make_request, profile
+
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "request.json"
+            request_path.write_text(
+                json.dumps({"request": generation_request_to_mapping(make_request()), "model_profile": model_profile_to_mapping(profile())}),
+                encoding="utf-8",
+            )
+            exit_code = main(["seedance-nz-image", "generate-product-image", "--input", str(request_path)])
+        self.assertEqual(exit_code, 2)
+
     def test_owner_routes_forward_only_to_public_cli(self) -> None:
         cases = (
             ("storyboard", "derive-production-panels", "ai_video_platform.skills.storyboard.cli", ["derive-production-panels", "--input", "request.json"]),

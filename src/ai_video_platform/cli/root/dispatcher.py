@@ -32,6 +32,10 @@ _ROUTES = {
     ("video-generation", "run"),
     ("qa-review", "review-artifact"),
     ("qa-review", "review-composition"),
+    ("seedance-nz-image", "generate-product-image"),
+    ("seedance-nz-image", "generate-panel"),
+    ("seedance-nz-image", "inspect-generation-request"),
+    ("seedance-nz-video", "execute-seedance-nz"),
 }
 
 
@@ -123,6 +127,12 @@ def dispatch(namespace: str, command: str, args: Sequence[str]) -> int:
         return owner_main([command, *args])
     if namespace == "image-panel":
         from ai_video_platform.skills.product_image_panel_generation.cli import main as owner_main
+        return owner_main([command, *args])
+    if namespace == "seedance-nz-image":
+        from ai_video_platform.skills.product_image_panel_generation.cli import main as owner_main
+        return owner_main([command, *args])
+    if namespace == "seedance-nz-video":
+        from ai_video_platform.skills.video_generation.cli import main as owner_main
         return owner_main([command, *args])
     if namespace == "video-planning":
         from ai_video_platform.skills.storyboard_master_video_planning.cli import main as owner_main
