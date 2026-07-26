@@ -6,8 +6,8 @@ import hashlib
 from typing import Mapping, Protocol
 
 
-class RunningHubVideoEnhancementAdapter(Protocol):
-    """Future RunningHub seam only; no HTTP, credential, endpoint, or SDK implementation."""
+class VideoEnhancementAdapter(Protocol):
+    """Provider-neutral adapter seam used by the orchestration interface."""
 
     def submit(self, request: Mapping[str, object]) -> str: ...
     def poll(self, provider_job_id: str) -> Mapping[str, object]: ...
