@@ -107,6 +107,7 @@ _AUTHORIZED_PROVIDER_NETWORK_ADAPTERS = {
     "src/ai_video_platform/skills/product_image_panel_generation/yunwu_adapters.py",
     "src/ai_video_platform/skills/video_generation/kie_adapter.py",
     "src/ai_video_platform/skills/video_generation/seedance_nz_adapter.py",
+    "src/ai_video_platform/skills/video_enhancement/runninghub_adapter.py",
     "src/ai_video_platform/skills/viral_research_asset_collection/apify.py",
     "src/ai_video_platform/skills/viral_research_asset_collection/media.py",
 }
