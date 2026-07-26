@@ -14,8 +14,12 @@ Authorization: `FTG-0-20260720-001`
 | `ai-video-platform video-generation run` | Video Generation | `ROUTED` |
 | `ai-video-platform qa-review review-artifact` | QA / Review | `ROUTED` |
 | `ai-video-platform qa-review review-composition` | QA / Review | `ROUTED` |
+| `ai-video-platform seedance-nz-image generate-product-image` | Product Image / Panel Generation | `ROUTED` |
+| `ai-video-platform seedance-nz-image generate-panel` | Product Image / Panel Generation | `ROUTED` |
+| `ai-video-platform seedance-nz-image inspect-generation-request` | Product Image / Panel Generation | `ROUTED` |
+| `ai-video-platform seedance-nz-video execute-seedance-nz` | Video Generation | `ROUTED` |
 
-The six Storyboard Artifact Chain targets above are executable through the
+The ten Root CLI targets above are executable through the
 thin root dispatcher `python -m ai_video_platform.cli`; the dispatcher only
 forwards to each owner's public CLI or public interface. Viral Research and
 Reference Analysis remain `TARGET_NOT_ROUTED` in this bounded wave. The
@@ -44,6 +48,8 @@ image-panel generate-panels
 video-planning build-storyboard-master
 qa-review review-artifact / review-composition
 video-generation run
+seedance-nz-image generate-product-image | generate-panel | inspect-generation-request
+seedance-nz-video execute-seedance-nz
 qa-review review-artifact / review-composition
 ```
 

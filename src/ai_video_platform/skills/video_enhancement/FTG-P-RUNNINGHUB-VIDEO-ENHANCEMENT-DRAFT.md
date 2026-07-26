@@ -1,4 +1,23 @@
-# FTG-P Draft — RunningHub Video Enhancement
+# FTG-P — RunningHub Video Enhancement
+
+Status: `AUTHORIZED_OFFLINE_IMPLEMENTATION`（2026-07-26 由 DRAFT 转正）。
+
+签署记录：
+
+- 授权人：杨少东（2026-07-26，Hermes 会话口头拍板：「授权卡从草稿转正，派 codex-05 把增强引擎装进系统，全程离线不花钱」）
+- 授权基线：FTG-0-20260720-001
+- 授权工作项：FT-05-003（实现真实 RunningHub adapter，全程离线开发，禁止真实调用）
+- 凭证引用：`env://RUNNINGHUB_API_KEY`（实现期不读取、不验证、不索取）
+- 绑定追加项（Hermes 在用户给 key + workflowId 后补录，无需重签）：
+  - `workflowId` / workflow API JSON SHA-256：待补录
+  - 实例类型与硬费用上限：待补录（建议上限 USD 0.20）
+- 真实首单：按「首单即验收」规则执行——首次真实增强即 smoke 验收，不另开复测卡
+
+以下原文为 2026-07-22 起草的 smoke 边界，全部继续有效。
+
+---
+
+# 原文（DRAFT 时期）
 
 Status: `DRAFT_NOT_AUTHORIZED`. This file is a future gate request, not execution
 authority. FT-05-002 must not call RunningHub, request a key, or resolve credentials.

@@ -14,3 +14,36 @@ venv/
 .dv-staging/
 htmlcov/
 .env.*
+
+# ============================================================
+# 生成物与素材规则（2026-07-26 用户拍板）
+# 生成的图片/视频、产品原始素材：永久不进 Git
+# 修改意见（revisions/）：进 Git
+# ============================================================
+
+# 生成物输出目录
+run/
+output/
+outputs/
+
+# 产品原始素材（本地保留，不上传）
+product_assets/
+assets-local/
+
+# 生成的媒体文件（全局屏蔽）
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.mov
+*.webm
+*.webp
+*.mp3
+*.wav
+*.avi
+*.mkv
+
+# 例外：离线测试必需的合成夹具（43 字节级假文件，非真实生成物）
+!**/fixtures/**
+!src/**/evidence/offline-acceptance-*/synthetic-*
