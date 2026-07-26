@@ -72,6 +72,62 @@ def fake_workflow_profile(profile_id: str = "fake-enhancement-profile") -> dict[
     return snapshot({**body, "profile_digest": content_digest(body)})
 
 
+def runninghub_workflow_profile(
+    *,
+    workflow_id: str,
+    workflow_json_sha256: str,
+    input_node_id: str,
+    input_field_name: str,
+    node_info_list: list[dict[str, object]],
+    output_origins: list[str],
+) -> dict[str, object]:
+    """Build a digest-bound profile from an externally approved workflow binding."""
+
+    body = {
+        "profile_id": "runninghub-" + workflow_id,
+        "profile_version": "1.0.0",
+        "provider_kind": "runninghub",
+        "supported_operations": ["upscale", "frame_interpolation", "denoise_restore"],
+        "operation_limits": {
+            "upscale_factors": [2, 4],
+            "frame_interpolation_factors": [2],
+            "denoise_strength_min": 0.0,
+            "denoise_strength_max": 1.0,
+        },
+        "media_limits": {
+            "max_duration_seconds": 30,
+            "max_width": 4096,
+            "max_height": 4096,
+            "max_fps": 120,
+        },
+        "execution_limits": {
+            "max_requests": 1,
+            "max_concurrency": 1,
+            "max_attempts": 1,
+            "max_timeout_seconds": 600,
+            "max_runtime_seconds": 600,
+        },
+        "rate_snapshot": {
+            "snapshot_at": "2026-07-22T00:00:00Z",
+            "instance_type": "unfixed",
+            "currency": "USD",
+            "rate_per_hour": 0.70,
+            "public_source": "RunningHub Enterprise Shared public page",
+            "estimate_only": True,
+            "not_a_quote": True,
+        },
+        "workflow_binding": {
+            "workflow_id": workflow_id,
+            "workflow_json_sha256": workflow_json_sha256,
+            "input_node_id": input_node_id,
+            "input_field_name": input_field_name,
+            "node_info_list": node_info_list,
+            "output_origins": output_origins,
+        },
+    }
+    return snapshot({**body, "profile_digest": content_digest(body)})
+
+
 def _mapping(value: object, field: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise EnhancementError(EnhancementErrorCode.INVALID_INPUT, f"{field} must be an object", field_paths=(field,))
@@ -151,7 +207,10 @@ class EnhancementPreflight:
         value = _mapping(raw, "authorization")
         if set(value) != {"authorization_id", "work_item_id"}:
             raise EnhancementError(EnhancementErrorCode.INVALID_INPUT, "authorization fields are invalid")
-        if value.get("authorization_id") != "FTG-0-20260720-001" or value.get("work_item_id") != "FT-05-002":
+        if (
+            value.get("authorization_id") != "FTG-0-20260720-001"
+            or value.get("work_item_id") not in {"FT-05-002", "FT-05-003"}
+        ):
             raise EnhancementError(EnhancementErrorCode.INVALID_INPUT, "authorization boundary is not effective")
         return {"authorization_id": str(value["authorization_id"]), "work_item_id": str(value["work_item_id"])}
 
@@ -249,15 +308,34 @@ class EnhancementPreflight:
     @staticmethod
     def _profile(raw: object) -> dict[str, object]:
         value = _mapping(raw, "workflow_profile")
-        required = {
+        common = {
             "profile_id", "profile_version", "profile_digest", "provider_kind", "supported_operations",
             "operation_limits", "media_limits", "execution_limits", "rate_snapshot",
         }
-        if set(value) != required or value.get("provider_kind") != "offline_fake" or value.get("profile_version") != "1.0.0":
-            raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "only an approved offline Fake profile is available")
-        approved = fake_workflow_profile(str(value.get("profile_id", "")))
-        if value != approved:
-            raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "workflow profile does not match an approved offline Fake profile")
+        provider_kind = value.get("provider_kind")
+        required = common if provider_kind == "offline_fake" else common | {"workflow_binding"}
+        if set(value) != required or provider_kind not in {"offline_fake", "runninghub"} or value.get("profile_version") != "1.0.0":
+            raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "workflow profile shape is invalid")
+        if provider_kind == "offline_fake":
+            approved = fake_workflow_profile(str(value.get("profile_id", "")))
+            if value != approved:
+                raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "workflow profile does not match an approved offline Fake profile")
+        else:
+            binding = _mapping(value.get("workflow_binding"), "workflow_profile.workflow_binding")
+            if set(binding) != {
+                "workflow_id", "workflow_json_sha256", "input_node_id", "input_field_name",
+                "node_info_list", "output_origins",
+            }:
+                raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "RunningHub workflow binding is incomplete")
+            for field in ("workflow_id", "input_node_id", "input_field_name"):
+                _string(binding, field, EnhancementErrorCode.WORKFLOW_PROFILE_INVALID)
+            workflow_digest = binding.get("workflow_json_sha256")
+            if not isinstance(workflow_digest, str) or _DIGEST.fullmatch(workflow_digest) is None:
+                raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "RunningHub workflow digest is invalid")
+            if not isinstance(binding.get("node_info_list"), list) or not binding["node_info_list"]:
+                raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "RunningHub node bindings are missing")
+            if not isinstance(binding.get("output_origins"), list) or not binding["output_origins"]:
+                raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "RunningHub output origins are missing")
         supplied = value.get("profile_digest")
         body = {key: item for key, item in value.items() if key != "profile_digest"}
         if not isinstance(supplied, str) or content_digest(body) != supplied:

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 import hashlib
 
-from .adapters import AdapterFailure, FakeVideoEnhancementAdapter, RejectingVideoEnhancementAdapter, RunningHubVideoEnhancementAdapter
+from .adapters import AdapterFailure, FakeVideoEnhancementAdapter, RejectingVideoEnhancementAdapter, VideoEnhancementAdapter
 from .errors import EnhancementError, EnhancementErrorCode, contains_sensitive_text, sanitize_sensitive
 from .ledger import ACTIVE_STATES, InMemoryEnhancementLedger
 from .models import CONTRACT_STATUS, SCHEMA_VERSION, content_digest, snapshot
@@ -17,7 +17,7 @@ class VideoEnhancementInterface:
     def __init__(
         self,
         *,
-        adapter: RunningHubVideoEnhancementAdapter | None = None,
+        adapter: VideoEnhancementAdapter | None = None,
         ledger: InMemoryEnhancementLedger | None = None,
     ) -> None:
         self._adapter = adapter
@@ -256,7 +256,7 @@ class VideoEnhancementInterface:
         _, ledger = self._dependencies()
         return self._result(ledger.get(job_id), recovered=True)
 
-    def _dependencies(self) -> tuple[RunningHubVideoEnhancementAdapter, InMemoryEnhancementLedger]:
+    def _dependencies(self) -> tuple[VideoEnhancementAdapter, InMemoryEnhancementLedger]:
         adapter = self._adapter
         ledger = self._ledger
         methods = ("submit", "poll", "cancel", "download")
