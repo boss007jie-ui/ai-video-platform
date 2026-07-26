@@ -24,6 +24,7 @@ from .product_data import (
     to_product_facts,
 )
 from .service import ImagePanelService
+from .seedance_nz_image_adapter import FakeSeedanceNzImageAdapter, SeedanceNzImageAdapter
 from .storyboard_panels import (
     ProductionStoryboardPanelService,
     StoryboardPanelRequest,
@@ -33,6 +34,7 @@ from .storyboard_panels import (
 __all__ = [
     "FakeImageProviderAdapter",
     "FakeProviderStep",
+    "FakeSeedanceNzImageAdapter",
     "CancellationToken",
     "ChannelProfile",
     "GenerationBudget",
@@ -50,6 +52,7 @@ __all__ = [
     "ProductFacts",
     "ProductionStoryboardPanelService",
     "RejectingImageProviderAdapter",
+    "SeedanceNzImageAdapter",
     "StoryboardPanelRequest",
     "calculate_request_hash",
     "calculate_model_profile_digest",

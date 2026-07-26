@@ -11,12 +11,19 @@ from typing import Sequence, TextIO
 
 from ai_video_platform.contracts import ContractError, parse_json_object
 from ai_video_platform.contracts.serialization import canonical_json
-from .adapters import FakeImageProviderAdapter, ImageProviderAdapter, RejectingImageProviderAdapter
+from .adapters import (
+    FakeImageProviderAdapter,
+    ImageProviderAdapter,
+    ProviderAsset,
+    ProviderInvocation,
+    RejectingImageProviderAdapter,
+)
 from .codec import generation_request_from_mapping, model_profile_from_mapping
 from .cli_ledger import CliExecutionLedger, assert_task_workspace
 from .errors import ImagePanelError, ImagePanelErrorCode
 from .models import GenerationCommand, GenerationOutcome, GenerationStatus
 from .service import ImagePanelService
+from .seedance_nz_image_adapter import SeedanceNzImageAdapter
 from .storyboard_panels import ProductionStoryboardPanelService, storyboard_panel_request_from_mapping
 from .yunwu_adapters import YunwuImage2Adapter, YunwuNanoBananaAdapter
 
@@ -45,7 +52,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", required=True)
     parser.add_argument(
         "--adapter",
-        choices=("rejecting", "fake", "yunwu-nano-banana", "yunwu-image2"),
+        choices=("rejecting", "fake", "yunwu-nano-banana", "yunwu-image2", "seedance-nz-image"),
         default="rejecting",
     )
     parser.add_argument("--output-dir")
@@ -57,6 +64,16 @@ def _adapter_from_name(name: str) -> ImageProviderAdapter:
         return FakeImageProviderAdapter()
     if name == "rejecting":
         return RejectingImageProviderAdapter()
+    if name == "seedance-nz-image":
+        try:
+            return SeedanceNzImageAdapter.from_environment()
+        except ValueError as exc:
+            raise ImagePanelError(
+                ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED,
+                "SEEDANCE_NZ_API_KEY is required",
+                category="authorization",
+                field_paths=("SEEDANCE_NZ_API_KEY",),
+            ) from exc
     adapter_type = {
         "yunwu-nano-banana": YunwuNanoBananaAdapter,
         "yunwu-image2": YunwuImage2Adapter,
@@ -142,6 +159,84 @@ def _persist_yunwu_artifact(
     }
 
 
+def _artifact_extension(content_type: str) -> str:
+    extension = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+    }.get(content_type.lower())
+    if extension is None:
+        raise ImagePanelError(
+            ImagePanelErrorCode.PROVIDER_FAILED,
+            "Provider returned an unsupported image content type",
+            category="provider",
+            field_paths=("content_type",),
+        )
+    return extension
+
+
+def _persist_seedance_artifact(
+    asset: ProviderAsset,
+    *,
+    output_dir: Path,
+    request_hash: str,
+    task_id: str,
+) -> dict[str, object]:
+    digest = hashlib.sha256(asset.content).hexdigest()
+    request_token = hashlib.sha256(request_hash.encode("utf-8")).hexdigest()[:16]
+    extension = _artifact_extension(asset.content_type)
+    output_path = output_dir / f"seedance-nz-{request_token}-{digest[:16]}{extension}"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            if output_path.read_bytes() != asset.content:
+                raise ImagePanelError(
+                    ImagePanelErrorCode.CONTRACT_INVALID,
+                    "CLI output artifact conflicts with an existing file",
+                    category="conflict",
+                    field_paths=("output_dir",),
+                )
+        else:
+            with output_path.open("xb") as stream:
+                stream.write(asset.content)
+    except ImagePanelError:
+        raise
+    except OSError as exc:
+        raise ImagePanelError(
+            ImagePanelErrorCode.CONTRACT_INVALID,
+            "CLI output artifact could not be persisted",
+            field_paths=("output_dir",),
+            details={"cause_type": type(exc).__name__},
+        ) from exc
+    return {
+        "path": str(output_path),
+        "provider_asset_id": asset.provider_asset_id,
+        "task_id": task_id,
+        "content_type": asset.content_type,
+        "byte_size": len(asset.content),
+        "sha256": digest,
+        "width": asset.width,
+        "height": asset.height,
+    }
+
+
+def _sanitize_seedance_output(payload: dict) -> None:
+    manifest = payload.get("asset_manifest")
+    if not isinstance(manifest, dict):
+        return
+    manifest_payload = manifest.get("payload")
+    if not isinstance(manifest_payload, dict):
+        return
+    assets = manifest_payload.get("assets")
+    if not isinstance(assets, list):
+        return
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        provider_metadata = asset.get("provider_metadata")
+        if isinstance(provider_metadata, dict):
+            provider_metadata.pop("result_url", None)
+
+
 def _outcome_mapping(
     outcome: GenerationOutcome,
     *,
@@ -168,6 +263,20 @@ def _outcome_mapping(
             )
             payload["provider_network_performed"] = receipt.provider_network_performed
             payload["provider_receipt"] = receipt.to_dict()
+        if artifact_receipt is not None:
+            payload["artifact_receipt"] = artifact_receipt
+    elif isinstance(adapter, SeedanceNzImageAdapter):
+        _sanitize_seedance_output(payload)
+        payload["provider_smoke"] = "CONTROLLED_FIRST_RUN_REQUIRED"
+        try:
+            receipt = adapter.last_receipt
+        except RuntimeError:
+            payload["provider_network_performed"] = False
+        else:
+            provider_receipt = receipt.to_dict()
+            provider_receipt.pop("result_url", None)
+            payload["provider_network_performed"] = receipt.provider_network_performed
+            payload["provider_receipt"] = provider_receipt
         if artifact_receipt is not None:
             payload["artifact_receipt"] = artifact_receipt
     return payload
@@ -248,10 +357,12 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
             return 0 if replay.get("status") == GenerationStatus.COMPLETED.value else 3
         try:
             adapter = _adapter_from_name(args.adapter)
+            captured_assets: list[tuple[ProviderInvocation, ProviderAsset]] = []
             service = ImagePanelService(
                 provider=adapter,
                 profiles=(profile,),
                 max_concurrency=profile.max_concurrency,
+                asset_sink=lambda invocation, asset: captured_assets.append((invocation, asset)),
             )
             if args.command == GenerationCommand.GENERATE_PRODUCT_IMAGE.value:
                 outcome = service.generate_product_image(request)
@@ -266,6 +377,21 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
                     adapter,
                     output_dir=output_dir,
                     request_hash=request.request_hash,
+                )
+            elif isinstance(adapter, SeedanceNzImageAdapter) and outcome.status is GenerationStatus.COMPLETED:
+                if len(captured_assets) != 1:
+                    raise ImagePanelError(
+                        ImagePanelErrorCode.CONTRACT_INVALID,
+                        "Seedance.nz CLI persistence requires exactly one completed image asset",
+                        category="state",
+                        field_paths=("request.items",),
+                    )
+                _invocation, provider_asset = captured_assets[0]
+                artifact_receipt = _persist_seedance_artifact(
+                    provider_asset,
+                    output_dir=output_dir,
+                    request_hash=request.request_hash,
+                    task_id=adapter.last_receipt.task_id or provider_asset.provider_asset_id,
                 )
             outcome_mapping = _outcome_mapping(
                 outcome,

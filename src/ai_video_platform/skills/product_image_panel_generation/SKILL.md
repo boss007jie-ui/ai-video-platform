@@ -22,9 +22,10 @@ $env:PYTHONPATH='src'
 py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli inspect-generation-request --input <request.json>
 py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli generate-product-image --input <request.json> --adapter fake
 py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli generate-panel --input <request.json> --adapter fake
+py -3.14 -m ai_video_platform.skills.product_image_panel_generation.cli generate-panel --input <request.json> --adapter seedance-nz-image --output-dir <task-workspace-output>
 ```
 
-`--adapter` accepts only `rejecting` or `fake`. It defaults to `rejecting`. No real Provider adapter or Provider SDK is included. The explicit fake mode is deterministic and offline.
+`--adapter` defaults to `rejecting`; real network access is never implicit. `seedance-nz-image` is an explicit public binding for `generate-product-image` and `generate-panel`, requires `SEEDANCE_NZ_API_KEY`, and persists successful `.jpg` or `.png` bytes plus a sanitized receipt inside the input task workspace. `inspect-generation-request` can validate that binding without invoking the Provider. `generate-panels` remains deterministic offline-only and rejects every real Provider adapter. The explicit fake mode is deterministic and offline.
 
 Exit codes are stable:
 
