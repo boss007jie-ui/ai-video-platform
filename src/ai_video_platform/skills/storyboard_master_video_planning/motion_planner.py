@@ -242,13 +242,15 @@ def _squeeze_paths(panel: Mapping[str, Any]) -> list[list[list[float]]]:
     width = product_box[2] - product_box[0]
     left_box = tuple(float(value) for value in left["bbox"])
     right_box = tuple(float(value) for value in right["bbox"])
+    left_center_x, left_center_y = _box_center(left_box)
+    right_center_x, right_center_y = _box_center(right_box)
     return [
         [
-            [_rounded(left_box[2]), _rounded((left_box[1] + left_box[3]) / 2)],
+            [_rounded(max(left_center_x, product_box[0])), left_center_y],
             [_rounded(product_center_x - width * 0.2), product_center_y],
         ],
         [
-            [_rounded(right_box[0]), _rounded((right_box[1] + right_box[3]) / 2)],
+            [_rounded(min(right_center_x, product_box[2])), right_center_y],
             [_rounded(product_center_x + width * 0.2), product_center_y],
         ],
     ]

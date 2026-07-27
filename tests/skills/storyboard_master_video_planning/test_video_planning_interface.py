@@ -17,12 +17,18 @@ from ai_video_platform.skills.storyboard_master_video_planning.cli import run_cl
 from ai_video_platform.skills.storyboard_master_video_planning.sheet_renderer import (
     CAMERA_RED,
     SUBJECT_BLUE,
+    _decode_png,
     _draw_in_frame_annotations,
     render_storyboard_sheets,
 )
 
 
 PANEL_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+
+def color_count(png: bytes, color: tuple[int, int, int, int]) -> int:
+    _, _, pixels = _decode_png(png)
+    return sum(tuple(pixels[index:index + 4]) == color for index in range(0, len(pixels), 4))
 
 
 def planning_request() -> dict[str, object]:
@@ -175,6 +181,39 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
             self.assertEqual(manifest["layout_version"], "storyboard-master-strip-v3")
             self.assertEqual(manifest["pages"][0]["row_panel_counts"], [2])
             self.assertFalse(manifest["execution_policy"]["provider_execution_input"])
+
+    def test_cli_automatically_plans_arrows_from_agent_visual_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            baseline = planning_request()
+            baseline["output_root"] = str(Path(temporary) / "baseline")
+            self.assertTrue(run_cli("build-storyboard-master", baseline)["ok"])
+
+            request = planning_request()
+            request["output_root"] = str(Path(temporary) / "vision-guided")
+            request["sheet_render_metadata"]["panel_visual_observations"] = {
+                "panel-002": {
+                    "confidence": 0.95,
+                    "objects": [
+                        {"id": "product", "kind": "product", "bbox": [0.25, 0.3, 0.75, 0.8]},
+                    ],
+                    "contacts": [],
+                    "motion_candidates": [
+                        {
+                            "role": "subject", "action": "rotate", "subject_id": "product",
+                            "points": [[0.25, 0.55], [0.35, 0.35], [0.55, 0.3], [0.75, 0.45]],
+                            "confidence": 0.93,
+                        }
+                    ],
+                }
+            }
+
+            result = run_cli("build-storyboard-master", request)
+
+            self.assertTrue(result["ok"])
+            baseline_png = (Path(temporary) / "baseline" / "video_generation_storyboard" / "storyboard_master_sheet_001.png").read_bytes()
+            guided_png = (Path(temporary) / "vision-guided" / "video_generation_storyboard" / "storyboard_master_sheet_001.png").read_bytes()
+            self.assertGreater(color_count(guided_png, CAMERA_RED), color_count(baseline_png, CAMERA_RED))
+            self.assertGreater(color_count(guided_png, SUBJECT_BLUE), color_count(baseline_png, SUBJECT_BLUE))
 
     def test_renderer_paginates_ten_panels_and_replays_byte_for_byte(self) -> None:
         entries = []

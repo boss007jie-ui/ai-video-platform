@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -11,6 +12,7 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from ai_video_platform.skills.storyboard_master_video_planning import PlanningError, PlanningErrorCode, VideoPlanningInterface
+from ai_video_platform.skills.storyboard_master_video_planning.cli import run_cli
 from tests.skills.storyboard_master_video_planning.test_video_planning_interface import planning_request
 
 
@@ -92,6 +94,27 @@ class VideoPlanningFailureTests(unittest.TestCase):
         request = planning_request()
         request["reference_assets"][0]["sha256"] = "not-a-digest"
         self.assert_code(request, PlanningErrorCode.INVALID_INPUT)
+
+    def test_cli_rejects_invalid_visual_observations_before_writing_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            request = planning_request()
+            request["output_root"] = temporary
+            request["sheet_render_metadata"]["panel_visual_observations"] = {
+                "panel-002": {
+                    "confidence": 0.95,
+                    "objects": [
+                        {"id": "product", "kind": "product", "bbox": [0.25, 0.3, 1.2, 0.8]},
+                    ],
+                    "contacts": [],
+                    "motion_candidates": [],
+                }
+            }
+
+            result = run_cli("build-storyboard-master", request)
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error"]["code"], PlanningErrorCode.INVALID_INPUT.value)
+            self.assertFalse((Path(temporary) / "video_generation_storyboard").exists())
 
 
 if __name__ == "__main__":

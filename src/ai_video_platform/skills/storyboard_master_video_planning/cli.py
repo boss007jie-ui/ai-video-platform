@@ -11,22 +11,18 @@ from typing import Mapping, Sequence
 from .errors import PlanningError, PlanningErrorCode
 from .interface import VideoPlanningInterface
 from .models import canonical_json
+from .motion_planner import plan_motion_annotations
 from .sheet_renderer import render_storyboard_sheets
 
 
 def _write_outputs(output_root: Path, result: Mapping[str, object], document: Mapping[str, object]) -> None:
     import base64
 
-    root = output_root / "video_generation_storyboard"
-    root.mkdir(parents=True, exist_ok=False)
     names = {
         "video_generation_storyboard_master": "video_generation_storyboard_master.json",
         "shot_motion_plan": "shot_motion_plan.json", "video_execution_package": "video_execution_package.json",
         "first_frame_mapping": "first_frame_mapping.json", "reference_role_mapping": "reference_role_mapping.json",
     }
-    for key, name in names.items():
-        (root / name).write_text(json.dumps(result["artifacts"][key], ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (root / "video_planning_provenance.json").write_text(json.dumps(result["provenance"], ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     encoded_panels = document.get("panel_bytes")
     metadata = document.get("sheet_render_metadata")
     if not isinstance(encoded_panels, Mapping) or not isinstance(metadata, Mapping):
@@ -39,7 +35,25 @@ def _write_outputs(output_root: Path, result: Mapping[str, object], document: Ma
         }
     except ValueError as exc:
         raise PlanningError(PlanningErrorCode.INVALID_INPUT, "panel_bytes must contain base64 PNG values") from exc
-    rendered = render_storyboard_sheets(result["artifacts"]["video_generation_storyboard_master"], panel_bytes, metadata)
+    master = result["artifacts"]["video_generation_storyboard_master"]
+    render_metadata = dict(metadata)
+    observations = render_metadata.get("panel_visual_observations")
+    try:
+        if observations is not None:
+            render_metadata["motion_annotations"] = plan_motion_annotations(master, observations)
+        rendered = render_storyboard_sheets(master, panel_bytes, render_metadata)
+    except ValueError as exc:
+        raise PlanningError(
+            PlanningErrorCode.INVALID_INPUT,
+            "Sheet visual observations or render metadata are invalid",
+            field_paths=("sheet_render_metadata",),
+        ) from exc
+
+    root = output_root / "video_generation_storyboard"
+    root.mkdir(parents=True, exist_ok=False)
+    for key, name in names.items():
+        (root / name).write_text(json.dumps(result["artifacts"][key], ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (root / "video_planning_provenance.json").write_text(json.dumps(result["provenance"], ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (root / "storyboard_master_sheet_manifest.json").write_text(
         json.dumps(rendered.manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

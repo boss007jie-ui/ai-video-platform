@@ -145,6 +145,30 @@ class MotionPlannerTests(unittest.TestCase):
             ],
         )
 
+    def test_squeeze_paths_stay_inward_when_hand_boxes_overlap_product(self) -> None:
+        visual = {
+            "S01-P01": {
+                "confidence": 0.96,
+                "objects": [
+                    {"id": "product", "kind": "product", "bbox": [0.18, 0.34, 0.79, 0.67]},
+                    {"id": "left-hand", "kind": "hand", "bbox": [0.0, 0.34, 0.4, 0.82]},
+                    {"id": "right-hand", "kind": "hand", "bbox": [0.6, 0.34, 1.0, 0.82]},
+                ],
+                "contacts": [],
+                "motion_candidates": [],
+            }
+        }
+
+        result = plan_motion_annotations(master_entry(subject_motion="two hands squeeze"), visual)
+
+        self.assertEqual(
+            result["S01-P01"],
+            [
+                {"role": "subject", "points": [[0.2, 0.58], [0.363, 0.505]]},
+                {"role": "subject", "points": [[0.79, 0.58], [0.607, 0.505]]},
+            ],
+        )
+
     def test_rotate_and_thumb_press_keep_separate_visual_paths(self) -> None:
         visual = observation()
         panel = visual["S01-P01"]
