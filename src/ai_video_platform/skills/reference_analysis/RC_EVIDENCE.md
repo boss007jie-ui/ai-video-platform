@@ -5,7 +5,7 @@
 - Authorization: `FTG-0-20260720-001`
 - Work item: `FT-02-001`
 - Branch: `ft/codex-02-research-reference`
-- Implementation evidence head: `89e69fc`
+- Implementation evidence head: `f198dd0`
 - Schema/algorithm version: `1.0.0`
 - Status: `FIRST_SAMPLE_REVIEW`
 - Visual final: **not claimed**
@@ -18,7 +18,9 @@ The increment preserves the public `prepare-reference-breakdown` and `analyze-st
 - content-driven visual/audio boundary detection with deterministic offline semantic signals;
 - ordered, contiguous fine segments with exact previous/next links and segmentation reasons;
 - real start, representative, and end frames per segment, each bound to source video, interval, role, path, and SHA-256;
+- publication-time re-decoding of every declared fine keyframe from the SHA-verified selected video at its recorded timestamp, rejecting substituted or generated PNGs;
 - fifteen evidence-bearing analysis categories per fine segment, with unsupported claims represented as `UNAVAILABLE`;
+- local audio-stream probing at preparation and publication, with audio observations forced to `UNAVAILABLE` when the source has no audio stream;
 - adjacent-only semantic merging with exact source segment/frame provenance;
 - a formula derived from the confirmed ordered core beats;
 - atomic publication of `fine_segments.json`, `keyframes/`, `segment_analysis.json`, `reference_storyboard_analysis.json`, `reference_storyboard_analysis.md`, `reference_storyboard_analysis_board.png`, and `analysis_provenance.json`;
@@ -30,16 +32,16 @@ The increment preserves the public `prepare-reference-breakdown` and `analyze-st
 
 | Command | Result |
 |---|---|
-| `$env:PYTHONPATH='src'; python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 37 run, 36 passed, 1 host-capability skip, 0 failures, 89.171s |
+| `$env:PYTHONPATH='src'; python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 37 run, 36 passed, 1 host-capability skip, 0 failures, 96.902s |
 | Fine local-media integration plus shared subprocess escape under `NetworkDenyGuard` | PASS - 2/2 |
-| `python tools/run_offline_tests.py` | AFFECTED SUITE - 583 run, 579 passed, 3 skips, 1 shared environment-path error, 94.978s |
+| `python tools/run_offline_tests.py` | AFFECTED SUITE - 583 run, 579 passed, 3 skips, 1 shared environment-path error, 103.066s |
 | `git diff --check` and owner-scope diff inspection | PASS |
 
 The owned skip is the existing Windows environment case where symlink creation is unavailable. The only complete-suite error is `architecture.test_clean_room_boundaries.CleanRoomBoundaryTests.test_adoption_manifest_has_no_unapproved_adoptions`: the shared test derives the control root as a sibling of the current Git worktree and therefore looks for `C:\Users\boss0\.codex\worktrees\9352\AI Video Platform Re-architecture Control\08_ADOPTION_MANIFEST.json`, which does not exist in this Codex-managed worktree layout. That shared architecture test is outside the authorized `reference_analysis` scope and was not modified.
 
 ## First review sample
 
-- Root: `run/FT-02-001-reference-storyboard-increment-review-03/reference_analysis/`
+- Root: `run/FT-02-001-reference-storyboard-increment-review-04/reference_analysis/`
 - Source fixture: versioned synthetic local video, 4000 ms
 - Fine segments: 10
 - Source keyframes: 30
