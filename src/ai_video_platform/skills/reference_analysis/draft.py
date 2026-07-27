@@ -13,15 +13,20 @@ import subprocess
 import tempfile
 
 from .errors import ErrorCode, SkillError
+from .fine_segments import build_fine_segments, detect_boundary_signals
 from .models import ReferenceBreakdownDraftResult
 from .storyboard import _mapping, _strict_keys, _text, _validate_metadata, _validate_source, _workspace
 
 
 _VERSION = "1.0.0"
 _MODE = "local_draft_v1"
+_FINE_MODE = "local_fine_segments_v1"
 _OUTPUT_ROOT = "reference_breakdown_draft"
 _REQUEST_REQUIRED = {"analysis_version", "mode", "selected_reference_video"}
 _REQUEST_ALLOWED = _REQUEST_REQUIRED | {"video_metadata", "current_product", "policy"}
+_FINE_ALLOWED = _REQUEST_REQUIRED | {
+    "video_metadata", "current_product", "segmentation_policy", "offline_analysis",
+}
 _POLICY_KEYS = {"interval_ms", "max_keyframes"}
 _PRODUCT_KEYS = {"product_id", "category", "display_name"}
 _OBSERVATION_FIELDS = (
@@ -43,6 +48,69 @@ _OBSERVATION_FIELDS = (
 _FORBIDDEN_INPUT_KEYS = {
     "cloud_video_llm", "cloud_mode", "provider", "provider_request", "upload", "external_upload",
 }
+
+
+def _number(value: object, field: str, *, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not minimum <= float(value) <= maximum:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Required number is invalid", field_paths=(field,))
+    return float(value)
+
+
+def _fine_policy(value: object) -> dict[str, object]:
+    policy = _mapping(value, "segmentation_policy")
+    keys = {"sampling_fps", "visual_change_threshold", "min_segment_ms", "enable_audio_boundaries"}
+    _strict_keys(policy, keys, keys, "segmentation_policy")
+    enabled = policy.get("enable_audio_boundaries")
+    if not isinstance(enabled, bool):
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "enable_audio_boundaries must be a boolean",
+            field_paths=("segmentation_policy.enable_audio_boundaries",),
+        )
+    return {
+        "sampling_fps": _integer(policy.get("sampling_fps"), "segmentation_policy.sampling_fps", minimum=1, maximum=30),
+        "visual_change_threshold": _number(
+            policy.get("visual_change_threshold"),
+            "segmentation_policy.visual_change_threshold",
+            minimum=0.0,
+            maximum=1.0,
+        ),
+        "min_segment_ms": _integer(
+            policy.get("min_segment_ms"), "segmentation_policy.min_segment_ms", minimum=1,
+        ),
+        "enable_audio_boundaries": enabled,
+    }
+
+
+def _offline_analysis(value: object) -> dict[str, object]:
+    analysis = _mapping(value, "offline_analysis")
+    keys = {"analyzer_id", "boundary_signals", "segment_annotations"}
+    _strict_keys(analysis, keys, keys, "offline_analysis")
+    analyzer_id = _text(analysis.get("analyzer_id"), "offline_analysis.analyzer_id")
+    signals = analysis.get("boundary_signals")
+    annotations = analysis.get("segment_annotations")
+    if not isinstance(signals, list) or not isinstance(annotations, list):
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "Offline signals and annotations must be arrays",
+            field_paths=("offline_analysis",),
+        )
+    normalized_signals: list[dict[str, object]] = []
+    for index, raw in enumerate(signals):
+        field = f"offline_analysis.boundary_signals[{index}]"
+        signal = _mapping(raw, field)
+        signal_keys = {"timestamp_ms", "reasons", "evidence"}
+        _strict_keys(signal, signal_keys, signal_keys, field)
+        timestamp_ms = _integer(signal.get("timestamp_ms"), f"{field}.timestamp_ms", minimum=1)
+        reasons = signal.get("reasons")
+        if not isinstance(reasons, list) or not reasons or any(not isinstance(reason, str) or not reason for reason in reasons):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Boundary reasons must be a non-empty array", field_paths=(f"{field}.reasons",))
+        normalized_signals.append({
+            "timestamp_ms": timestamp_ms,
+            "reasons": list(reasons),
+            "evidence": signal.get("evidence"),
+        })
+    return {"analyzer_id": analyzer_id, "boundary_signals": normalized_signals, "segment_annotations": annotations}
 
 
 def _canonical(value: object) -> bytes:
@@ -275,6 +343,79 @@ def _published_replay(workspace: Path, request_digest: str) -> ReferenceBreakdow
     return ReferenceBreakdownDraftResult(status="COMPLETED", output_root=_OUTPUT_ROOT, artifact=manifest)
 
 
+def _prepare_fine_breakdown(
+    normalized: dict[str, object],
+    *,
+    root: Path,
+    request_digest: str,
+) -> ReferenceBreakdownDraftResult:
+    replay = _published_replay(root, request_digest)
+    if replay is not None:
+        return replay
+    source, _ = _validate_source({"selected_reference_video": normalized["selected_reference_video"]}, root)
+    if str(source["source_platform"]).casefold() != "local":
+        raise SkillError(
+            ErrorCode.SCOPE_FORBIDDEN,
+            "local_fine_segments_v1 accepts only explicitly selected local media",
+            field_paths=("selected_reference_video.source_platform",),
+        )
+    media = root / str(source["media_path"])
+    if "video_metadata" in normalized:
+        metadata = _validate_metadata(normalized["video_metadata"])
+        metadata_source = "caller_supplied"
+    else:
+        metadata = _probe_metadata(media)
+        metadata_source = "local_ffprobe"
+    policy = _fine_policy(normalized.get("segmentation_policy"))
+    offline = _offline_analysis(normalized.get("offline_analysis"))
+    local_signals = detect_boundary_signals(media, int(metadata["duration_ms"]), policy)
+    signals = [*local_signals, *offline["boundary_signals"]]  # type: ignore[list-item]
+    segments = build_fine_segments(
+        str(source["source_id"]),
+        int(metadata["duration_ms"]),
+        signals,
+        int(policy["min_segment_ms"]),
+    )
+    stage = Path(tempfile.mkdtemp(prefix=f".{_OUTPUT_ROOT}-stage-", dir=root))
+    target = root / _OUTPUT_ROOT
+    manifest = {
+        "draft": True,
+        "draft_version": _FINE_MODE,
+        "analysis_version": _VERSION,
+        "request_digest": request_digest,
+        "method_provenance": {
+            "mode": _FINE_MODE,
+            "metadata_strategy": metadata_source,
+            "boundary_detector": "local_ffmpeg_plus_offline_signals",
+            "offline_analyzer_id": offline["analyzer_id"],
+            "visual_confirmation": "OFFLINE_EVIDENCE_ONLY",
+        },
+        "network_calls": 0,
+        "provider_calls": 0,
+        "external_upload": False,
+        "executable": False,
+        "source_video": {"media_path": source["media_path"], "sha256": source["sha256"]},
+        "segmentation_policy": policy,
+        "fine_segment_count": len(segments),
+        "keyframes": [],
+        "artifacts": ["draft_manifest.json", "fine_segments.json"],
+    }
+    try:
+        (stage / "fine_segments.json").write_bytes(_pretty(segments))
+        (stage / "draft_manifest.json").write_bytes(_pretty(manifest))
+        try:
+            os.replace(stage, target)
+        except FileExistsError as exc:
+            raise SkillError(ErrorCode.OUTPUT_CONFLICT, "Draft output was concurrently published") from exc
+    except SkillError:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    except Exception as exc:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise SkillError(ErrorCode.WRITE_FAILED, "Fine-segment draft publication failed") from exc
+    return ReferenceBreakdownDraftResult(status="COMPLETED", output_root=_OUTPUT_ROOT, artifact=manifest)
+
+
 def prepare_reference_breakdown(
     request: Mapping[str, object], *, workspace: Path,
 ) -> ReferenceBreakdownDraftResult:
@@ -289,17 +430,21 @@ def prepare_reference_breakdown(
             "Local draft preparation cannot use cloud video LLMs, Providers, or uploads",
             field_paths=tuple(forbidden),
         )
-    _strict_keys(normalized, _REQUEST_REQUIRED, _REQUEST_ALLOWED, "request")
+    mode = normalized.get("mode")
+    allowed = _FINE_ALLOWED if mode == _FINE_MODE else _REQUEST_ALLOWED
+    _strict_keys(normalized, _REQUEST_REQUIRED, allowed, "request")
     if normalized.get("analysis_version") != _VERSION:
         raise SkillError(
             ErrorCode.VERSION_UNSUPPORTED,
             "Only local draft analysis version 1.0.0 is supported",
             field_paths=("analysis_version",),
         )
-    if normalized.get("mode") != _MODE:
-        raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Only mode=local_draft_v1 is allowed", field_paths=("mode",))
     root = _workspace(workspace)
     request_digest = _digest(_canonical(normalized))
+    if mode == _FINE_MODE:
+        return _prepare_fine_breakdown(normalized, root=root, request_digest=request_digest)
+    if mode != _MODE:
+        raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Only mode=local_draft_v1 is allowed", field_paths=("mode",))
     replay = _published_replay(root, request_digest)
     if replay is not None:
         return replay
