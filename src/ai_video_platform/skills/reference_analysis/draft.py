@@ -474,7 +474,10 @@ def _prepare_fine_breakdown(
             "keyframes": [
                 {
                     "keyframe_id": frame["frame_id"],
+                    "source_video_id": frame["source_video_id"],
+                    "segment_id": frame["segment_id"],
                     "timestamp_ms": frame["timestamp_ms"],
+                    "frame_role": frame["frame_role"],
                     "path": frame["asset_path"],
                     "sha256": frame["sha256"],
                 }

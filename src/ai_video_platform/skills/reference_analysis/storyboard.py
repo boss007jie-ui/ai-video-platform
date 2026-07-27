@@ -14,6 +14,7 @@ import zlib
 
 from .errors import ErrorCode, SkillError
 from .models import StoryboardAnalysisResult
+from .segment_storyboard import OBSERVATION_FIELDS as _FINE_OBSERVATION_FIELDS
 from .storyboard_boards import decode_png, render_analysis_board, render_replication_board, render_shot_evidence_board
 
 
@@ -23,6 +24,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TOP_LEVEL_REQUIRED = {"analysis_version", "selected_reference_video", "video_metadata", "analysis_configuration"}
 _TOP_LEVEL_ALLOWED = _TOP_LEVEL_REQUIRED | {"viral_research_pack", "popular_comments"}
 _CONFIG_KEYS = {"current_product", "keyframes", "timeline", "bottom_line_formula"}
+_FINE_CONFIG_KEYS = {"fine_segments", "segment_analysis", "core_beats"}
 _OBSERVATION_FIELDS = (
     "scene",
     "shot_scale",
@@ -245,7 +247,8 @@ def _validate_keyframes(
         field = f"analysis_configuration.keyframes[{index}]"
         record = _mapping(raw, field)
         keys = {"keyframe_id", "timestamp_ms", "path", "sha256"}
-        _strict_keys(record, keys, keys, field)
+        owner_keys = {"source_video_id", "segment_id", "frame_role"}
+        _strict_keys(record, keys, keys | owner_keys, field)
         keyframe_id = _text(record.get("keyframe_id"), f"{field}.keyframe_id")
         if keyframe_id in records:
             raise SkillError(ErrorCode.VALIDATION_FAILED, "Keyframe identities must be unique", field_paths=(f"{field}.keyframe_id",))
@@ -262,6 +265,20 @@ def _validate_keyframes(
         record["keyframe_id"] = keyframe_id
         record["timestamp_ms"] = timestamp
         record["path"] = Path(str(record["path"])).as_posix()
+        present_owner_keys = set(record) & owner_keys
+        if present_owner_keys and present_owner_keys != owner_keys:
+            raise SkillError(
+                ErrorCode.VALIDATION_FAILED,
+                "Fine keyframe ownership fields must be complete",
+                field_paths=(field,),
+            )
+        if present_owner_keys:
+            record["source_video_id"] = _text(record.get("source_video_id"), f"{field}.source_video_id")
+            record["segment_id"] = _text(record.get("segment_id"), f"{field}.segment_id")
+            role = _text(record.get("frame_role"), f"{field}.frame_role")
+            if role not in {"start", "representative", "end", "action_peak", "product_state_change", "subtitle_change"}:
+                raise SkillError(ErrorCode.VALIDATION_FAILED, "Fine keyframe role is invalid", field_paths=(f"{field}.frame_role",))
+            record["frame_role"] = role
         records[keyframe_id] = record
         payloads[keyframe_id] = payload
     return records, payloads, images
@@ -355,6 +372,172 @@ def _validate_timeline(
     if used_keyframes != set(keyframes):
         raise SkillError(ErrorCode.EVIDENCE_MISSING, "Every declared keyframe must bind to one beat", field_paths=("analysis_configuration.keyframes",))
     return beats, used_keyframes
+
+
+def _validate_fine_package(
+    config: Mapping[str, object],
+    *,
+    duration_ms: int,
+    source_video_id: str,
+    keyframes: Mapping[str, Mapping[str, object]],
+    timeline: list[dict[str, object]],
+    formula: Mapping[str, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    raw_segments = config.get("fine_segments")
+    if not isinstance(raw_segments, list) or not raw_segments:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "fine_segments must be a non-empty array", field_paths=("analysis_configuration.fine_segments",))
+    segments: list[dict[str, object]] = []
+    prior_end = 0
+    segment_ids: set[str] = set()
+    segment_keys = {
+        "segment_id", "source_video_id", "start_ms", "end_ms", "duration_ms",
+        "segmentation_reasons", "previous_segment_id", "next_segment_id",
+    }
+    for index, raw in enumerate(raw_segments):
+        field = f"analysis_configuration.fine_segments[{index}]"
+        segment = _mapping(raw, field)
+        _strict_keys(segment, segment_keys, segment_keys, field)
+        segment_id = _text(segment.get("segment_id"), f"{field}.segment_id")
+        if segment_id in segment_ids:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Fine segment identities must be unique", field_paths=(f"{field}.segment_id",))
+        segment_ids.add(segment_id)
+        if _text(segment.get("source_video_id"), f"{field}.source_video_id") != source_video_id:
+            raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Fine segment source video does not match the selected reference", field_paths=(f"{field}.source_video_id",))
+        start_ms = _integer(segment.get("start_ms"), f"{field}.start_ms")
+        end_ms = _integer(segment.get("end_ms"), f"{field}.end_ms", minimum=1)
+        declared_duration = _integer(segment.get("duration_ms"), f"{field}.duration_ms", minimum=1)
+        if start_ms != prior_end or end_ms <= start_ms or end_ms > duration_ms or declared_duration != end_ms - start_ms:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Fine segments must be contiguous, ordered, and duration exact", field_paths=(field,))
+        expected_previous = None if index == 0 else str(raw_segments[index - 1]["segment_id"])
+        expected_next = None if index + 1 == len(raw_segments) else str(raw_segments[index + 1]["segment_id"])
+        if segment.get("previous_segment_id") != expected_previous or segment.get("next_segment_id") != expected_next:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Fine segment adjacency links are invalid", field_paths=(field,))
+        reasons = segment.get("segmentation_reasons")
+        if not isinstance(reasons, list) or not reasons:
+            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Fine segment boundary reasons are required", field_paths=(f"{field}.segmentation_reasons",))
+        segment.update({"segment_id": segment_id, "start_ms": start_ms, "end_ms": end_ms, "duration_ms": declared_duration})
+        segments.append(segment)
+        prior_end = end_ms
+    if prior_end != duration_ms:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Fine segments must cover the selected video duration", field_paths=("analysis_configuration.fine_segments",))
+
+    frame_ids_by_segment: dict[str, list[str]] = {segment_id: [] for segment_id in segment_ids}
+    roles_by_segment: dict[str, set[str]] = {segment_id: set() for segment_id in segment_ids}
+    for frame_id, frame in keyframes.items():
+        segment_id = str(frame.get("segment_id", ""))
+        if segment_id not in segment_ids or frame.get("source_video_id") != source_video_id:
+            raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Fine keyframe ownership does not match a source segment", field_paths=("analysis_configuration.keyframes",))
+        segment = next(item for item in segments if item["segment_id"] == segment_id)
+        timestamp_ms = int(frame["timestamp_ms"])
+        if not int(segment["start_ms"]) <= timestamp_ms < int(segment["end_ms"]):
+            raise SkillError(ErrorCode.MEDIA_INVALID, "Fine keyframe timestamp is outside its source segment", field_paths=("analysis_configuration.keyframes",))
+        frame_ids_by_segment[segment_id].append(frame_id)
+        roles_by_segment[segment_id].add(str(frame.get("frame_role")))
+    for segment_id, roles in roles_by_segment.items():
+        if not {"start", "representative", "end"}.issubset(roles):
+            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Every fine segment requires start, representative, and end frames", field_paths=(f"segment:{segment_id}",))
+
+    raw_analyses = config.get("segment_analysis")
+    if not isinstance(raw_analyses, list) or len(raw_analyses) != len(segments):
+        raise SkillError(ErrorCode.EVIDENCE_MISSING, "Every fine segment requires one analysis", field_paths=("analysis_configuration.segment_analysis",))
+    analyses: list[dict[str, object]] = []
+    analysis_by_id: dict[str, dict[str, object]] = {}
+    analysis_keys = {"segment_id", "source_video_id", "start_ms", "end_ms", "stage_title", "observations", "analysis_provenance"}
+    segment_by_id = {str(item["segment_id"]): item for item in segments}
+    for index, raw in enumerate(raw_analyses):
+        field = f"analysis_configuration.segment_analysis[{index}]"
+        analysis = _mapping(raw, field)
+        _strict_keys(analysis, analysis_keys, analysis_keys, field)
+        segment_id = _text(analysis.get("segment_id"), f"{field}.segment_id")
+        segment = segment_by_id.get(segment_id)
+        if segment is None or segment_id in analysis_by_id:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Segment analysis identity is unknown or duplicated", field_paths=(f"{field}.segment_id",))
+        if (
+            analysis.get("source_video_id") != source_video_id
+            or analysis.get("start_ms") != segment["start_ms"]
+            or analysis.get("end_ms") != segment["end_ms"]
+        ):
+            raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Segment analysis source interval does not match", field_paths=(field,))
+        _text(analysis.get("stage_title"), f"{field}.stage_title")
+        observations = _mapping(analysis.get("observations"), f"{field}.observations")
+        if set(observations) != set(_FINE_OBSERVATION_FIELDS):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Segment analysis observation set is incomplete", field_paths=(f"{field}.observations",))
+        for name in _FINE_OBSERVATION_FIELDS:
+            observation = _mapping(observations[name], f"{field}.observations.{name}")
+            _strict_keys(observation, {"value", "evidence_refs"}, {"value", "evidence_refs"}, f"{field}.observations.{name}")
+            value = _text(observation.get("value"), f"{field}.observations.{name}.value")
+            refs = observation.get("evidence_refs")
+            if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
+                raise SkillError(ErrorCode.VALIDATION_FAILED, "Fine observation evidence_refs must be an array", field_paths=(f"{field}.observations.{name}.evidence_refs",))
+            expected_frame_ids = set(frame_ids_by_segment[segment_id])
+            referenced_ids = {ref.removeprefix("frame:") for ref in refs if ref.startswith("frame:")}
+            if value == "UNAVAILABLE":
+                if refs:
+                    raise SkillError(ErrorCode.EVIDENCE_MISSING, "Unavailable fine observation cannot cite evidence", field_paths=(f"{field}.observations.{name}.evidence_refs",))
+            elif not refs or len(referenced_ids) != len(refs) or not referenced_ids.issubset(expected_frame_ids):
+                raise SkillError(ErrorCode.EVIDENCE_MISSING, "Fine observation must cite an in-segment source frame", field_paths=(f"{field}.observations.{name}.evidence_refs",))
+        _mapping(analysis.get("analysis_provenance"), f"{field}.analysis_provenance")
+        analyses.append(analysis)
+        analysis_by_id[segment_id] = analysis
+    if set(analysis_by_id) != segment_ids:
+        raise SkillError(ErrorCode.EVIDENCE_MISSING, "Segment analysis coverage is incomplete", field_paths=("analysis_configuration.segment_analysis",))
+
+    raw_beats = config.get("core_beats")
+    if not isinstance(raw_beats, list) or not raw_beats:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "core_beats must be a non-empty array", field_paths=("analysis_configuration.core_beats",))
+    beat_keys = {
+        "beat_id", "source_segment_ids", "source_frame_ids", "start_ms", "end_ms",
+        "representative_frame_id", "merge_reason", "stage_title", "visual_summary", "key_action",
+        "audience_psychology", "viral_or_conversion_function", "function_label",
+    }
+    beats: list[dict[str, object]] = []
+    segment_cursor = 0
+    beat_ids: set[str] = set()
+    for index, raw in enumerate(raw_beats):
+        field = f"analysis_configuration.core_beats[{index}]"
+        beat = _mapping(raw, field)
+        _strict_keys(beat, beat_keys, beat_keys, field)
+        beat_id = _text(beat.get("beat_id"), f"{field}.beat_id")
+        if beat_id in beat_ids:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Core beat identities must be unique", field_paths=(f"{field}.beat_id",))
+        beat_ids.add(beat_id)
+        source_segment_ids = beat.get("source_segment_ids")
+        if not isinstance(source_segment_ids, list) or not source_segment_ids or any(not isinstance(item, str) for item in source_segment_ids):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Core beat source_segment_ids are invalid", field_paths=(f"{field}.source_segment_ids",))
+        expected_ids = [str(item["segment_id"]) for item in segments[segment_cursor : segment_cursor + len(source_segment_ids)]]
+        if source_segment_ids != expected_ids:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Core beats must partition adjacent fine segments in order", field_paths=(f"{field}.source_segment_ids",))
+        segment_cursor += len(source_segment_ids)
+        source_frames = beat.get("source_frame_ids")
+        expected_frames = [frame_id for segment_id in source_segment_ids for frame_id in frame_ids_by_segment[segment_id]]
+        if not isinstance(source_frames, list) or source_frames != expected_frames:
+            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Core beat source_frame_ids must cover its source segments", field_paths=(f"{field}.source_frame_ids",))
+        first_segment = segment_by_id[source_segment_ids[0]]
+        last_segment = segment_by_id[source_segment_ids[-1]]
+        if beat.get("start_ms") != first_segment["start_ms"] or beat.get("end_ms") != last_segment["end_ms"]:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Core beat interval must equal its source segment range", field_paths=(field,))
+        representative = _text(beat.get("representative_frame_id"), f"{field}.representative_frame_id")
+        representative_record = keyframes.get(representative)
+        if representative not in source_frames or representative_record is None or representative_record.get("frame_role") != "representative":
+            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Core beat representative must be an owned representative frame", field_paths=(f"{field}.representative_frame_id",))
+        for name in beat_keys - {"source_segment_ids", "source_frame_ids", "start_ms", "end_ms"}:
+            if name not in {"beat_id", "representative_frame_id"}:
+                _text(beat.get(name), f"{field}.{name}")
+        if index >= len(timeline):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Core beat timeline mapping is incomplete", field_paths=(field,))
+        mapped = timeline[index]
+        if mapped["beat_id"] != beat_id or mapped["interval"] != {"start_ms": beat["start_ms"], "end_ms": beat["end_ms"]} or mapped["keyframe_ids"] != source_frames:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Core beat does not match the canonical timeline", field_paths=(field,))
+        beats.append(beat)
+    if segment_cursor != len(segments) or len(timeline) != len(beats):
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Core beats must cover every fine segment exactly once", field_paths=("analysis_configuration.core_beats",))
+    expected_formula = " -> ".join(str(beat["stage_title"]) for beat in beats)
+    if formula.get("value") != expected_formula:
+        raise SkillError(ErrorCode.VALIDATION_FAILED, "Bottom-line formula must derive from ordered core beats", field_paths=("analysis_configuration.bottom_line_formula.value",))
+    expected_formula_refs = [f"keyframe:{beat['representative_frame_id']}" for beat in beats]
+    if formula.get("evidence_refs") != expected_formula_refs:
+        raise SkillError(ErrorCode.EVIDENCE_MISSING, "Bottom-line formula evidence must cite ordered beat representatives", field_paths=("analysis_configuration.bottom_line_formula.evidence_refs",))
+    return segments, analyses, beats
 
 
 def _shot_evidence(
@@ -511,7 +694,14 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
     comments, comment_ids = _validate_comments(normalized_request.get("popular_comments"))
     viral_pack = _validate_viral_pack(normalized_request.get("viral_research_pack"))
     config = _mapping(normalized_request.get("analysis_configuration"), "analysis_configuration")
-    _strict_keys(config, _CONFIG_KEYS, _CONFIG_KEYS, "analysis_configuration")
+    _strict_keys(config, _CONFIG_KEYS, _CONFIG_KEYS | _FINE_CONFIG_KEYS, "analysis_configuration")
+    present_fine_keys = set(config) & _FINE_CONFIG_KEYS
+    if present_fine_keys and present_fine_keys != _FINE_CONFIG_KEYS:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "Fine segment analysis fields must be supplied together",
+            field_paths=tuple(f"analysis_configuration.{name}" for name in sorted(_FINE_CONFIG_KEYS - present_fine_keys)),
+        )
     current_product = _mapping(config.get("current_product"), "analysis_configuration.current_product")
     product_keys = {"product_id", "category", "display_name"}
     _strict_keys(current_product, product_keys, product_keys, "analysis_configuration.current_product")
@@ -540,8 +730,31 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
         "analysis_configuration.bottom_line_formula",
         allowed_refs,
     )
+    fine_segments: list[dict[str, object]] = []
+    segment_analysis: list[dict[str, object]] = []
+    core_beats: list[dict[str, object]] = []
+    if present_fine_keys:
+        fine_segments, segment_analysis, core_beats = _validate_fine_package(
+            config,
+            duration_ms=int(metadata["duration_ms"]),
+            source_video_id=str(source["source_id"]),
+            keyframes=keyframes,
+            timeline=beats,
+            formula=formula,
+        )
     shots = _shot_evidence(beats, keyframes, source, keyframe_images)
-    reference_beats = _reference_beats(beats)
+    reference_beats = (
+        [
+            {
+                "contract_identity": "avp.contract.reference-beat",
+                "contract_version": _VERSION,
+                **beat,
+            }
+            for beat in core_beats
+        ]
+        if core_beats
+        else _reference_beats(beats)
+    )
     patterns = _replication_patterns(beats, str(current_product["product_id"]))
     analysis_board = render_analysis_board(source, metadata, beats, keyframe_images, formula)
     shot_board = render_shot_evidence_board(shots, keyframe_images)
@@ -605,6 +818,9 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
             "production_storyboard": False,
         },
     }
+    if core_beats:
+        artifact["fine_segments"] = fine_segments
+        artifact["segment_analysis"] = segment_analysis
     provenance = {
         "schema_version": _VERSION,
         "analysis_id": artifact["analysis_id"],
@@ -614,7 +830,38 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
         "evidence_index": sorted(allowed_refs),
         "artifact_refs": artifact_refs,
         "provider_calls": 0,
+        "network_calls": 0,
+        "external_upload": False,
     }
+    if core_beats:
+        provenance["segment_trace"] = [
+            {
+                "segment_id": segment["segment_id"],
+                "start_ms": segment["start_ms"],
+                "end_ms": segment["end_ms"],
+                "source_video_id": segment["source_video_id"],
+            }
+            for segment in fine_segments
+        ]
+        provenance["frame_trace"] = [
+            {
+                "frame_id": frame_id,
+                "segment_id": frame["segment_id"],
+                "timestamp_ms": frame["timestamp_ms"],
+                "frame_role": frame["frame_role"],
+                "sha256": frame["sha256"],
+            }
+            for frame_id, frame in keyframes.items()
+        ]
+        provenance["beat_trace"] = [
+            {
+                "beat_id": beat["beat_id"],
+                "source_segment_ids": beat["source_segment_ids"],
+                "source_frame_ids": beat["source_frame_ids"],
+                "representative_frame_id": beat["representative_frame_id"],
+            }
+            for beat in core_beats
+        ]
     files = {
         "reference_storyboard_analysis.json": _pretty(artifact),
         "reference_storyboard_analysis.md": _markdown(artifact),
@@ -622,6 +869,9 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
         **board_payloads,
         **{f"keyframes/{keyframe_id}.png": payload for keyframe_id, payload in keyframe_payloads.items()},
     }
+    if core_beats:
+        files["fine_segments.json"] = _pretty(fine_segments)
+        files["segment_analysis.json"] = _pretty(segment_analysis)
     _publish(root, files)
     return StoryboardAnalysisResult(status="COMPLETED", output_root=_OUTPUT_ROOT, artifact=artifact)
 
