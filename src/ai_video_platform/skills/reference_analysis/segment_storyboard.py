@@ -100,7 +100,11 @@ def build_segment_analysis(
             else:
                 observations[field] = {
                     "value": _text(raw_value, f"segment_analysis.{segment_id}.{field}"),
-                    "evidence_refs": [f"frame:{representative}"],
+                    "evidence_refs": (
+                        [f"audio:{segment_id}"]
+                        if field == "speech_music_sound_effect"
+                        else [f"frame:{representative}"]
+                    ),
                 }
         analyses.append({
             "segment_id": segment_id,
@@ -119,12 +123,15 @@ def build_segment_analysis(
 
 
 _MERGE_FIELDS = (
+    "scene",
     "narrative_function",
     "audience_psychology",
     "viral_mechanism",
     "conversion_function",
+    "subject_motion",
     "primary_subject_action",
     "product_action_and_state",
+    "package_container_prop_state",
 )
 
 
@@ -187,7 +194,7 @@ def derive_core_beats(
             "end_ms": int(last["end_ms"]),
             "representative_frame_id": representative,
             "merge_reason": (
-                "Adjacent segments share narrative purpose, audience psychology, mechanism, action, and product state."
+                "Adjacent segments share scene/event continuity, narrative purpose, audience psychology, mechanism, action, and product/prop state."
                 if len(group) > 1
                 else "Segment retains a distinct evidence-bound semantic purpose."
             ),

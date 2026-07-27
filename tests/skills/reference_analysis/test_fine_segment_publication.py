@@ -59,6 +59,26 @@ class FineSegmentPublicationTests(unittest.TestCase):
             self.assertEqual(provenance["network_calls"], 0)
             self.assertEqual(provenance["provider_calls"], 0)
             self.assertIs(provenance["external_upload"], False)
+            self.assertEqual(len(provenance["analysis_trace"]), 10)
+            self.assertEqual(
+                provenance["analysis_trace"][0]["observations"]["scene"]["evidence_refs"],
+                ["frame:segment-001-representative"],
+            )
+            self.assertEqual(
+                provenance["analysis_trace"][0]["observations"]["speech_music_sound_effect"]["evidence_refs"],
+                ["audio:segment-001"],
+            )
+            self.assertEqual(
+                provenance["segment_trace"][1]["segmentation_reasons"],
+                artifact["fine_segments"][1]["segmentation_reasons"],
+            )
+            self.assertTrue(
+                all(
+                    frame["source_media_sha256"] == provenance["selected_media_sha256"]
+                    and frame["extraction_method"] == "local_ffmpeg_frame_decode"
+                    for frame in provenance["frame_trace"]
+                )
+            )
             markdown = (root / "reference_storyboard_analysis.md").read_text(encoding="utf-8")
             self.assertIn("## Fine segments", markdown)
             self.assertIn("### segment-001", markdown)

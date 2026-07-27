@@ -4,13 +4,46 @@ import copy
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from ai_video_platform.skills.reference_analysis import SkillError, analyze_storyboard
+from ai_video_platform.skills.reference_analysis.local_media import run_local_media
 
 from tests.skills.reference_analysis.test_fine_segment_publication import prepare_request
 
 
 class FineSegmentFailureTests(unittest.TestCase):
+    def test_local_media_runner_enforces_local_protocols_at_the_seam(self) -> None:
+        executable = str(Path("ffmpeg.exe").resolve())
+        captured: list[list[str]] = []
+
+        class FakeProcess:
+            returncode = 0
+
+            def __init__(self, arguments: list[str], **_: object) -> None:
+                captured.append(arguments)
+
+            def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+                return b"", b""
+
+        with (
+            patch(
+                "ai_video_platform.skills.reference_analysis.local_media.resolve_local_media_tool",
+                return_value=executable,
+            ),
+            patch("ai_video_platform.skills.reference_analysis.local_media._ORIGINAL_POPEN", FakeProcess),
+        ):
+            run_local_media([executable, "-i", "input.mp4", "-f", "null", "-"], timeout=1)
+            self.assertEqual(captured[0][1:3], ["-protocol_whitelist", "file,pipe"])
+
+            with self.assertRaises(SkillError):
+                run_local_media(
+                    [executable, "-protocol_whitelist", "file,http", "-i", "input.mp4"],
+                    timeout=1,
+                )
+            with self.assertRaises(SkillError):
+                run_local_media([executable, "-i", r"\\server\share\input.mp4"], timeout=1)
+
     def test_timing_evidence_and_merge_corruption_fail_before_publication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

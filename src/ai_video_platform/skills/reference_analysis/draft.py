@@ -381,10 +381,11 @@ def _prepare_fine_breakdown(
     for segment in segments:
         start_ms = int(segment["start_ms"])
         end_ms = int(segment["end_ms"])
+        end_margin_ms = min(100, max(1, (end_ms - start_ms) // 4))
         timestamps = {
             "start": start_ms,
             "representative": start_ms + ((end_ms - start_ms) // 2),
-            "end": end_ms - 1,
+            "end": end_ms - end_margin_ms,
         }
         for role, timestamp_ms in timestamps.items():
             frame_id = f"{segment['segment_id']}-{role}"
@@ -392,7 +393,7 @@ def _prepare_fine_breakdown(
             payload = _extract_keyframe(
                 media,
                 timestamp_ms,
-                near_end=timestamp_ms == int(metadata["duration_ms"]) - 1,
+                near_end=False,
             )
             (keyframe_dir / filename).write_bytes(payload)
             keyframes.append({

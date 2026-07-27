@@ -12,6 +12,7 @@ from .errors import ErrorCode, SkillError
 
 
 _ORIGINAL_POPEN = subprocess.Popen
+_LOCAL_PROTOCOLS = "file,pipe"
 _FORBIDDEN_ARGUMENT_MARKERS = (
     "://",
     "tcp:",
@@ -54,6 +55,24 @@ def run_local_media(
     arguments = [str(argument) for argument in command]
     if any(marker in argument.casefold() for argument in arguments for marker in _FORBIDDEN_ARGUMENT_MARKERS):
         raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Network-capable media arguments are forbidden")
+    if any(argument.startswith((r"\\", "//")) for argument in arguments[1:]):
+        raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Network filesystem media paths are forbidden")
+    whitelist_positions = [
+        index for index, argument in enumerate(arguments)
+        if argument == "-protocol_whitelist" or argument.startswith("-protocol_whitelist=")
+    ]
+    if len(whitelist_positions) > 1:
+        raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Local media protocol policy cannot be repeated")
+    if whitelist_positions:
+        position = whitelist_positions[0]
+        if (
+            arguments[position] != "-protocol_whitelist"
+            or position + 1 >= len(arguments)
+            or arguments[position + 1] != _LOCAL_PROTOCOLS
+        ):
+            raise SkillError(ErrorCode.SCOPE_FORBIDDEN, "Only local file and pipe media protocols are allowed")
+    else:
+        arguments[1:1] = ["-protocol_whitelist", _LOCAL_PROTOCOLS]
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     process = _ORIGINAL_POPEN(
         arguments,

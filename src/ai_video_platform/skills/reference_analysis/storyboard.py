@@ -470,12 +470,15 @@ def _validate_fine_package(
             if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
                 raise SkillError(ErrorCode.VALIDATION_FAILED, "Fine observation evidence_refs must be an array", field_paths=(f"{field}.observations.{name}.evidence_refs",))
             expected_frame_ids = set(frame_ids_by_segment[segment_id])
-            referenced_ids = {ref.removeprefix("frame:") for ref in refs if ref.startswith("frame:")}
+            allowed_segment_refs = {
+                *(f"frame:{frame_id}" for frame_id in expected_frame_ids),
+                f"audio:{segment_id}",
+            }
             if value == "UNAVAILABLE":
                 if refs:
                     raise SkillError(ErrorCode.EVIDENCE_MISSING, "Unavailable fine observation cannot cite evidence", field_paths=(f"{field}.observations.{name}.evidence_refs",))
-            elif not refs or len(referenced_ids) != len(refs) or not referenced_ids.issubset(expected_frame_ids):
-                raise SkillError(ErrorCode.EVIDENCE_MISSING, "Fine observation must cite an in-segment source frame", field_paths=(f"{field}.observations.{name}.evidence_refs",))
+            elif not refs or not set(refs).issubset(allowed_segment_refs):
+                raise SkillError(ErrorCode.EVIDENCE_MISSING, "Fine observation must cite in-segment frame or audio evidence", field_paths=(f"{field}.observations.{name}.evidence_refs",))
         _mapping(analysis.get("analysis_provenance"), f"{field}.analysis_provenance")
         analyses.append(analysis)
         analysis_by_id[segment_id] = analysis
@@ -784,6 +787,7 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
             timeline=beats,
             formula=formula,
         )
+        allowed_refs.update(f"audio:{segment['segment_id']}" for segment in fine_segments)
     shots = _shot_evidence(beats, keyframes, source, keyframe_images)
     reference_beats = (
         [
@@ -889,6 +893,7 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
                 "start_ms": segment["start_ms"],
                 "end_ms": segment["end_ms"],
                 "source_video_id": segment["source_video_id"],
+                "segmentation_reasons": segment["segmentation_reasons"],
             }
             for segment in fine_segments
         ]
@@ -899,8 +904,20 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
                 "timestamp_ms": frame["timestamp_ms"],
                 "frame_role": frame["frame_role"],
                 "sha256": frame["sha256"],
+                "source_media_sha256": source["sha256"],
+                "extraction_method": "local_ffmpeg_frame_decode",
             }
             for frame_id, frame in keyframes.items()
+        ]
+        provenance["analysis_trace"] = [
+            {
+                "segment_id": analysis["segment_id"],
+                "start_ms": analysis["start_ms"],
+                "end_ms": analysis["end_ms"],
+                "analysis_provenance": analysis["analysis_provenance"],
+                "observations": analysis["observations"],
+            }
+            for analysis in segment_analysis
         ]
         provenance["beat_trace"] = [
             {
