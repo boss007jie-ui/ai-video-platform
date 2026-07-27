@@ -66,7 +66,11 @@ class FineSegmentPublicationTests(unittest.TestCase):
             )
             self.assertEqual(
                 provenance["analysis_trace"][0]["observations"]["speech_music_sound_effect"]["evidence_refs"],
-                ["audio:segment-001"],
+                [],
+            )
+            self.assertEqual(
+                provenance["analysis_trace"][0]["observations"]["speech_music_sound_effect"]["value"],
+                "UNAVAILABLE",
             )
             self.assertEqual(
                 provenance["segment_trace"][1]["segmentation_reasons"],

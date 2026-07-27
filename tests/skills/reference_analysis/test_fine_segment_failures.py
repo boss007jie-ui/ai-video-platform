@@ -64,6 +64,11 @@ class FineSegmentFailureTests(unittest.TestCase):
             def tampered_frame(request: dict[str, object]) -> None:
                 request["analysis_configuration"]["keyframes"][0]["sha256"] = "0" * 64  # type: ignore[index]
 
+            def substituted_frame(request: dict[str, object]) -> None:
+                frames = request["analysis_configuration"]["keyframes"]  # type: ignore[index]
+                frames[0]["path"] = frames[18]["path"]
+                frames[0]["sha256"] = frames[18]["sha256"]
+
             def unknown_evidence(request: dict[str, object]) -> None:
                 request["analysis_configuration"]["segment_analysis"][0]["observations"]["scene"]["evidence_refs"] = ["frame:unknown"]  # type: ignore[index]
 
@@ -85,6 +90,7 @@ class FineSegmentFailureTests(unittest.TestCase):
                 "bad_link": bad_link,
                 "frame_outside_segment": frame_outside_segment,
                 "tampered_frame": tampered_frame,
+                "substituted_frame": substituted_frame,
                 "unknown_evidence": unknown_evidence,
                 "missing_analysis": missing_analysis,
                 "non_adjacent_merge": non_adjacent_merge,

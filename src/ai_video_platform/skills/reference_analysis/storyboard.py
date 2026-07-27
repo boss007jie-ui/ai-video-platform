@@ -13,6 +13,7 @@ import tempfile
 import zlib
 
 from .errors import ErrorCode, SkillError
+from .local_media import extract_local_png_frame, probe_local_audio_available
 from .models import StoryboardAnalysisResult
 from .segment_storyboard import OBSERVATION_FIELDS as _FINE_OBSERVATION_FIELDS
 from .storyboard_boards import decode_png, render_analysis_board, render_replication_board, render_shot_evidence_board
@@ -382,6 +383,7 @@ def _validate_fine_package(
     keyframes: Mapping[str, Mapping[str, object]],
     timeline: list[dict[str, object]],
     formula: Mapping[str, object],
+    audio_available: bool,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
     raw_segments = config.get("fine_segments")
     if not isinstance(raw_segments, list) or not raw_segments:
@@ -472,8 +474,9 @@ def _validate_fine_package(
             expected_frame_ids = set(frame_ids_by_segment[segment_id])
             allowed_segment_refs = {
                 *(f"frame:{frame_id}" for frame_id in expected_frame_ids),
-                f"audio:{segment_id}",
             }
+            if audio_available:
+                allowed_segment_refs.add(f"audio:{segment_id}")
             if value == "UNAVAILABLE":
                 if refs:
                     raise SkillError(ErrorCode.EVIDENCE_MISSING, "Unavailable fine observation cannot cite evidence", field_paths=(f"{field}.observations.{name}.evidence_refs",))
@@ -541,6 +544,22 @@ def _validate_fine_package(
     if formula.get("evidence_refs") != expected_formula_refs:
         raise SkillError(ErrorCode.EVIDENCE_MISSING, "Bottom-line formula evidence must cite ordered beat representatives", field_paths=("analysis_configuration.bottom_line_formula.evidence_refs",))
     return segments, analyses, beats
+
+
+def _verify_fine_keyframes_from_source(
+    workspace: Path,
+    source: Mapping[str, object],
+    keyframes: Mapping[str, Mapping[str, object]],
+) -> None:
+    media = _source_file(workspace, source.get("media_path"), "selected_reference_video.media_path")
+    for frame_id, frame in keyframes.items():
+        decoded = extract_local_png_frame(media, int(frame["timestamp_ms"]))
+        if _digest(decoded) != frame["sha256"]:
+            raise SkillError(
+                ErrorCode.REFERENCE_MISMATCH,
+                "Fine keyframe does not match the selected source video at its timestamp",
+                field_paths=(f"analysis_configuration.keyframes.{frame_id}",),
+            )
 
 
 def _shot_evidence(
@@ -779,6 +798,8 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
     segment_analysis: list[dict[str, object]] = []
     core_beats: list[dict[str, object]] = []
     if present_fine_keys:
+        fine_media = _source_file(root, source.get("media_path"), "selected_reference_video.media_path")
+        audio_available = probe_local_audio_available(fine_media)
         fine_segments, segment_analysis, core_beats = _validate_fine_package(
             config,
             duration_ms=int(metadata["duration_ms"]),
@@ -786,8 +807,11 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
             keyframes=keyframes,
             timeline=beats,
             formula=formula,
+            audio_available=audio_available,
         )
-        allowed_refs.update(f"audio:{segment['segment_id']}" for segment in fine_segments)
+        _verify_fine_keyframes_from_source(root, source, keyframes)
+        if audio_available:
+            allowed_refs.update(f"audio:{segment['segment_id']}" for segment in fine_segments)
     shots = _shot_evidence(beats, keyframes, source, keyframe_images)
     reference_beats = (
         [

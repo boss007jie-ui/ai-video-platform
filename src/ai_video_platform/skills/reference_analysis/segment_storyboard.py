@@ -50,6 +50,7 @@ def build_segment_analysis(
     annotations: Sequence[Mapping[str, object]],
     *,
     analyzer_id: str,
+    audio_available: bool,
 ) -> list[dict[str, object]]:
     """Bind offline observations to real representative frames in exact source intervals."""
     segment_intervals = {(int(item["start_ms"]), int(item["end_ms"])) for item in segments}
@@ -95,7 +96,11 @@ def build_segment_analysis(
         observations: dict[str, dict[str, object]] = {}
         for field in OBSERVATION_FIELDS:
             raw_value = values.get(field)  # type: ignore[union-attr]
-            if raw_value is None or raw_value == "UNAVAILABLE":
+            if (
+                raw_value is None
+                or raw_value == "UNAVAILABLE"
+                or (field == "speech_music_sound_effect" and not audio_available)
+            ):
                 observations[field] = {"value": "UNAVAILABLE", "evidence_refs": []}
             else:
                 observations[field] = {
@@ -116,6 +121,7 @@ def build_segment_analysis(
             "analysis_provenance": {
                 "method": "offline_local_annotation" if annotation is not None else "unavailable",
                 "analyzer_id": analyzer_id,
+                "audio_available": audio_available,
                 "representative_frame_id": representative,
             },
         })

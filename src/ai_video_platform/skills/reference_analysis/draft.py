@@ -14,7 +14,12 @@ import tempfile
 
 from .errors import ErrorCode, SkillError
 from .fine_segments import build_fine_segments, detect_boundary_signals
-from .local_media import resolve_local_media_tool, run_local_media
+from .local_media import (
+    extract_local_png_frame,
+    probe_local_audio_available,
+    resolve_local_media_tool,
+    run_local_media,
+)
 from .models import ReferenceBreakdownDraftResult
 from .segment_storyboard import build_segment_analysis, derive_core_beats, derive_formula
 from .storyboard import _mapping, _strict_keys, _text, _validate_metadata, _validate_source, _workspace
@@ -292,6 +297,8 @@ def _timeline(timestamps: list[int], duration_ms: int) -> list[dict[str, object]
 
 
 def _extract_keyframe(media: Path, timestamp_ms: int, *, near_end: bool) -> bytes:
+    if not near_end:
+        return extract_local_png_frame(media, timestamp_ms)
     seek = ["-sseof", "-0.100"] if near_end else ["-ss", f"{timestamp_ms / 1000:.3f}"]
     command = [
         _local_tool("ffmpeg"),
@@ -363,6 +370,7 @@ def _prepare_fine_breakdown(
     else:
         metadata = _probe_metadata(media)
         metadata_source = "local_ffprobe"
+    audio_available = probe_local_audio_available(media)
     policy = _fine_policy(normalized.get("segmentation_policy"))
     offline = _offline_analysis(normalized.get("offline_analysis"))
     local_signals = detect_boundary_signals(media, int(metadata["duration_ms"]), policy)
@@ -410,6 +418,7 @@ def _prepare_fine_breakdown(
         keyframes,
         offline["segment_annotations"],  # type: ignore[arg-type]
         analyzer_id=str(offline["analyzer_id"]),
+        audio_available=audio_available,
     )
     core_beats = derive_core_beats(segments, segment_analysis, keyframes)
     formula = derive_formula(core_beats)

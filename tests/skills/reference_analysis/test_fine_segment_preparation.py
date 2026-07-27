@@ -56,6 +56,14 @@ class PrepareFineSegmentTests(unittest.TestCase):
                 {item["segment_id"] for item in segments},
             )
             self.assertTrue(all(len(item["observations"]) == 15 for item in analyses))
+            self.assertTrue(
+                all(
+                    item["observations"]["speech_music_sound_effect"]
+                    == {"value": "UNAVAILABLE", "evidence_refs": []}
+                    for item in analyses
+                )
+            )
+            self.assertTrue(all(item["analysis_provenance"]["audio_available"] is False for item in analyses))
 
     def test_preparation_merges_only_adjacent_semantically_matching_segments(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

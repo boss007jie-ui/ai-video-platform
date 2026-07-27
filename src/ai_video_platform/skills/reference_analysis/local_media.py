@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -91,4 +92,55 @@ def run_local_media(
     return subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
 
 
-__all__ = ["resolve_local_media_tool", "run_local_media"]
+def extract_local_png_frame(media: Path, timestamp_ms: int) -> bytes:
+    """Decode one source-video frame at an explicit local timeline position."""
+    if timestamp_ms < 0:
+        raise SkillError(ErrorCode.MEDIA_INVALID, "Local keyframe timestamp is invalid")
+    command = [
+        resolve_local_media_tool("ffmpeg"),
+        "-v", "error",
+        "-nostdin",
+        "-ss", f"{timestamp_ms / 1000:.3f}",
+        "-i", os.fspath(media),
+        "-frames:v", "1",
+        "-f", "image2pipe",
+        "-vcodec", "png",
+        "pipe:1",
+    ]
+    try:
+        completed = run_local_media(command, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SkillError(ErrorCode.MEDIA_INVALID, "Local keyframe extraction failed") from exc
+    payload = completed.stdout
+    if completed.returncode != 0 or not isinstance(payload, bytes) or not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise SkillError(ErrorCode.MEDIA_INVALID, "Local keyframe extraction rejected the media")
+    return payload
+
+
+def probe_local_audio_available(media: Path) -> bool:
+    """Return whether the selected local video has a first audio stream."""
+    command = [
+        resolve_local_media_tool("ffprobe"),
+        "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries", "stream=index",
+        "-of", "json",
+        os.fspath(media),
+    ]
+    try:
+        completed = run_local_media(command, timeout=30, text=True)
+        payload = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise SkillError(ErrorCode.MEDIA_INVALID, "Local audio stream probe failed") from exc
+    if completed.returncode != 0 or not isinstance(payload, dict):
+        raise SkillError(ErrorCode.MEDIA_INVALID, "Local audio stream probe rejected the media")
+    streams = payload.get("streams")
+    return isinstance(streams, list) and bool(streams)
+
+
+__all__ = [
+    "extract_local_png_frame",
+    "probe_local_audio_available",
+    "resolve_local_media_tool",
+    "run_local_media",
+]
