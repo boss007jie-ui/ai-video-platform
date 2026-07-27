@@ -93,19 +93,34 @@ def planning_request() -> dict[str, object]:
 
 
 class VideoPlanningInterfaceTests(unittest.TestCase):
-    def test_in_frame_motion_annotations_are_semantic_and_color_separated(self) -> None:
+    def test_in_frame_motion_annotations_require_vision_coordinates(self) -> None:
         width, height = 240, 360
         canvas = bytearray(bytes((255, 255, 255, 255)) * width * height)
 
-        _draw_in_frame_annotations(canvas, width, 10, 10, 200, 320, "slow push in", "two hands squeeze")
+        _draw_in_frame_annotations(canvas, width, 10, 10, 200, 320, [])
+
+        self.assertEqual(canvas, bytearray(bytes((255, 255, 255, 255)) * width * height))
+
+    def test_in_frame_motion_annotations_follow_visual_coordinates_and_roles(self) -> None:
+        width, height = 240, 360
+        canvas = bytearray(bytes((255, 255, 255, 255)) * width * height)
+
+        _draw_in_frame_annotations(
+            canvas,
+            width,
+            10,
+            10,
+            200,
+            320,
+            [
+                {"role": "camera", "points": [[0.1, 0.15], [0.4, 0.35]]},
+                {"role": "subject", "points": [[0.85, 0.2], [0.65, 0.45]]},
+            ],
+        )
 
         pixels = bytes(canvas)
         self.assertIn(bytes(CAMERA_RED), pixels)
         self.assertIn(bytes(SUBJECT_BLUE), pixels)
-
-        static_canvas = bytearray(bytes((255, 255, 255, 255)) * width * height)
-        _draw_in_frame_annotations(static_canvas, width, 10, 10, 200, 320, "locked", "none")
-        self.assertEqual(static_canvas, bytearray(bytes((255, 255, 255, 255)) * width * height))
 
     def test_build_storyboard_master_publishes_five_canonical_artifacts(self) -> None:
         result = VideoPlanningInterface().build_storyboard_master(planning_request())
@@ -156,8 +171,8 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
             )
             self.assertGreater((root / "storyboard_master_sheet_001.png").stat().st_size, 0)
             manifest = json.loads((root / "storyboard_master_sheet_manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["renderer_version"], "1.1.0")
-            self.assertEqual(manifest["layout_version"], "storyboard-master-strip-v2")
+            self.assertEqual(manifest["renderer_version"], "1.2.0")
+            self.assertEqual(manifest["layout_version"], "storyboard-master-strip-v3")
             self.assertEqual(manifest["pages"][0]["row_panel_counts"], [2])
             self.assertFalse(manifest["execution_policy"]["provider_execution_input"])
 
@@ -197,7 +212,7 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
         self.assertEqual(first.manifest["max_panels_per_page"], 9)
         self.assertEqual(first.manifest["renderer_code_commit"], "test-commit")
         self.assertFalse(first.manifest["execution_policy"]["first_frame_eligible"])
-        self.assertIn(b"storyboard-master-strip-v2", first.pages[0])
+        self.assertIn(b"storyboard-master-strip-v3", first.pages[0])
 
         seven_panel_strip = render_storyboard_sheets(
             {"artifact_name": "VideoGenerationStoryboardMaster", "master_panel_entries": entries[:7]},

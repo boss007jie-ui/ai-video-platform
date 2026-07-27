@@ -13,8 +13,8 @@ from typing import Any
 from .models import content_digest, snapshot
 
 
-RENDERER_VERSION = "1.1.0"
-LAYOUT_VERSION = "storyboard-master-strip-v2"
+RENDERER_VERSION = "1.2.0"
+LAYOUT_VERSION = "storyboard-master-strip-v3"
 MAX_PANELS_PER_PAGE = 9
 EXECUTION_POLICY = {
     "role": "human_review_only",
@@ -208,21 +208,39 @@ def _arrow(canvas: bytearray, width: int, x: int, y: int, length: int, color: tu
         _line(canvas, width, x1, y1, x1 + side, y1 - dy * side, color, thickness)
 
 
-def _outlined_arrow(canvas: bytearray, width: int, x: int, y: int, length: int, color: tuple[int, int, int, int], direction: str, dashed: bool = False) -> None:
-    thickness = max(3, length // 14)
-    _arrow(canvas, width, x, y, length, WHITE, direction, dashed, thickness + 4)
-    _arrow(canvas, width, x, y, length, color, direction, dashed, thickness)
+def _draw_arrowhead(
+    canvas: bytearray,
+    width: int,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    color: tuple[int, int, int, int],
+    thickness: int,
+    head: int,
+) -> None:
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    magnitude = max(1.0, (dx * dx + dy * dy) ** 0.5)
+    unit_x, unit_y = dx / magnitude, dy / magnitude
+    perpendicular_x, perpendicular_y = -unit_y, unit_x
+    side = head * 0.62
+    for direction in (-1, 1):
+        side_x = round(end[0] - unit_x * head + perpendicular_x * side * direction)
+        side_y = round(end[1] - unit_y * head + perpendicular_y * side * direction)
+        _line(canvas, width, end[0], end[1], side_x, side_y, color, thickness)
 
 
-def _outlined_target(canvas: bytearray, width: int, x: int, y: int, size: int, color: tuple[int, int, int, int]) -> None:
-    thickness = max(2, size // 8)
-    _stroke_rect(canvas, width, x, y, size, size, WHITE, thickness + 3)
-    _stroke_rect(canvas, width, x + 1, y + 1, size - 2, size - 2, color, thickness)
-    center_x, center_y = x + size // 2, y + size // 2
-    _line(canvas, width, center_x, y - size // 4, center_x, y + size + size // 4, WHITE, thickness + 3)
-    _line(canvas, width, x - size // 4, center_y, x + size + size // 4, center_y, WHITE, thickness + 3)
-    _line(canvas, width, center_x, y - size // 4, center_x, y + size + size // 4, color, thickness)
-    _line(canvas, width, x - size // 4, center_y, x + size + size // 4, center_y, color, thickness)
+def _outlined_path_arrow(
+    canvas: bytearray,
+    width: int,
+    points: Sequence[tuple[int, int]],
+    color: tuple[int, int, int, int],
+    dashed: bool,
+    thickness: int,
+) -> None:
+    head = max(8, thickness * 4)
+    for stroke_color, stroke_width in ((WHITE, thickness + 2), (color, thickness)):
+        for start, end in zip(points, points[1:]):
+            _line(canvas, width, start[0], start[1], end[0], end[1], stroke_color, stroke_width, dashed)
+        _draw_arrowhead(canvas, width, points[-2], points[-1], stroke_color, stroke_width, head)
 
 
 def _draw_in_frame_annotations(
@@ -232,61 +250,50 @@ def _draw_in_frame_annotations(
     y: int,
     box_width: int,
     box_height: int,
-    camera_motion: str,
-    subject_motion: str,
+    annotations: Sequence[Mapping[str, Any]],
 ) -> None:
-    """Draw compact motion cues over the Panel without covering its center."""
+    """Draw vision-informed normalized motion paths over a Panel."""
 
-    margin = max(12, min(box_width, box_height) // 18)
-    horizontal = max(24, min(box_width // 3, box_height // 5))
-    vertical = max(24, min(box_height // 5, box_width // 3))
-    camera = camera_motion.lower()
-    subject = subject_motion.lower()
-    camera_moves = ("push", "pull", "pan", "tilt", "dolly", "orbit", "crane", "rack")
+    if not isinstance(annotations, Sequence) or isinstance(annotations, (str, bytes, bytearray)):
+        raise ValueError("Panel motion annotations must be a sequence")
+    thickness = max(2, min(box_width, box_height) // 60)
+    for annotation in annotations:
+        if not isinstance(annotation, Mapping):
+            raise ValueError("Panel motion annotation must be an object")
+        role = annotation.get("role")
+        if role not in {"camera", "subject"}:
+            raise ValueError("Panel motion annotation role must be camera or subject")
+        raw_points = annotation.get("points")
+        if not isinstance(raw_points, Sequence) or isinstance(raw_points, (str, bytes, bytearray)) or len(raw_points) < 2:
+            raise ValueError("Panel motion annotation requires at least two normalized points")
+        points: list[tuple[int, int]] = []
+        for raw_point in raw_points:
+            if not isinstance(raw_point, Sequence) or isinstance(raw_point, (str, bytes, bytearray)) or len(raw_point) != 2:
+                raise ValueError("Panel motion annotation points must be [x, y]")
+            normal_x, normal_y = raw_point
+            if (
+                not isinstance(normal_x, (int, float)) or isinstance(normal_x, bool)
+                or not isinstance(normal_y, (int, float)) or isinstance(normal_y, bool)
+                or not 0 <= normal_x <= 1 or not 0 <= normal_y <= 1
+            ):
+                raise ValueError("Panel motion annotation coordinates must be normalized from 0 to 1")
+            points.append((x + round(normal_x * (box_width - 1)), y + round(normal_y * (box_height - 1))))
+        if all(point == points[0] for point in points[1:]):
+            raise ValueError("Panel motion annotation path must have visible length")
+        color = CAMERA_RED if role == "camera" else SUBJECT_BLUE
+        _outlined_path_arrow(canvas, width, points, color, False, thickness)
 
-    if "push" in camera:
-        top_y = y + margin + horizontal // 4
-        _outlined_arrow(canvas, width, x + margin, top_y, horizontal, CAMERA_RED, "right")
-        _outlined_arrow(canvas, width, x + box_width - margin, top_y, horizontal, CAMERA_RED, "left")
-    elif "pull" in camera:
-        center_x = x + box_width // 2
-        top_y = y + margin + horizontal // 4
-        _outlined_arrow(canvas, width, center_x - margin, top_y, horizontal, CAMERA_RED, "left")
-        _outlined_arrow(canvas, width, center_x + margin, top_y, horizontal, CAMERA_RED, "right")
-    elif "tilt" in camera or "crane" in camera:
-        direction = "down" if "down" in camera else "up"
-        start_y = y + margin if direction == "down" else y + margin + vertical
-        _outlined_arrow(canvas, width, x + margin, start_y, vertical, CAMERA_RED, direction)
-    elif "pan" in camera or "dolly" in camera:
-        direction = "left" if "left" in camera else "right"
-        start_x = x + box_width - margin if direction == "left" else x + margin
-        _outlined_arrow(canvas, width, start_x, y + margin, horizontal, CAMERA_RED, direction)
-    elif "orbit" in camera:
-        _outlined_arrow(canvas, width, x + margin, y + margin, horizontal, CAMERA_RED, "right")
-        _outlined_arrow(canvas, width, x + box_width - margin, y + 2 * margin, horizontal, CAMERA_RED, "left")
-    elif "rack" in camera:
-        _outlined_target(canvas, width, x + margin, y + margin, max(18, horizontal // 2), CAMERA_RED)
-    subject_y = y + box_height // 2
-    if any(term in subject for term in ("squeeze", "squash", "compress")):
-        center_x = x + box_width // 2
-        _outlined_arrow(canvas, width, x + margin, subject_y, horizontal, SUBJECT_BLUE, "right")
-        _outlined_arrow(canvas, width, x + box_width - margin, subject_y, horizontal, SUBJECT_BLUE, "left")
-    elif any(term in subject for term in ("press", "down", "lower")) and any(term in subject for term in ("lift", "rise", "release")):
-        _outlined_arrow(canvas, width, x + box_width - 2 * margin, y + margin, vertical, SUBJECT_BLUE, "down")
-        _outlined_arrow(canvas, width, x + margin, y + box_height - margin, vertical, SUBJECT_BLUE, "up")
-    elif any(term in subject for term in ("press", "down", "lower")):
-        _outlined_arrow(canvas, width, x + box_width - 2 * margin, y + margin, vertical, SUBJECT_BLUE, "down")
-    elif any(term in subject for term in ("lift", "rise", "rebound", "up")):
-        _outlined_arrow(canvas, width, x + box_width - 2 * margin, y + box_height - margin, vertical, SUBJECT_BLUE, "up")
-    elif any(term in subject for term in ("rotate", "turn", "wrist")):
-        _outlined_arrow(canvas, width, x + margin, subject_y - margin, horizontal, SUBJECT_BLUE, "right")
-        _outlined_arrow(canvas, width, x + box_width - margin, subject_y + margin, horizontal, SUBJECT_BLUE, "left")
-    elif any(term in subject for term in ("from right", "withdraw", "exit")):
-        _outlined_arrow(canvas, width, x + box_width - margin, subject_y, horizontal, SUBJECT_BLUE, "left")
-    elif any(term in subject for term in ("enter", "slide", "push")):
-        _outlined_arrow(canvas, width, x + margin, subject_y, horizontal, SUBJECT_BLUE, "right")
-    elif subject not in {"", "none"}:
-        _outlined_arrow(canvas, width, x + margin, y + box_height - margin, horizontal, SUBJECT_BLUE, "right")
+
+def _panel_motion_annotations(metadata: Mapping[str, Any], panel_id: str) -> Sequence[Mapping[str, Any]]:
+    annotations = metadata.get("motion_annotations")
+    if annotations is None:
+        return ()
+    if not isinstance(annotations, Mapping):
+        raise ValueError("motion_annotations must be keyed by panel_id")
+    panel_annotations = annotations.get(panel_id, ())
+    if not isinstance(panel_annotations, Sequence) or isinstance(panel_annotations, (str, bytes, bytearray)):
+        raise ValueError(f"motion_annotations[{panel_id}] must be a sequence")
+    return panel_annotations
 
 
 def _blit_fit(canvas: bytearray, canvas_width: int, x: int, y: int, box_width: int, box_height: int, image: tuple[int, int, bytes]) -> None:
@@ -568,8 +575,7 @@ def _draw_panel(
         y,
         image_width,
         image_height,
-        _camera_instruction(entry.get("camera_motion")),
-        _motion_text(entry.get("subject_motion")),
+        _panel_motion_annotations(metadata, str(entry.get("panel_id") or "")),
     )
     _stroke_rect(canvas, width, image_x, y, image_width, image_height, INK, max(1, scale))
 
