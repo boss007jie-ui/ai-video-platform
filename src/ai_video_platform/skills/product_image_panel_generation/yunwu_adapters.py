@@ -8,13 +8,20 @@ import hashlib
 import http.client
 import json
 import os
+from pathlib import Path
+import re
 import struct
 import time
 from types import MappingProxyType
 from typing import Callable, Mapping, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
-from .adapters import ImageProviderAdapter, ProviderAsset, ProviderInvocation
+from .adapters import (
+    ImageProviderAdapter,
+    ProviderAsset,
+    ProviderInputAsset,
+    ProviderInvocation,
+)
 from .errors import ImagePanelError, ImagePanelErrorCode
 from .models import CancellationToken
 
@@ -38,6 +45,163 @@ ALLOWED_ENDPOINTS = frozenset(
 MAX_TIMEOUT_SECONDS = 300.0
 MAX_RESPONSE_BYTES = 67_108_864
 MAX_IMAGE_BYTES = 33_554_432
+MAX_NANO_INPUT_IMAGES = 9
+MAX_NANO_INPUT_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_NANO_REQUEST_BYTES = 18 * 1024 * 1024
+
+
+def _serialize_json_payload(payload: Mapping[str, object]) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+def _input_asset_error(asset_id: str, reason: str, message: str) -> ImagePanelError:
+
+    return ImagePanelError(
+        ImagePanelErrorCode.PROVIDER_FAILED,
+        message,
+        category="provider",
+        retryable=False,
+        details={"asset_id": asset_id, "reason": reason},
+    )
+
+
+def _local_file_path(asset: ProviderInputAsset) -> Path:
+    parsed = urlsplit(asset.uri)
+    if (
+        not asset.uri.startswith("file://")
+        or parsed.scheme != "file"
+        or parsed.query
+        or re.search(r"%(?![0-9A-Fa-f]{2})", parsed.path) is not None
+        or parsed.fragment
+    ):
+        raise _input_asset_error(
+            asset.asset_id,
+            "invalid_file_uri",
+            "Input image URI must be a valid local file URI",
+        )
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        raise _input_asset_error(
+            asset.asset_id,
+            "non_local_file_uri",
+            "Input image URI must identify a local file",
+        )
+    path_text = unquote(parsed.path)
+    if (
+        os.name == "nt"
+        and len(path_text) >= 3
+        and path_text[0] == "/"
+        and path_text[2] == ":"
+    ):
+        path_text = path_text[1:]
+    path = Path(path_text)
+    if not path.is_absolute():
+        raise _input_asset_error(
+            asset.asset_id,
+            "invalid_file_uri",
+            "Input image URI must identify an absolute local file",
+        )
+    return path
+
+
+def _input_image_mime(asset_id: str, content: bytes) -> str:
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    raise _input_asset_error(
+        asset_id,
+        "unsupported_image_format",
+        "Input image format is not supported",
+    )
+
+
+def _read_input_image(asset: ProviderInputAsset) -> tuple[str, bytes]:
+    path = _local_file_path(asset)
+    try:
+        content = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise _input_asset_error(
+            asset.asset_id,
+            "file_missing",
+            "Input image file was not found",
+        ) from exc
+    except (PermissionError, OSError) as exc:
+        raise _input_asset_error(
+            asset.asset_id,
+            "file_unreadable",
+            "Input image file could not be read",
+        ) from exc
+    if len(content) > MAX_NANO_INPUT_IMAGE_BYTES:
+        raise ImagePanelError(
+            ImagePanelErrorCode.PROVIDER_FAILED,
+            "Input image bytes exceeded the authorized size limit",
+            category="provider",
+            retryable=False,
+            details={
+                "asset_id": asset.asset_id,
+                "reason": "image_too_large",
+                "actual_byte_size": len(content),
+                "max_byte_size": MAX_NANO_INPUT_IMAGE_BYTES,
+            },
+        )
+    return _input_image_mime(asset.asset_id, content), content
+
+
+def _nano_payload(
+    invocation: ProviderInvocation,
+) -> tuple[dict[str, object], dict[str, object]]:
+    parts: list[dict[str, object]] = [{"text": invocation.compiled_prompt}]
+    image_assets: list[ProviderInputAsset] = []
+    skipped_input_asset_ids: list[str] = []
+    for asset in invocation.input_assets:
+        media_type = asset.media_type.strip().lower()
+        if media_type == "image" or media_type.startswith("image/"):
+            image_assets.append(asset)
+        else:
+            skipped_input_asset_ids.append(asset.asset_id)
+    if len(image_assets) > MAX_NANO_INPUT_IMAGES:
+        raise ImagePanelError(
+            ImagePanelErrorCode.PROVIDER_FAILED,
+            "Input image count exceeded the authorized limit",
+            category="provider",
+            retryable=False,
+            details={
+                "image_count": len(image_assets),
+                "max_image_count": MAX_NANO_INPUT_IMAGES,
+            },
+        )
+    for asset in image_assets:
+        mime_type, content = _read_input_image(asset)
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(content).decode("ascii"),
+                }
+            }
+        )
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {"responseModalities": ["IMAGE"]},
+    }
+    actual_byte_size = len(_serialize_json_payload(payload))
+    if actual_byte_size > MAX_NANO_REQUEST_BYTES:
+        raise ImagePanelError(
+            ImagePanelErrorCode.PROVIDER_FAILED,
+            "Nano Banana request body exceeded the authorized size limit",
+            category="provider",
+            retryable=False,
+            details={
+                "reason": "request_body_too_large",
+                "actual_byte_size": actual_byte_size,
+                "max_byte_size": MAX_NANO_REQUEST_BYTES,
+            },
+        )
+    return payload, {"skipped_input_asset_ids": skipped_input_asset_ids}
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +220,7 @@ class YunwuProviderReceipt:
     elapsed_ms: int
     provider_network_performed: bool = True
     cost_fields: Mapping[str, object] = MappingProxyType({})
+    details: Mapping[str, object] = MappingProxyType({})
     provider_asset_id: str | None = None
     content_type: str | None = None
     byte_size: int | None = None
@@ -66,7 +231,7 @@ class YunwuProviderReceipt:
     error_body: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        document = {
             "endpoint": self.endpoint,
             "model_id": self.model_id,
             "http_status": self.http_status,
@@ -82,6 +247,9 @@ class YunwuProviderReceipt:
             "upload_http_status": self.upload_http_status,
             "error_body": self.error_body,
         }
+        if self.details:
+            document["details"] = dict(self.details)
+        return document
 
 
 class YunwuJsonTransport(Protocol):
@@ -130,7 +298,7 @@ class YunwuHttpClient:
         timeout = min(float(timeout_seconds), MAX_TIMEOUT_SECONDS)
         if timeout <= 0:
             raise ValueError("timeout_seconds must be positive")
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = _serialize_json_payload(payload)
         connection = self._connection_factory(parsed.hostname, port=parsed.port, timeout=timeout)
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         started = time.monotonic()
@@ -330,6 +498,7 @@ class _YunwuAdapter(ImageProviderAdapter):
         self,
         invocation: ProviderInvocation,
         payload: Mapping[str, object],
+        details: Mapping[str, object] | None = None,
     ) -> tuple[YunwuHttpResponse, dict[str, object]]:
         response = self._transport.post_json(
             self.endpoint,
@@ -353,6 +522,7 @@ class _YunwuAdapter(ImageProviderAdapter):
             http_status=response.status,
             elapsed_ms=response.elapsed_ms,
             error_body=error_body,
+            details=MappingProxyType(dict(details or {})),
         )
         if response.status < 200 or response.status >= 300:
             raise ImagePanelError(
@@ -374,6 +544,7 @@ class _YunwuAdapter(ImageProviderAdapter):
         provider_asset_id: str,
         content: bytes,
         content_type: str | None,
+        details: Mapping[str, object] | None = None,
     ) -> ProviderAsset:
         verified_content_type, width, height = _image_shape(content, content_type)
         digest = hashlib.sha256(content).hexdigest()
@@ -383,6 +554,7 @@ class _YunwuAdapter(ImageProviderAdapter):
             http_status=response.status,
             elapsed_ms=response.elapsed_ms,
             cost_fields=_cost_fields(document),
+            details=MappingProxyType(dict(details or {})),
             provider_asset_id=provider_asset_id,
             content_type=verified_content_type,
             byte_size=len(content),
@@ -441,12 +613,11 @@ class YunwuNanoBananaAdapter(_YunwuAdapter):
                 category="state",
             )
         self._authorize_invocation(invocation)
+        payload, receipt_details = _nano_payload(invocation)
         response, document = self._post(
             invocation,
-            {
-                "contents": [{"parts": [{"text": invocation.compiled_prompt}]}],
-                "generationConfig": {"responseModalities": ["IMAGE"]},
-            },
+            payload,
+            details=receipt_details,
         )
         try:
             candidates = document["candidates"]
@@ -478,6 +649,7 @@ class YunwuNanoBananaAdapter(_YunwuAdapter):
                 provider_asset_id=provider_asset_id,
                 content=content,
                 content_type=str(inline.get("mimeType")) if inline.get("mimeType") else None,
+                details=receipt_details,
             )
         raise ImagePanelError(
             ImagePanelErrorCode.PROVIDER_FAILED,

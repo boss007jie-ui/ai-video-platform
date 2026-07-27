@@ -8,12 +8,17 @@ import hashlib
 from queue import Empty, Queue
 from threading import BoundedSemaphore, Lock, Thread
 import time
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 
 from ai_video_platform.contracts import ProducerIdentity, build_envelope, validate_envelope
 from ai_video_platform.contracts.serialization import freeze_json
 
-from .adapters import ImageProviderAdapter, ProviderAsset, ProviderInvocation
+from .adapters import (
+    ImageProviderAdapter,
+    ProviderAsset,
+    ProviderInputAsset,
+    ProviderInvocation,
+)
 from .errors import ImagePanelError, ImagePanelErrorCode
 from .models import (
     CancellationToken,
@@ -174,6 +179,23 @@ class ImagePanelService:
                 category="authorization",
             )
 
+        input_assets_by_id: dict[str, ProviderInputAsset] = {}
+        for manifest in request.input_asset_manifests:
+            for asset in manifest.payload.get("assets", ()):
+                if not isinstance(asset, Mapping):
+                    continue
+                asset_id = asset.get("asset_id")
+                media_type = asset.get("media_type")
+                uri = asset.get("uri")
+                if not all(isinstance(value, str) for value in (asset_id, media_type, uri)):
+                    continue
+                input_assets_by_id[asset_id] = ProviderInputAsset(
+                    asset_id=asset_id,
+                    media_type=media_type,
+                    uri=uri,
+                    metadata=asset,
+                )
+
         assets: list[GeneratedAsset] = []
         item_records: list[ItemGenerationRecord] = []
         for item in request.items:
@@ -196,6 +218,9 @@ class ImagePanelService:
                     compiled_prompt=compile_prompt(request, item),
                     attempt=attempts,
                     timeout_seconds=budget.timeout_seconds,
+                    input_assets=tuple(
+                        input_assets_by_id[asset_id] for asset_id in item.input_asset_ids
+                    ),
                 )
                 try:
                     provider_asset = self._invoke_provider(invocation, cancellation)

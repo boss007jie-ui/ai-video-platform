@@ -21,6 +21,14 @@ def _bypass_error() -> ImagePanelError:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderInputAsset:
+    asset_id: str
+    media_type: str
+    uri: str
+    metadata: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderInvocation:
     request_id: str
     request_hash: str
@@ -29,6 +37,7 @@ class ProviderInvocation:
     compiled_prompt: str
     attempt: int
     timeout_seconds: float
+    input_assets: tuple[ProviderInputAsset, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
