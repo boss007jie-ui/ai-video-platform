@@ -15,6 +15,7 @@ import tempfile
 from .errors import ErrorCode, SkillError
 from .fine_segments import build_fine_segments, detect_boundary_signals
 from .models import ReferenceBreakdownDraftResult
+from .segment_storyboard import build_segment_analysis
 from .storyboard import _mapping, _strict_keys, _text, _validate_metadata, _validate_source, _workspace
 
 
@@ -331,7 +332,7 @@ def _published_replay(workspace: Path, request_digest: str) -> ReferenceBreakdow
     if manifest.get("request_digest") != request_digest:
         raise SkillError(ErrorCode.OUTPUT_CONFLICT, "Draft output root contains different content")
     for keyframe in manifest.get("keyframes", []):
-        relative = Path(str(keyframe.get("path")))
+        relative = Path(str(keyframe.get("path") or keyframe.get("asset_path")))
         path = workspace / relative
         if (
             relative.is_absolute()
@@ -378,6 +379,41 @@ def _prepare_fine_breakdown(
     )
     stage = Path(tempfile.mkdtemp(prefix=f".{_OUTPUT_ROOT}-stage-", dir=root))
     target = root / _OUTPUT_ROOT
+    keyframes: list[dict[str, object]] = []
+    keyframe_dir = stage / "keyframes"
+    keyframe_dir.mkdir()
+    for segment in segments:
+        start_ms = int(segment["start_ms"])
+        end_ms = int(segment["end_ms"])
+        timestamps = {
+            "start": start_ms,
+            "representative": start_ms + ((end_ms - start_ms) // 2),
+            "end": end_ms - 1,
+        }
+        for role, timestamp_ms in timestamps.items():
+            frame_id = f"{segment['segment_id']}-{role}"
+            filename = f"{frame_id}.png"
+            payload = _extract_keyframe(
+                media,
+                timestamp_ms,
+                near_end=timestamp_ms == int(metadata["duration_ms"]) - 1,
+            )
+            (keyframe_dir / filename).write_bytes(payload)
+            keyframes.append({
+                "frame_id": frame_id,
+                "source_video_id": source["source_id"],
+                "segment_id": segment["segment_id"],
+                "timestamp_ms": timestamp_ms,
+                "frame_role": role,
+                "asset_path": f"{_OUTPUT_ROOT}/keyframes/{filename}",
+                "sha256": _digest(payload),
+            })
+    segment_analysis = build_segment_analysis(
+        segments,
+        keyframes,
+        offline["segment_annotations"],  # type: ignore[arg-type]
+        analyzer_id=str(offline["analyzer_id"]),
+    )
     manifest = {
         "draft": True,
         "draft_version": _FINE_MODE,
@@ -397,11 +433,18 @@ def _prepare_fine_breakdown(
         "source_video": {"media_path": source["media_path"], "sha256": source["sha256"]},
         "segmentation_policy": policy,
         "fine_segment_count": len(segments),
-        "keyframes": [],
-        "artifacts": ["draft_manifest.json", "fine_segments.json"],
+        "keyframes": keyframes,
+        "artifacts": [
+            "draft_manifest.json",
+            "fine_segments.json",
+            "keyframes/index.json",
+            "segment_analysis.json",
+        ],
     }
     try:
         (stage / "fine_segments.json").write_bytes(_pretty(segments))
+        (keyframe_dir / "index.json").write_bytes(_pretty(keyframes))
+        (stage / "segment_analysis.json").write_bytes(_pretty(segment_analysis))
         (stage / "draft_manifest.json").write_bytes(_pretty(manifest))
         try:
             os.replace(stage, target)

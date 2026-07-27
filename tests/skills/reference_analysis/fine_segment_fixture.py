@@ -8,6 +8,32 @@ from typing import Iterable
 
 FIXTURE = Path(__file__).parent / "fixtures" / "local-draft-v1.mp4"
 
+OBSERVATION_FIELDS = (
+    "scene",
+    "shot_scale_and_camera_position",
+    "camera_motion",
+    "subject_motion",
+    "primary_subject_action",
+    "product_action_and_state",
+    "package_container_prop_state",
+    "subtitle_and_visible_text",
+    "speech_music_sound_effect",
+    "emotion_change",
+    "attention_target",
+    "audience_psychology",
+    "narrative_function",
+    "viral_mechanism",
+    "conversion_function",
+)
+
+STAGES = (
+    ("Problem Hook", "Recognize a familiar problem", "Visual Hook"),
+    ("Product Reveal", "Resolve initial curiosity", "Reveal"),
+    ("Use Demo", "Understand how the product works", "Product Proof"),
+    ("Result Proof", "Believe the visible result", "Detail Proof"),
+    ("Natural Close", "Accept a low-pressure ending", "Natural Close"),
+)
+
 
 def materialize_video(workspace: Path) -> tuple[Path, str]:
     media = workspace / "inputs" / "reference.mp4"
@@ -69,7 +95,35 @@ def fine_segment_request(media_sha256: str, *, boundaries: Iterable[int]) -> dic
 
 def ten_segment_request(workspace: Path) -> dict[str, object]:
     _, digest = materialize_video(workspace)
-    return fine_segment_request(
+    request = fine_segment_request(
         digest,
         boundaries=(400, 800, 1200, 1600, 2000, 2400, 2800, 3200, 3600),
     )
+    annotations: list[dict[str, object]] = []
+    for index in range(10):
+        title, psychology, function = STAGES[index // 2]
+        values = {
+            "scene": f"Synthetic scene {index // 2 + 1}",
+            "shot_scale_and_camera_position": "Close product view",
+            "camera_motion": "Short controlled move",
+            "subject_motion": f"Subject action stage {index // 2 + 1}",
+            "primary_subject_action": f"Complete action for {title}",
+            "product_action_and_state": f"Product state for {title}",
+            "package_container_prop_state": "Props remain visibly traceable",
+            "subtitle_and_visible_text": f"Stage label {title}",
+            "speech_music_sound_effect": "Synthetic local audio evidence",
+            "emotion_change": f"Emotion supports {title}",
+            "attention_target": "Reference product and action",
+            "audience_psychology": psychology,
+            "narrative_function": title,
+            "viral_mechanism": function,
+            "conversion_function": function,
+        }
+        annotations.append({
+            "start_ms": index * 400,
+            "end_ms": (index + 1) * 400,
+            "stage_title": title,
+            "observations": {field: values[field] for field in OBSERVATION_FIELDS},
+        })
+    request["offline_analysis"]["segment_annotations"] = annotations  # type: ignore[index]
+    return request

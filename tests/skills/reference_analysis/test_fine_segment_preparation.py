@@ -30,6 +30,33 @@ class PrepareFineSegmentTests(unittest.TestCase):
             self.assertEqual(segments[0]["previous_segment_id"], None)
             self.assertEqual(segments[-1]["next_segment_id"], None)
 
+    def test_every_fine_segment_has_real_start_representative_and_end_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            result = prepare_reference_breakdown(ten_segment_request(workspace), workspace=workspace)
+            root = workspace / result.output_root
+
+            segments = json.loads((root / "fine_segments.json").read_text(encoding="utf-8"))
+            frames = json.loads((root / "keyframes" / "index.json").read_text(encoding="utf-8"))
+            analyses = json.loads((root / "segment_analysis.json").read_text(encoding="utf-8"))
+
+            for segment in segments:
+                owned = [frame for frame in frames if frame["segment_id"] == segment["segment_id"]]
+                self.assertEqual(
+                    {frame["frame_role"] for frame in owned},
+                    {"start", "representative", "end"},
+                )
+                self.assertTrue(
+                    all(segment["start_ms"] <= frame["timestamp_ms"] < segment["end_ms"] for frame in owned)
+                )
+                self.assertTrue(all(len(frame["sha256"]) == 64 for frame in owned))
+                self.assertTrue(all((workspace / frame["asset_path"]).is_file() for frame in owned))
+            self.assertEqual(
+                {item["segment_id"] for item in analyses},
+                {item["segment_id"] for item in segments},
+            )
+            self.assertTrue(all(len(item["observations"]) == 15 for item in analyses))
+
 
 if __name__ == "__main__":
     unittest.main()
