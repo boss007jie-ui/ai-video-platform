@@ -118,4 +118,101 @@ def build_segment_analysis(
     return analyses
 
 
-__all__ = ["OBSERVATION_FIELDS", "build_segment_analysis"]
+_MERGE_FIELDS = (
+    "narrative_function",
+    "audience_psychology",
+    "viral_mechanism",
+    "conversion_function",
+    "primary_subject_action",
+    "product_action_and_state",
+)
+
+
+def _observation_value(analysis: Mapping[str, object], field: str) -> str:
+    observations = analysis["observations"]
+    value = observations[field]["value"]  # type: ignore[index]
+    return str(value)
+
+
+def _merge_signature(analysis: Mapping[str, object]) -> tuple[str, ...] | None:
+    signature = tuple(_observation_value(analysis, field) for field in _MERGE_FIELDS)
+    return None if any(value == "UNAVAILABLE" for value in signature) else signature
+
+
+def derive_core_beats(
+    segments: Sequence[Mapping[str, object]],
+    analyses: Sequence[Mapping[str, object]],
+    keyframes: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Merge only adjacent segments with the same available semantic purpose."""
+    by_segment = {str(item["segment_id"]): item for item in analyses}
+    frames_by_segment: dict[str, list[Mapping[str, object]]] = {}
+    for frame in keyframes:
+        frames_by_segment.setdefault(str(frame["segment_id"]), []).append(frame)
+
+    groups: list[list[Mapping[str, object]]] = []
+    prior_signature: tuple[str, ...] | None = None
+    for segment in segments:
+        segment_id = str(segment["segment_id"])
+        analysis = by_segment.get(segment_id)
+        if analysis is None:
+            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Every fine segment requires analysis")
+        signature = _merge_signature(analysis)
+        if groups and signature is not None and signature == prior_signature:
+            groups[-1].append(segment)
+        else:
+            groups.append([segment])
+        prior_signature = signature
+
+    beats: list[dict[str, object]] = []
+    for index, group in enumerate(groups):
+        first = group[0]
+        last = group[-1]
+        first_id = str(first["segment_id"])
+        analysis = by_segment[first_id]
+        source_segment_ids = [str(item["segment_id"]) for item in group]
+        source_frames = [frame for segment_id in source_segment_ids for frame in frames_by_segment.get(segment_id, [])]
+        representative = next(
+            (str(frame["frame_id"]) for frame in source_frames if frame.get("frame_role") == "representative"),
+            None,
+        )
+        if representative is None:
+            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Core beat representative frame is missing")
+        conversion = _observation_value(analysis, "conversion_function")
+        beats.append({
+            "beat_id": f"core-beat-{index + 1:03d}",
+            "source_segment_ids": source_segment_ids,
+            "source_frame_ids": [str(frame["frame_id"]) for frame in source_frames],
+            "start_ms": int(first["start_ms"]),
+            "end_ms": int(last["end_ms"]),
+            "representative_frame_id": representative,
+            "merge_reason": (
+                "Adjacent segments share narrative purpose, audience psychology, mechanism, action, and product state."
+                if len(group) > 1
+                else "Segment retains a distinct evidence-bound semantic purpose."
+            ),
+            "stage_title": str(analysis["stage_title"]),
+            "visual_summary": _observation_value(analysis, "scene"),
+            "key_action": _observation_value(analysis, "primary_subject_action"),
+            "audience_psychology": _observation_value(analysis, "audience_psychology"),
+            "viral_or_conversion_function": conversion,
+            "function_label": conversion,
+        })
+    return beats
+
+
+def derive_formula(beats: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    """Derive the video formula only from the confirmed ordered beats."""
+    return {
+        "value": " -> ".join(str(beat["stage_title"]) for beat in beats),
+        "source_beat_ids": [str(beat["beat_id"]) for beat in beats],
+        "evidence_refs": [f"frame:{beat['representative_frame_id']}" for beat in beats],
+    }
+
+
+__all__ = [
+    "OBSERVATION_FIELDS",
+    "build_segment_analysis",
+    "derive_core_beats",
+    "derive_formula",
+]

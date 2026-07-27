@@ -15,7 +15,7 @@ import tempfile
 from .errors import ErrorCode, SkillError
 from .fine_segments import build_fine_segments, detect_boundary_signals
 from .models import ReferenceBreakdownDraftResult
-from .segment_storyboard import build_segment_analysis
+from .segment_storyboard import build_segment_analysis, derive_core_beats, derive_formula
 from .storyboard import _mapping, _strict_keys, _text, _validate_metadata, _validate_source, _workspace
 
 
@@ -414,6 +414,79 @@ def _prepare_fine_breakdown(
         offline["segment_annotations"],  # type: ignore[arg-type]
         analyzer_id=str(offline["analyzer_id"]),
     )
+    core_beats = derive_core_beats(segments, segment_analysis, keyframes)
+    formula = derive_formula(core_beats)
+    analysis_by_segment = {str(item["segment_id"]): item for item in segment_analysis}
+    timeline: list[dict[str, object]] = []
+    for beat in core_beats:
+        first_analysis = analysis_by_segment[str(beat["source_segment_ids"][0])]  # type: ignore[index]
+        observations = first_analysis["observations"]
+        representative = str(beat["representative_frame_id"])
+
+        def observed(name: str) -> dict[str, object]:
+            value = str(observations[name]["value"])  # type: ignore[index]
+            return {
+                "value": value,
+                "evidence_refs": [] if value == "UNAVAILABLE" else [f"keyframe:{representative}"],
+            }
+
+        conversion = observed("conversion_function")
+        conversion_value = str(conversion["value"])
+        timeline.append({
+            "beat_id": beat["beat_id"],
+            "start_ms": beat["start_ms"],
+            "end_ms": beat["end_ms"],
+            "stage_title": beat["stage_title"],
+            "keyframe_ids": list(beat["source_frame_ids"]),
+            "scene": observed("scene"),
+            "shot_scale": observed("shot_scale_and_camera_position"),
+            "camera_motion": observed("camera_motion"),
+            "character_action": observed("primary_subject_action"),
+            "product_action": observed("product_action_and_state"),
+            "product_state": observed("product_action_and_state"),
+            "emotion": observed("emotion_change"),
+            "audience_psychology": observed("audience_psychology"),
+            "conversion_function": conversion,
+            "viral_mechanism": observed("viral_mechanism"),
+            "comment_evidence": {"value": "UNAVAILABLE", "evidence_refs": []},
+            "actual_reference_behavior": observed("narrative_function"),
+            "reusable_pattern": observed("viral_mechanism"),
+            "product_transfer_suggestion": {
+                "value": (
+                    "UNAVAILABLE"
+                    if conversion_value == "UNAVAILABLE"
+                    else f"Adapt the category-level {conversion_value} mechanism to the current product."
+                ),
+                "evidence_refs": [] if conversion_value == "UNAVAILABLE" else [f"keyframe:{representative}"],
+            },
+        })
+    publication_formula = {
+        "value": formula["value"],
+        "evidence_refs": [f"keyframe:{beat['representative_frame_id']}" for beat in core_beats],
+    }
+    current_product = _current_product(normalized.get("current_product"))
+    analyze_request = {
+        "analysis_version": _VERSION,
+        "selected_reference_video": source,
+        "video_metadata": metadata,
+        "analysis_configuration": {
+            "current_product": current_product,
+            "keyframes": [
+                {
+                    "keyframe_id": frame["frame_id"],
+                    "timestamp_ms": frame["timestamp_ms"],
+                    "path": frame["asset_path"],
+                    "sha256": frame["sha256"],
+                }
+                for frame in keyframes
+            ],
+            "timeline": timeline,
+            "bottom_line_formula": publication_formula,
+            "fine_segments": segments,
+            "segment_analysis": segment_analysis,
+            "core_beats": core_beats,
+        },
+    }
     manifest = {
         "draft": True,
         "draft_version": _FINE_MODE,
@@ -439,12 +512,20 @@ def _prepare_fine_breakdown(
             "fine_segments.json",
             "keyframes/index.json",
             "segment_analysis.json",
+            "draft_core_beats.json",
+            "draft_timeline.json",
+            "draft_bottom_line_formula.json",
+            "analyze_storyboard_request.json",
         ],
     }
     try:
         (stage / "fine_segments.json").write_bytes(_pretty(segments))
         (keyframe_dir / "index.json").write_bytes(_pretty(keyframes))
         (stage / "segment_analysis.json").write_bytes(_pretty(segment_analysis))
+        (stage / "draft_core_beats.json").write_bytes(_pretty(core_beats))
+        (stage / "draft_timeline.json").write_bytes(_pretty(timeline))
+        (stage / "draft_bottom_line_formula.json").write_bytes(_pretty(formula))
+        (stage / "analyze_storyboard_request.json").write_bytes(_pretty(analyze_request))
         (stage / "draft_manifest.json").write_bytes(_pretty(manifest))
         try:
             os.replace(stage, target)

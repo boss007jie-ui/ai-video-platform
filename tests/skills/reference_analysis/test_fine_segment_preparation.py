@@ -57,6 +57,26 @@ class PrepareFineSegmentTests(unittest.TestCase):
             )
             self.assertTrue(all(len(item["observations"]) == 15 for item in analyses))
 
+    def test_preparation_merges_only_adjacent_semantically_matching_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            result = prepare_reference_breakdown(ten_segment_request(workspace), workspace=workspace)
+            request = json.loads(
+                (workspace / result.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+
+            config = request["analysis_configuration"]
+            self.assertEqual(len(config["fine_segments"]), 10)
+            beats = config["core_beats"]
+            self.assertEqual(len(beats), 5)
+            self.assertEqual(beats[0]["source_segment_ids"], ["segment-001", "segment-002"])
+            self.assertEqual(
+                config["bottom_line_formula"]["value"],
+                "Problem Hook -> Product Reveal -> Use Demo -> Result Proof -> Natural Close",
+            )
+            flattened = [segment_id for beat in beats for segment_id in beat["source_segment_ids"]]
+            self.assertEqual(flattened, [f"segment-{index:03d}" for index in range(1, 11)])
+
 
 if __name__ == "__main__":
     unittest.main()
