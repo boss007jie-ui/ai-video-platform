@@ -6,10 +6,10 @@ from collections.abc import Mapping, Sequence
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 
 from .errors import ErrorCode, SkillError
+from .local_media import resolve_local_media_tool, run_local_media
 
 
 _SILENCE_PATTERN = re.compile(r"silence_(?:start|end):\s*([0-9]+(?:\.[0-9]+)?)")
@@ -17,22 +17,13 @@ _SILENCE_PATTERN = re.compile(r"silence_(?:start|end):\s*([0-9]+(?:\.[0-9]+)?)")
 
 def _run_local(command: list[str], *, timeout: int) -> subprocess.CompletedProcess[bytes]:
     try:
-        return subprocess.run(
-            command,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
+        return run_local_media(command, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         raise SkillError(ErrorCode.MEDIA_INVALID, "Local boundary detection failed") from exc
 
 
 def _ffmpeg() -> str:
-    executable = shutil.which("ffmpeg")
-    if not executable:
-        raise SkillError(ErrorCode.MEDIA_INVALID, "Required local media tool is unavailable: ffmpeg")
-    return executable
+    return resolve_local_media_tool("ffmpeg")
 
 
 def _visual_signals(
@@ -48,6 +39,7 @@ def _visual_signals(
             _ffmpeg(),
             "-v", "error",
             "-nostdin",
+            "-protocol_whitelist", "file,pipe",
             "-i", os.fspath(media),
             "-vf", f"fps={sampling_fps},scale={width}:{height}",
             "-pix_fmt", "rgb24",
@@ -83,6 +75,7 @@ def _audio_signals(media: Path, duration_ms: int) -> list[dict[str, object]]:
             _ffmpeg(),
             "-hide_banner",
             "-nostdin",
+            "-protocol_whitelist", "file,pipe",
             "-i", os.fspath(media),
             "-af", "silencedetect=noise=-35dB:d=0.18",
             "-f", "null",

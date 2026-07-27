@@ -77,6 +77,25 @@ class PrepareFineSegmentTests(unittest.TestCase):
             flattened = [segment_id for beat in beats for segment_id in beat["source_segment_ids"]]
             self.assertEqual(flattened, [f"segment-{index:03d}" for index in range(1, 11)])
 
+    def test_fine_mode_runs_with_only_local_detectors_when_optional_inputs_are_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = ten_segment_request(workspace)
+            del request["offline_analysis"]
+            del request["segmentation_policy"]
+
+            result = prepare_reference_breakdown(request, workspace=workspace)
+
+            root = workspace / result.output_root
+            manifest = json.loads((root / "draft_manifest.json").read_text(encoding="utf-8"))
+            segments = json.loads((root / "fine_segments.json").read_text(encoding="utf-8"))
+            self.assertGreaterEqual(len(segments), 1)
+            self.assertEqual(segments[0]["start_ms"], 0)
+            self.assertEqual(segments[-1]["end_ms"], 4000)
+            self.assertEqual(manifest["network_calls"], 0)
+            self.assertEqual(manifest["provider_calls"], 0)
+            self.assertIs(manifest["external_upload"], False)
+
 
 if __name__ == "__main__":
     unittest.main()

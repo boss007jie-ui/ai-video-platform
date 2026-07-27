@@ -628,6 +628,48 @@ def _markdown(artifact: dict[str, object]) -> bytes:
         f"- Comments: {artifact['comments']['status']}",  # type: ignore[index]
         "",
     ]
+    fine_segments = artifact.get("fine_segments")
+    if isinstance(fine_segments, list):
+        lines.extend(("## Fine segments", ""))
+        for segment in fine_segments:
+            reasons = ", ".join(
+                str(reason.get("reason", "UNAVAILABLE"))
+                for reason in segment["segmentation_reasons"]
+            )
+            lines.extend((
+                f"### {segment['segment_id']} ({segment['start_ms']}-{segment['end_ms']} ms)",
+                "",
+                f"- Duration: {segment['duration_ms']} ms",
+                f"- Boundary reasons: {reasons}",
+                f"- Previous: {segment['previous_segment_id']}",
+                f"- Next: {segment['next_segment_id']}",
+                "",
+            ))
+        lines.extend(("## Segment analysis", ""))
+        for analysis in artifact["segment_analysis"]:  # type: ignore[union-attr]
+            lines.extend((
+                f"### {analysis['segment_id']}",
+                "",
+                f"- Stage: {analysis['stage_title']}",
+                *(
+                    f"- {name.replace('_', ' ').title()}: {observation['value']}"
+                    for name, observation in analysis["observations"].items()
+                ),
+                "",
+            ))
+        lines.extend(("## Core beats", ""))
+        for beat in artifact["reference_beats"]:  # type: ignore[union-attr]
+            lines.extend((
+                f"### {beat['stage_title']} ({beat['start_ms']}-{beat['end_ms']} ms)",
+                "",
+                f"- Source segments: {', '.join(beat['source_segment_ids'])}",
+                f"- Source frames: {', '.join(beat['source_frame_ids'])}",
+                f"- Representative frame: {beat['representative_frame_id']}",
+                f"- Merge reason: {beat['merge_reason']}",
+                f"- Audience psychology: {beat['audience_psychology']}",
+                f"- Function: {beat['function_label']}",
+                "",
+            ))
     for beat in artifact["timeline"]:  # type: ignore[union-attr]
         interval = beat["interval"]
         lines.extend((

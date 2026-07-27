@@ -14,6 +14,7 @@ import tempfile
 
 from .errors import ErrorCode, SkillError
 from .fine_segments import build_fine_segments, detect_boundary_signals
+from .local_media import resolve_local_media_tool, run_local_media
 from .models import ReferenceBreakdownDraftResult
 from .segment_storyboard import build_segment_analysis, derive_core_beats, derive_formula
 from .storyboard import _mapping, _strict_keys, _text, _validate_metadata, _validate_source, _workspace
@@ -58,6 +59,13 @@ def _number(value: object, field: str, *, minimum: float, maximum: float) -> flo
 
 
 def _fine_policy(value: object) -> dict[str, object]:
+    if value is None:
+        return {
+            "sampling_fps": 4,
+            "visual_change_threshold": 0.22,
+            "min_segment_ms": 250,
+            "enable_audio_boundaries": True,
+        }
     policy = _mapping(value, "segmentation_policy")
     keys = {"sampling_fps", "visual_change_threshold", "min_segment_ms", "enable_audio_boundaries"}
     _strict_keys(policy, keys, keys, "segmentation_policy")
@@ -84,6 +92,12 @@ def _fine_policy(value: object) -> dict[str, object]:
 
 
 def _offline_analysis(value: object) -> dict[str, object]:
+    if value is None:
+        return {
+            "analyzer_id": "UNAVAILABLE",
+            "boundary_signals": [],
+            "segment_annotations": [],
+        }
     analysis = _mapping(value, "offline_analysis")
     keys = {"analyzer_id", "boundary_signals", "segment_annotations"}
     _strict_keys(analysis, keys, keys, "offline_analysis")
@@ -153,34 +167,21 @@ def _forbidden_paths(value: object, prefix: str = "") -> list[str]:
 
 
 def _local_tool(name: str) -> str:
-    resolved = shutil.which(name)
-    if not resolved:
-        raise SkillError(
-            ErrorCode.MEDIA_INVALID,
-            f"Required local media tool is unavailable: {name}",
-            field_paths=("video_metadata",),
-        )
-    return resolved
+    return resolve_local_media_tool(name)
 
 
 def _probe_metadata(media: Path) -> dict[str, object]:
     command = [
         _local_tool("ffprobe"),
         "-v", "error",
+        "-protocol_whitelist", "file,pipe",
         "-select_streams", "v:0",
         "-show_entries", "stream=codec_name,width,height,duration:format=duration",
         "-of", "json",
         os.fspath(media),
     ]
     try:
-        completed = subprocess.run(
-            command,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+        completed = run_local_media(command, timeout=30, text=True)
     except (OSError, subprocess.SubprocessError) as exc:
         raise SkillError(ErrorCode.MEDIA_INVALID, "Local video metadata probe failed") from exc
     if completed.returncode != 0:
@@ -296,6 +297,7 @@ def _extract_keyframe(media: Path, timestamp_ms: int, *, near_end: bool) -> byte
         _local_tool("ffmpeg"),
         "-v", "error",
         "-nostdin",
+        "-protocol_whitelist", "file,pipe",
         *seek,
         "-i", os.fspath(media),
         "-frames:v", "1",
@@ -304,13 +306,7 @@ def _extract_keyframe(media: Path, timestamp_ms: int, *, near_end: bool) -> byte
         "pipe:1",
     ]
     try:
-        completed = subprocess.run(
-            command,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
+        completed = run_local_media(command, timeout=60)
     except (OSError, subprocess.SubprocessError) as exc:
         raise SkillError(ErrorCode.MEDIA_INVALID, "Local keyframe extraction failed") from exc
     payload = completed.stdout

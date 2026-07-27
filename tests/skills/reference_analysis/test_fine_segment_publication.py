@@ -59,6 +59,10 @@ class FineSegmentPublicationTests(unittest.TestCase):
             self.assertEqual(provenance["network_calls"], 0)
             self.assertEqual(provenance["provider_calls"], 0)
             self.assertIs(provenance["external_upload"], False)
+            markdown = (root / "reference_storyboard_analysis.md").read_text(encoding="utf-8")
+            self.assertIn("## Fine segments", markdown)
+            self.assertIn("### segment-001", markdown)
+            self.assertIn("Source segments: segment-001, segment-002", markdown)
 
     def test_board_is_compact_horizontal_and_uses_only_core_representative_frames(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
