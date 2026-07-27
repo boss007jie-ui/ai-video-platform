@@ -22,6 +22,7 @@ from .codec import generation_request_from_mapping, model_profile_from_mapping
 from .cli_ledger import CliExecutionLedger, assert_task_workspace
 from .errors import ImagePanelError, ImagePanelErrorCode
 from .models import GenerationCommand, GenerationOutcome, GenerationStatus
+from .packy_image2_adapter import PackyImage2Adapter
 from .service import ImagePanelService
 from .seedance_nz_image_adapter import SeedanceNzImageAdapter
 from .storyboard_panels import ProductionStoryboardPanelService, storyboard_panel_request_from_mapping
@@ -52,7 +53,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", required=True)
     parser.add_argument(
         "--adapter",
-        choices=("rejecting", "fake", "yunwu-nano-banana", "yunwu-image2", "seedance-nz-image"),
+        choices=(
+            "rejecting",
+            "fake",
+            "packy-image2",
+            "yunwu-nano-banana",
+            "yunwu-image2",
+            "seedance-nz-image",
+        ),
         default="rejecting",
     )
     parser.add_argument("--output-dir")
@@ -64,6 +72,16 @@ def _adapter_from_name(name: str) -> ImageProviderAdapter:
         return FakeImageProviderAdapter()
     if name == "rejecting":
         return RejectingImageProviderAdapter()
+    if name == "packy-image2":
+        try:
+            return PackyImage2Adapter.from_environment()
+        except ValueError as exc:
+            raise ImagePanelError(
+                ImagePanelErrorCode.PROVIDER_NOT_AUTHORIZED,
+                "PACKY_API_KEY is required",
+                category="authorization",
+                field_paths=("PACKY_API_KEY",),
+            ) from exc
     if name == "seedance-nz-image":
         try:
             return SeedanceNzImageAdapter.from_environment()
@@ -116,8 +134,8 @@ def _resolve_output_directory(input_path: Path, raw_output_dir: str | None) -> P
     return output_dir
 
 
-def _persist_yunwu_artifact(
-    adapter: YunwuNanoBananaAdapter | YunwuImage2Adapter,
+def _persist_inline_image_artifact(
+    adapter: YunwuNanoBananaAdapter | YunwuImage2Adapter | PackyImage2Adapter,
     *,
     output_dir: Path,
     request_hash: str,
@@ -125,7 +143,9 @@ def _persist_yunwu_artifact(
     asset = adapter.last_asset
     digest = hashlib.sha256(asset.content).hexdigest()
     request_token = hashlib.sha256(request_hash.encode("utf-8")).hexdigest()[:16]
-    output_path = output_dir / f"yunwu-{request_token}-{digest[:16]}.png"
+    prefix = "packy-image2" if isinstance(adapter, PackyImage2Adapter) else "yunwu"
+    extension = _artifact_extension(asset.content_type)
+    output_path = output_dir / f"{prefix}-{request_token}-{digest[:16]}{extension}"
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
         if output_path.exists():
@@ -252,7 +272,7 @@ def _outcome_mapping(
         "execution_event": outcome.execution_event.to_dict(),
         "provider_smoke": "NOT_AUTHORIZED",
     }
-    if isinstance(adapter, (YunwuNanoBananaAdapter, YunwuImage2Adapter)):
+    if isinstance(adapter, (YunwuNanoBananaAdapter, YunwuImage2Adapter, PackyImage2Adapter)):
         try:
             receipt = adapter.last_receipt
         except RuntimeError:
@@ -370,10 +390,10 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
                 outcome = service.generate_panel(request)
             artifact_receipt = None
             if (
-                isinstance(adapter, (YunwuNanoBananaAdapter, YunwuImage2Adapter))
+                isinstance(adapter, (YunwuNanoBananaAdapter, YunwuImage2Adapter, PackyImage2Adapter))
                 and outcome.status is GenerationStatus.COMPLETED
             ):
-                artifact_receipt = _persist_yunwu_artifact(
+                artifact_receipt = _persist_inline_image_artifact(
                     adapter,
                     output_dir=output_dir,
                     request_hash=request.request_hash,

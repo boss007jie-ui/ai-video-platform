@@ -1,16 +1,34 @@
 from __future__ import annotations
 
+import ast
 import tempfile
 import unittest
 from pathlib import Path
 
 from ai_video_platform.maintenance.codex.merge_guard import (
+    _forbidden_runtime_import,
     check_changed_paths,
     scan_runtime_boundaries,
 )
 
 
 class MergeGuardTests(unittest.TestCase):
+    def test_packy_network_allowlist_is_exact_to_adapter_file(self) -> None:
+        tree = ast.parse("import urllib.request\nimport openai\n")
+        adapter = Path(
+            "src/ai_video_platform/skills/product_image_panel_generation/"
+            "packy_image2_adapter.py"
+        )
+        sibling = Path(
+            "src/ai_video_platform/skills/product_image_panel_generation/client.py"
+        )
+
+        self.assertIsNone(_forbidden_runtime_import(tree, adapter))
+        self.assertEqual(
+            _forbidden_runtime_import(tree, sibling),
+            "NETWORK_CLIENT_IMPORT_FORBIDDEN",
+        )
+
     def test_runtime_scan_allows_rejection_message_without_write_call(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -482,6 +500,7 @@ class MergeGuardTests(unittest.TestCase):
             "viral_research_asset_collection/media.py",
             "video_generation/kie_adapter.py",
             "video_generation/seedance_nz_adapter.py",
+            "product_image_panel_generation/packy_image2_adapter.py",
             "product_image_panel_generation/yunwu_adapters.py",
         )
         with tempfile.TemporaryDirectory() as temporary:

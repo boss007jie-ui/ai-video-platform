@@ -104,6 +104,7 @@ _SKILL_NAMES = {
 _NETWORK_IMPORTS = {"requests", "httpx", "urllib.request", "aiohttp"}
 _PROVIDER_IMPORTS = {"openai", "google.generativeai", "replicate", "fal_client", "apify_client"}
 _AUTHORIZED_PROVIDER_NETWORK_ADAPTERS = {
+    "src/ai_video_platform/skills/product_image_panel_generation/packy_image2_adapter.py",
     "src/ai_video_platform/skills/product_image_panel_generation/yunwu_adapters.py",
     "src/ai_video_platform/skills/video_generation/kie_adapter.py",
     "src/ai_video_platform/skills/video_generation/seedance_nz_adapter.py",
