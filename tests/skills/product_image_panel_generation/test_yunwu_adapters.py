@@ -71,8 +71,10 @@ def _invocation(
     *,
     timeout_seconds: float = 300.0,
     input_assets: tuple[ProviderInputAsset, ...] = (),
+    width: int = 1024,
+    height: int = 1024,
 ) -> ProviderInvocation:
-    request = make_request()
+    request = make_request(width=width, height=height)
     return ProviderInvocation(
         request_id=request.request_id,
         request_hash=request.request_hash,
@@ -86,6 +88,153 @@ def _invocation(
 
 
 class YunwuAdapterTests(unittest.TestCase):
+    def test_nano_banana_adds_supported_aspect_ratio_to_payload(self) -> None:
+        for width, height, expected_ratio in (
+            (1024, 1024, "1:1"),
+            (1024, 1536, "2:3"),
+            (1536, 1024, "3:2"),
+            (768, 1024, "3:4"),
+            (1024, 768, "4:3"),
+            (1024, 1280, "4:5"),
+            (1280, 1024, "5:4"),
+            (720, 1280, "9:16"),
+            (1280, 720, "16:9"),
+            (1680, 720, "21:9"),
+        ):
+            with self.subTest(width=width, height=height):
+                content = _png(width, height)
+                response = {
+                    "responseId": f"nano-ratio-{width}x{height}",
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "inlineData": {
+                                            "mimeType": "image/png",
+                                            "data": base64.b64encode(content).decode("ascii"),
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                }
+                transport = RecordingTransport(
+                    YunwuHttpResponse(
+                        200,
+                        {},
+                        json.dumps(response).encode("utf-8"),
+                        1,
+                    )
+                )
+                adapter = YunwuNanoBananaAdapter(
+                    api_key="synthetic-key",
+                    transport=transport,
+                )
+
+                asset = adapter._generate(
+                    _invocation(
+                        provider_id="yunwu-nano-banana",
+                        model_id="gemini-3.1-flash-image-preview",
+                        width=width,
+                        height=height,
+                    ),
+                    cancellation=CancellationToken(),
+                )
+
+                self.assertEqual((asset.width, asset.height), (width, height))
+                self.assertEqual(
+                    transport.calls[0]["payload"]["generationConfig"],
+                    {
+                        "responseModalities": ["IMAGE"],
+                        "imageConfig": {"aspectRatio": expected_ratio},
+                    },
+                )
+
+    def test_nano_banana_maps_native_768x1376_to_9_16_and_passes_size_guard(self) -> None:
+        content = _png(768, 1376)
+        response = {
+            "responseId": "nano-native-9x16",
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": base64.b64encode(content).decode("ascii"),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+        }
+        transport = RecordingTransport(
+            YunwuHttpResponse(200, {}, json.dumps(response).encode("utf-8"), 1)
+        )
+        adapter = YunwuNanoBananaAdapter(api_key="synthetic-key", transport=transport)
+
+        asset = adapter._generate(
+            _invocation(
+                provider_id="yunwu-nano-banana",
+                model_id="gemini-3.1-flash-image-preview",
+                width=768,
+                height=1376,
+            ),
+            cancellation=CancellationToken(),
+        )
+
+        self.assertEqual((asset.width, asset.height), (768, 1376))
+        self.assertEqual(
+            transport.calls[0]["payload"]["generationConfig"],
+            {
+                "responseModalities": ["IMAGE"],
+                "imageConfig": {"aspectRatio": "9:16"},
+            },
+        )
+
+    def test_nano_banana_omits_aspect_ratio_for_unsupported_dimensions(self) -> None:
+        content = _png(1000, 1007)
+        response = {
+            "responseId": "nano-unsupported-ratio",
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": base64.b64encode(content).decode("ascii"),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+        }
+        transport = RecordingTransport(
+            YunwuHttpResponse(200, {}, json.dumps(response).encode("utf-8"), 1)
+        )
+        adapter = YunwuNanoBananaAdapter(api_key="synthetic-key", transport=transport)
+
+        asset = adapter._generate(
+            _invocation(
+                provider_id="yunwu-nano-banana",
+                model_id="gemini-3.1-flash-image-preview",
+                width=1000,
+                height=1007,
+            ),
+            cancellation=CancellationToken(),
+        )
+
+        self.assertEqual((asset.width, asset.height), (1000, 1007))
+        self.assertEqual(
+            transport.calls[0]["payload"]["generationConfig"],
+            {"responseModalities": ["IMAGE"]},
+        )
+
     def test_service_resolves_item_input_assets_in_declared_order_with_metadata(self) -> None:
         asset_ids = ("asset-third", "asset-audio", "asset-first")
         request = make_request(
@@ -511,7 +660,10 @@ class YunwuAdapterTests(unittest.TestCase):
                     ]
                 }
             ],
-            "generationConfig": {"responseModalities": ["IMAGE"]},
+            "generationConfig": {
+                "responseModalities": ["IMAGE"],
+                "imageConfig": {"aspectRatio": "1:1"},
+            },
         }
         actual_byte_size = len(
             json.dumps(
@@ -770,7 +922,10 @@ class YunwuAdapterTests(unittest.TestCase):
                 "contents": [
                     {"parts": [{"text": "Synthetic clean-room storyboard overview"}]}
                 ],
-                "generationConfig": {"responseModalities": ["IMAGE"]},
+                "generationConfig": {
+                    "responseModalities": ["IMAGE"],
+                    "imageConfig": {"aspectRatio": "1:1"},
+                },
             },
         )
         self.assertEqual(call["timeout_seconds"], 300.0)

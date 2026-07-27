@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import http.client
 import json
+from math import gcd
 import os
 from pathlib import Path
 import re
@@ -48,6 +49,32 @@ MAX_IMAGE_BYTES = 33_554_432
 MAX_NANO_INPUT_IMAGES = 9
 MAX_NANO_INPUT_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_NANO_REQUEST_BYTES = 18 * 1024 * 1024
+SUPPORTED_NANO_ASPECT_RATIOS = MappingProxyType(
+    {
+        (1, 1): "1:1",
+        (2, 3): "2:3",
+        (3, 2): "3:2",
+        (3, 4): "3:4",
+        (4, 3): "4:3",
+        (4, 5): "4:5",
+        (5, 4): "5:4",
+        (9, 16): "9:16",
+        (16, 9): "16:9",
+        (7, 3): "21:9",
+    }
+)
+NATIVE_NANO_ASPECT_RATIOS = MappingProxyType({(768, 1376): "9:16"})
+
+
+def _nano_aspect_ratio(width: int, height: int) -> str | None:
+    native_ratio = NATIVE_NANO_ASPECT_RATIOS.get((width, height))
+    if native_ratio is not None:
+        return native_ratio
+    divisor = gcd(width, height)
+    if divisor <= 0:
+        return None
+    reduced_ratio = (width // divisor, height // divisor)
+    return SUPPORTED_NANO_ASPECT_RATIOS.get(reduced_ratio)
 
 
 def _serialize_json_payload(payload: Mapping[str, object]) -> bytes:
@@ -184,9 +211,13 @@ def _nano_payload(
                 }
             }
         )
+    generation_config: dict[str, object] = {"responseModalities": ["IMAGE"]}
+    aspect_ratio = _nano_aspect_ratio(invocation.item.width, invocation.item.height)
+    if aspect_ratio is not None:
+        generation_config["imageConfig"] = {"aspectRatio": aspect_ratio}
     payload = {
         "contents": [{"parts": parts}],
-        "generationConfig": {"responseModalities": ["IMAGE"]},
+        "generationConfig": generation_config,
     }
     actual_byte_size = len(_serialize_json_payload(payload))
     if actual_byte_size > MAX_NANO_REQUEST_BYTES:
