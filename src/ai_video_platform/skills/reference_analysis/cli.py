@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from .draft import prepare_reference_breakdown
 from .errors import ErrorCode, SkillError
 from .interface import analyze_reference, compare_result
 from .storyboard import analyze_storyboard
@@ -14,21 +15,25 @@ from .storyboard import analyze_storyboard
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="reference-analysis")
-    parser.add_argument("command", choices=("analyze-reference", "compare-result", "analyze-storyboard"))
+    parser.add_argument(
+        "command",
+        choices=("analyze-reference", "compare-result", "analyze-storyboard", "prepare-reference-breakdown"),
+    )
     parser.add_argument("--input", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--output")
     arguments = parser.parse_args(argv)
     try:
         request = json.loads(Path(arguments.input).read_text(encoding="utf-8"))
-        if arguments.command == "analyze-storyboard":
+        if arguments.command in {"analyze-storyboard", "prepare-reference-breakdown"}:
             if arguments.output is not None:
                 raise SkillError(
                     ErrorCode.VALIDATION_FAILED,
-                    "analyze-storyboard always publishes to reference_analysis",
+                    f"{arguments.command} always publishes to its fixed output root",
                     field_paths=("output",),
                 )
-            result = analyze_storyboard(request, workspace=Path(arguments.workspace))
+            operation = analyze_storyboard if arguments.command == "analyze-storyboard" else prepare_reference_breakdown
+            result = operation(request, workspace=Path(arguments.workspace))
         else:
             if not arguments.output:
                 raise SkillError(

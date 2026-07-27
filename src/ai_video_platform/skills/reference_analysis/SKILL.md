@@ -7,6 +7,7 @@ Reference Analysis deterministically analyzes one explicitly selected reference,
 ## Public commands
 
 - `analyze-reference --input request.json --workspace <task-workspace> --output <relative-json>`
+- `prepare-reference-breakdown --input request.json --workspace <task-workspace>`
 - `analyze-storyboard --input request.json --workspace <task-workspace>`
 - `compare-result --input request.json --workspace <task-workspace> --output <relative-json>`
 
@@ -15,6 +16,35 @@ All commands print one machine-readable JSON result and return `0` on success or
 Hermes examples: `python -m ai_video_platform.skills.reference_analysis analyze-reference --input selected.json --workspace task-123 --output reference/analysis.json` and `python -m ai_video_platform.skills.reference_analysis analyze-storyboard --input storyboard-request.json --workspace task-123`. The direct analysis request has exactly `analysis_version` and `selected_reference`; the latter has exactly `reference_id`, `source_uri`, `sha256`, `usage`, `provenance`, and structured `segments`. A synthetic Foundation-shaped mode instead supplies exactly `analysis_version`, `reference_manifest`, and `selected_reference_id`; the manifest must have the registered `ReferenceManifest` required fields and exactly one selected entry with synthetic segments. This mode does not publish or claim a new Contract. Compare requests have exactly `analysis_version`, the unchanged analysis artifact, and a `produced_result` with the direct selected-reference shape.
 
 `analyze-storyboard` accepts the selected local reference video, video metadata, optional `ViralResearchPack`, optional popular comments, and an evidence-bound analysis configuration. It always publishes beneath `reference_analysis/`: the canonical JSON and Markdown, analysis/evidence/replication PNG boards, copied real keyframes, and `analysis_provenance.json`. Its JSON references `ReferenceStoryboardAnalysis`, `ReferenceBeat`, `ReferenceShotEvidence`, `ReplicationPattern`, and `ReferenceAnalysisBoardManifest` at `1.0.0`. Every board and keyframe is non-executable, ineligible as a first frame, and ineligible as a product panel.
+
+### Local draft preparation
+
+`prepare-reference-breakdown` is the first stage of the local-video workflow. Its request has
+`analysis_version=1.0.0`, `mode=local_draft_v1`, and the same complete
+`selected_reference_video` object consumed by `analyze-storyboard`. The media path and every
+generated asset path are workspace-relative and link/traversal paths fail closed. The selected
+video SHA-256 must match before metadata probing or extraction.
+
+`video_metadata` is optional. When supplied, all six strict fields (`duration_ms`, `width`,
+`height`, `aspect_ratio`, `media_type`, and `codec`) are preserved and provenance records
+`caller_supplied`; otherwise the local `ffprobe` executable detects them and provenance records
+`local_ffprobe`. Keyframes are always decoded locally by `ffmpeg`; missing/rejected local tools
+are blockers, with no cloud or Provider fallback.
+
+The optional policy defaults to `interval_ms=2000` and `max_keyframes=12`. Sampling always
+includes 0 ms and `duration_ms-1`; a requested maximum above 12 or a computed sample count above
+the requested maximum is rejected rather than truncated. `current_product` is optional and a
+non-identity placeholder is used when absent.
+
+The fixed `reference_breakdown_draft/` output contains `draft_manifest.json`,
+`keyframes/*.png` plus `keyframes/index.json`, `draft_timeline.json`,
+`draft_bottom_line_formula.json`, and `analyze_storyboard_request.json`. Every timeline
+observation starts with `DRAFT:` and states that visual interpretation is unconfirmed. The
+package is non-executable, never a first frame or production storyboard, records
+`provider_calls=0` and `external_upload=false`, and its request is directly consumable by
+`analyze-storyboard`. Cloud video LLM, Provider, upload, and any mode other than
+`local_draft_v1` are rejected.
+
 
 ## Invariants and outputs
 

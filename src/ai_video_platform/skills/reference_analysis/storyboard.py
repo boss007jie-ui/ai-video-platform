@@ -265,6 +265,10 @@ def _validate_keyframes(
         records[keyframe_id] = record
         payloads[keyframe_id] = payload
     return records, payloads, images
+def _is_unavailable_observation(value: str) -> bool:
+    return value == "UNAVAILABLE" or value.startswith("DRAFT: UNAVAILABLE")
+
+
 
 
 def _observation(value: object, field: str, allowed_refs: set[str]) -> dict[str, object]:
@@ -275,7 +279,8 @@ def _observation(value: object, field: str, allowed_refs: set[str]) -> dict[str,
     if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref for ref in refs):
         raise SkillError(ErrorCode.VALIDATION_FAILED, "evidence_refs must be an array", field_paths=(f"{field}.evidence_refs",))
     unknown = [ref for ref in refs if ref not in allowed_refs]
-    if unknown or (observed != "UNAVAILABLE" and not refs) or (observed == "UNAVAILABLE" and refs):
+    unavailable = _is_unavailable_observation(observed)
+    if unknown or (not unavailable and not refs) or (unavailable and refs):
         raise SkillError(ErrorCode.EVIDENCE_MISSING, "Observation is not traceable to available evidence", field_paths=(f"{field}.evidence_refs",))
     return {"value": observed, "evidence_refs": list(refs)}
 
@@ -328,7 +333,7 @@ def _validate_timeline(
             normalized[name] = _observation(beat.get(name), f"{field}.{name}", allowed_refs)
         comment_evidence = normalized["comment_evidence"]
         if (
-            comment_evidence["value"] != "UNAVAILABLE"  # type: ignore[index]
+            not _is_unavailable_observation(str(comment_evidence["value"]))  # type: ignore[index]
             and not any(str(ref).startswith("comment:") for ref in comment_evidence["evidence_refs"])  # type: ignore[index]
         ):
             raise SkillError(
