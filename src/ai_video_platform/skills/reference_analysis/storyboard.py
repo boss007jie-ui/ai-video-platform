@@ -756,7 +756,14 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
         else _reference_beats(beats)
     )
     patterns = _replication_patterns(beats, str(current_product["product_id"]))
-    analysis_board = render_analysis_board(source, metadata, beats, keyframe_images, formula)
+    analysis_board = render_analysis_board(
+        source,
+        metadata,
+        beats,
+        keyframe_images,
+        formula,
+        core_beats=core_beats or None,
+    )
     shot_board = render_shot_evidence_board(shots, keyframe_images)
     replication_board = render_replication_board(patterns)
     board_payloads = {
