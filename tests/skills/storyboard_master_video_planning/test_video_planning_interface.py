@@ -14,7 +14,12 @@ if str(SOURCE_ROOT) not in sys.path:
 
 from ai_video_platform.skills.storyboard_master_video_planning import VideoPlanningInterface
 from ai_video_platform.skills.storyboard_master_video_planning.cli import run_cli
-from ai_video_platform.skills.storyboard_master_video_planning.sheet_renderer import render_storyboard_sheets
+from ai_video_platform.skills.storyboard_master_video_planning.sheet_renderer import (
+    CAMERA_RED,
+    SUBJECT_BLUE,
+    _draw_in_frame_annotations,
+    render_storyboard_sheets,
+)
 
 
 PANEL_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -88,6 +93,20 @@ def planning_request() -> dict[str, object]:
 
 
 class VideoPlanningInterfaceTests(unittest.TestCase):
+    def test_in_frame_motion_annotations_are_semantic_and_color_separated(self) -> None:
+        width, height = 240, 360
+        canvas = bytearray(bytes((255, 255, 255, 255)) * width * height)
+
+        _draw_in_frame_annotations(canvas, width, 10, 10, 200, 320, "slow push in", "two hands squeeze")
+
+        pixels = bytes(canvas)
+        self.assertIn(bytes(CAMERA_RED), pixels)
+        self.assertIn(bytes(SUBJECT_BLUE), pixels)
+
+        static_canvas = bytearray(bytes((255, 255, 255, 255)) * width * height)
+        _draw_in_frame_annotations(static_canvas, width, 10, 10, 200, 320, "locked", "none")
+        self.assertEqual(static_canvas, bytearray(bytes((255, 255, 255, 255)) * width * height))
+
     def test_build_storyboard_master_publishes_five_canonical_artifacts(self) -> None:
         result = VideoPlanningInterface().build_storyboard_master(planning_request())
 
@@ -137,7 +156,9 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
             )
             self.assertGreater((root / "storyboard_master_sheet_001.png").stat().st_size, 0)
             manifest = json.loads((root / "storyboard_master_sheet_manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["renderer_version"], "1.0.0")
+            self.assertEqual(manifest["renderer_version"], "1.1.0")
+            self.assertEqual(manifest["layout_version"], "storyboard-master-strip-v2")
+            self.assertEqual(manifest["pages"][0]["row_panel_counts"], [2])
             self.assertFalse(manifest["execution_policy"]["provider_execution_input"])
 
     def test_renderer_paginates_ten_panels_and_replays_byte_for_byte(self) -> None:
@@ -172,9 +193,58 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
         self.assertEqual(first.pages, second.pages)
         self.assertEqual(len(first.pages), 2)
         self.assertEqual([page["panel_count"] for page in first.manifest["pages"]], [9, 1])
+        self.assertEqual([page["row_panel_counts"] for page in first.manifest["pages"]], [[5, 4], [1]])
         self.assertEqual(first.manifest["max_panels_per_page"], 9)
         self.assertEqual(first.manifest["renderer_code_commit"], "test-commit")
         self.assertFalse(first.manifest["execution_policy"]["first_frame_eligible"])
+        self.assertIn(b"storyboard-master-strip-v2", first.pages[0])
+
+        seven_panel_strip = render_storyboard_sheets(
+            {"artifact_name": "VideoGenerationStoryboardMaster", "master_panel_entries": entries[:7]},
+            {key: panel_bytes[key] for key in list(panel_bytes)[:7]},
+            metadata,
+        )
+        self.assertEqual(seven_panel_strip.manifest["pages"][0]["row_panel_counts"], [7])
+
+        vertical_nine = [dict(entry, aspect_ratio="9:16") for entry in entries[:9]]
+        vertical_strip = render_storyboard_sheets(
+            {"artifact_name": "VideoGenerationStoryboardMaster", "target_aspect_ratio": "9:16", "master_panel_entries": vertical_nine},
+            {key: panel_bytes[key] for key in list(panel_bytes)[:9]},
+            metadata,
+        )
+        self.assertEqual(vertical_strip.manifest["pages"][0]["row_panel_counts"], [9])
+
+    def test_renderer_keeps_a_multi_panel_shot_together_at_a_page_break(self) -> None:
+        entries = []
+        panel_bytes = {}
+        for index in range(10):
+            shot_id = f"S{index + 1:02d}" if index < 8 else "S09"
+            asset_id = f"panel-asset-{index + 1:02d}"
+            entries.append(
+                {
+                    "shot_id": shot_id,
+                    "panel_id": f"{shot_id}-P{index + 1:02d}",
+                    "panel_asset_id": asset_id,
+                    "timing_mode": "TEMPORAL_SEGMENT",
+                    "start_ms": index * 100,
+                    "end_ms": (index + 1) * 100,
+                    "duration_ms": 100,
+                    "camera_motion": "locked",
+                    "subject_motion": "hand enters frame",
+                    "conversion_function": "proof",
+                    "aspect_ratio": "9:16",
+                }
+            )
+            panel_bytes[asset_id] = base64.b64decode(PANEL_PNG_B64)
+
+        result = render_storyboard_sheets(
+            {"artifact_name": "VideoGenerationStoryboardMaster", "master_panel_entries": entries},
+            panel_bytes,
+            {"renderer_code_commit": "test-commit", "render_width": 1200, "render_height": 720},
+        )
+
+        self.assertEqual([page["panel_count"] for page in result.manifest["pages"]], [8, 2])
+        self.assertEqual(result.manifest["pages"][1]["shot_ids"], ["S09"])
 
     def test_one_shot_can_bind_multiple_selected_panel_assets(self) -> None:
         request = planning_request()
