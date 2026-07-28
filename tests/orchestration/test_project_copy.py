@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
 
-from ai_video_platform.orchestration.project_copy import ProjectCopyError, copy_project, inspect_project
+from ai_video_platform.orchestration.project_copy import ProjectCopyError, copy_project, inspect_project, main
 
 
 def _write(path: Path, content: bytes | str) -> None:
@@ -150,6 +152,11 @@ class ProjectCopyTests(unittest.TestCase):
                 for item in result["assets"]
             }
             persisted = json.loads((destination / "PROJECT_COPY.json").read_text(encoding="utf-8"))
+            destination_paths = set(_tree_snapshot(destination))
+            copied_json_text = "".join(
+                path.read_text(encoding="utf-8")
+                for path in destination.rglob("*.json")
+            )
             after = _tree_snapshot(source)
 
         self.assertEqual(result, persisted)
@@ -172,6 +179,12 @@ class ProjectCopyTests(unittest.TestCase):
         ):
             self.assertNotIn(f'"{excluded}"', serialized_content)
         self.assertNotIn('"status"', serialized_content)
+        self.assertEqual(
+            len([path for path in destination_paths if path.startswith("reuse_source/assets/")]),
+            2,
+        )
+        self.assertNotIn("old-task-001", copied_json_text)
+        self.assertFalse(any(path.endswith((".mp4", "receipt.json")) for path in destination_paths))
         self.assertEqual(after, before)
 
     def test_inspect_rejects_missing_script_and_symlink(self) -> None:
@@ -253,6 +266,51 @@ class ProjectCopyTests(unittest.TestCase):
                 copy_project(request)
 
             self.assertFalse(destination.exists())
+
+    def test_cli_inspects_and_copies_with_machine_readable_results(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            _project_fixture(source)
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                inspect_code = main(["inspect", "--source", str(source)])
+            inspected = json.loads(output.getvalue())
+            character_id = inspected["result"]["assets"]["character"][0]["candidate_id"]
+
+            request_path = root / "copy-request.json"
+            request_path.write_text(json.dumps({
+                "source_project": str(source),
+                "destination_project": str(root / "copied"),
+                "project_id": "copied-project-001",
+                "inventory_digest": inspected["result"]["inventory_digest"],
+                "selected_candidate_ids": [character_id],
+            }), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                copy_code = main(["copy", "--request", str(request_path)])
+            copied = json.loads(output.getvalue())
+
+        self.assertEqual((inspect_code, copy_code), (0, 0))
+        self.assertTrue(inspected["ok"])
+        self.assertTrue(copied["ok"])
+        self.assertEqual(copied["result"]["project_id"], "copied-project-001")
+        self.assertEqual([item["role"] for item in copied["result"]["assets"]], ["character"])
+
+    def test_cli_rejects_invalid_json_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "invalid.json"
+            request_path.write_text("{broken", encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(["copy", "--request", str(request_path)])
+            response = json.loads(output.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(response["ok"])
+        self.assertIsInstance(response["error"], str)
 
 
 if __name__ == "__main__":

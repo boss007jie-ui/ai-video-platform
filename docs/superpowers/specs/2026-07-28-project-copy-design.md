@@ -94,7 +94,7 @@ project. Copying creates:
   PROJECT_COPY.json
   reuse_source/
     scripts/<original relative paths>
-    assets/<role>/<candidate-id>-<original name>
+    assets/<role>/<sha256-hex>-<original name>
 ```
 
 Copied source material is intentionally separated under `reuse_source`. It is

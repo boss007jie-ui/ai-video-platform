@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import argparse
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -10,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 
 
 SCHEMA_VERSION = "1.0.0"
@@ -61,6 +63,12 @@ _EXCLUDED_DIRECTORIES = frozenset({
 
 class ProjectCopyError(ValueError):
     """Stable rejection raised at the project-copy boundary."""
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        del message
+        raise ProjectCopyError("project copy arguments are invalid")
 
 
 def _canonical_json(value: object) -> str:
@@ -351,3 +359,40 @@ def copy_project(
         if isinstance(error, ProjectCopyError):
             raise
         raise ProjectCopyError("project copy failed") from None
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = _Parser(prog="project-copy")
+    subparsers = parser.add_subparsers(dest="operation", required=True)
+    inspect = subparsers.add_parser("inspect")
+    inspect.add_argument("--source", required=True)
+    copy = subparsers.add_parser("copy")
+    copy.add_argument("--request", required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        args = _parser().parse_args(list(argv) if argv is not None else None)
+        if args.operation == "inspect":
+            result = inspect_project(args.source)
+        else:
+            raw = sys.stdin.read() if args.request == "-" else Path(args.request).read_text(encoding="utf-8")
+            request = json.loads(raw)
+            if not isinstance(request, Mapping):
+                raise ProjectCopyError("project copy request must be a JSON object")
+            result = copy_project(request)
+        response: dict[str, object] = {"ok": True, "result": result}
+        exit_code = 0
+    except ProjectCopyError as error:
+        response = {"ok": False, "error": str(error)}
+        exit_code = 2
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        response = {"ok": False, "error": "project copy input is invalid"}
+        exit_code = 2
+    print(_canonical_json(response))
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
