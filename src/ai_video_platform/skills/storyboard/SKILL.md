@@ -1,6 +1,6 @@
 ---
 name: storyboard
-version: 1.2.0
+version: 1.3.0
 status: review
 ---
 
@@ -18,7 +18,7 @@ The production-planning boundary translates optional `ReferenceStoryboardAnalysi
 - `create-storyboard-from-script`: explicit raw-script alias; accepts top-level CLI `raw_script`, optional `planning_options`, and optional `continuity_archive`.
 - `revise-storyboard`: create the next immutable version from `prior_artifact` and an exact `expected_version`.
 - `validate-continuity`: validate one serialized owner-local artifact through CLI or `StoryboardService.validate_continuity(artifact)` with no side effects.
-- `derive-production-panels`: publish the canonical `ProductionStoryboardPlan` and `ProductionStoryboardPanelPlan` `1.0.0` business artifacts under an explicit output root.
+- `derive-production-panels`: publish the canonical `ProductionStoryboardPlan` and `ProductionStoryboardPanelPlan` `1.0.0` business artifacts under an explicit output root. Prefer passing the approved owner-local `storyboard_artifact`; the Skill then generates production IDs, timing, motion annotations, continuity fields, and downstream `shots` automatically. The legacy hand-authored `production_constraints.structured_plan` input remains supported.
 
 CLI entry point:
 
@@ -45,6 +45,8 @@ production_storyboard_plan/
   production_storyboard_plan.json
   production_storyboard_panel_plan.json
 ```
+
+For the preferred path, Hermes supplies `task_spec`, `product_context`, the already-created `storyboard_artifact`, `production_constraints.duration_ms`, optional `production_constraints.aspect_ratio`, and `output_root`. Hermes must not reconstruct `beat_id`, `shot_id`, timing, motion annotations, or continuity objects. Supplying both `storyboard_artifact` and the legacy `production_constraints.structured_plan` is rejected.
 
 The production plan contains `NarrativeArc`, `ScenePlan`, `BeatPlan`, `ShotPlan`, `EmotionArc`, `AudiencePsychologyArc`, `ConversionArc`, `ContinuityBible`, and `ProductStateTimeline`. Every panel binds ordered timing and frozen moment, camera/framing, current character/product/packaging/container state, emotion, approved/forbidden assets, scale constraints, continuity references, and reference-mechanism provenance.
 

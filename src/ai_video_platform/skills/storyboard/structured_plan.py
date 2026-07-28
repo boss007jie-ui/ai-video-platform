@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ai_video_platform.contracts.serialization import freeze_json, thaw_json
+from ai_video_platform.contracts.serialization import content_digest, freeze_json, thaw_json
 
 from .interface import StoryboardError
 
@@ -227,6 +227,197 @@ def _validate_panels(shot: dict[str, Any], shot_path: str) -> list[dict[str, Any
         if expected != shot["end_ms"]:
             _fail("STORYBOARD_PANEL_TIMING_INVALID", "Temporal Panels must continuously cover the parent Shot", f"{shot_path}.panels")
     return panels
+
+
+def _source_text(value: object, fallback: str) -> str:
+    return value.strip() if isinstance(value, str) and value.strip() else fallback
+
+
+def project_storyboard_artifact(
+    artifact: Mapping[str, Any],
+    *,
+    task_id: str,
+    product_id: str,
+    sku_id: str,
+    total_duration_ms: int,
+    required_assets: Sequence[str] = (),
+    forbidden_assets: Sequence[str] = (),
+    scale_constraints: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project an owner-local StoryboardArtifact into the strict production shape."""
+
+    source = thaw_json(freeze_json(_object(artifact, "storyboard_artifact", "STORYBOARD_ARTIFACT_INVALID")))
+    story = _object(source.get("story"), "storyboard_artifact.story", "STORYBOARD_ARTIFACT_INVALID")
+    if (
+        source.get("task_id") != task_id
+        or source.get("product_id") != product_id
+        or story.get("product_id") != product_id
+        or not isinstance(source.get("version"), int)
+        or isinstance(source.get("version"), bool)
+        or source["version"] < 1
+        or source.get("content_digest") != content_digest(story)
+    ):
+        _fail(
+            "STORYBOARD_ARTIFACT_INVALID",
+            "StoryboardArtifact identity or digest does not match the current task",
+            "storyboard_artifact",
+        )
+    if not isinstance(total_duration_ms, int) or isinstance(total_duration_ms, bool) or total_duration_ms < 1:
+        _fail("STORYBOARD_DURATION_MISMATCH", "Production duration must be a positive integer", "production_constraints.duration_ms")
+    _text(sku_id, "product_context.payload.sku_id", "STORYBOARD_PRODUCT_SCOPE_INVALID")
+    required = _string_array(required_assets, "creative_constraints.required_assets", "STORYBOARD_SHOT_FIELDS_MISSING")
+    forbidden = _string_array(forbidden_assets, "creative_constraints.forbidden_assets", "STORYBOARD_SHOT_FIELDS_MISSING")
+
+    source_beats: list[tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]] = []
+    for scene_index, raw_scene in enumerate(_array(story.get("scenes"), "storyboard_artifact.story.scenes", "STORYBOARD_ARTIFACT_INVALID")):
+        scene = _object(raw_scene, f"storyboard_artifact.story.scenes[{scene_index}]", "STORYBOARD_ARTIFACT_INVALID")
+        for beat_index, raw_beat in enumerate(_array(scene.get("beats"), f"storyboard_artifact.story.scenes[{scene_index}].beats", "STORYBOARD_ARTIFACT_INVALID")):
+            beat = _object(raw_beat, f"storyboard_artifact.story.scenes[{scene_index}].beats[{beat_index}]", "STORYBOARD_ARTIFACT_INVALID")
+            source_shots = [
+                _object(raw_shot, f"storyboard_artifact.story.scenes[{scene_index}].beats[{beat_index}].shots[{shot_index}]", "STORYBOARD_ARTIFACT_INVALID")
+                for shot_index, raw_shot in enumerate(_array(beat.get("shots"), f"storyboard_artifact.story.scenes[{scene_index}].beats[{beat_index}].shots", "STORYBOARD_ARTIFACT_INVALID"))
+            ]
+            if not source_shots:
+                _fail("STORYBOARD_ARTIFACT_INVALID", "Every source Beat requires a Shot", "storyboard_artifact.story")
+            source_beats.append((scene, beat, source_shots))
+    shot_count = sum(len(shots) for _, _, shots in source_beats)
+    if not source_beats or shot_count < 1 or total_duration_ms < shot_count:
+        _fail("STORYBOARD_DURATION_MISMATCH", "StoryboardArtifact duration cannot cover its Shots", "production_constraints.duration_ms")
+
+    base_duration, remainder = divmod(total_duration_ms, shot_count)
+    durations = [base_duration + (1 if index < remainder else 0) for index in range(shot_count)]
+    beats: list[dict[str, Any]] = []
+    shots: list[dict[str, Any]] = []
+    shot_index = 0
+    current_ms = 0
+    prior_continuity: dict[str, Any] | None = None
+    normalized_scale = thaw_json(freeze_json(scale_constraints or {}))
+    for beat_index, (scene, beat, source_shots) in enumerate(source_beats, 1):
+        beat_id = f"B{beat_index:02d}"
+        generated_shot_ids = [f"S{shot_index + offset + 1:02d}" for offset in range(len(source_shots))]
+        beats.append({"beat_id": beat_id, "beat_sequence": beat_index, "shot_ids": generated_shot_ids})
+        for source_shot in source_shots:
+            generated_shot_id = f"S{shot_index + 1:02d}"
+            duration = durations[shot_index]
+            start_ms = current_ms
+            end_ms = start_ms + duration
+            source_panels = [
+                _object(raw_panel, f"storyboard_artifact.story.shots[{shot_index}].panels[{panel_index}]", "STORYBOARD_ARTIFACT_INVALID")
+                for panel_index, raw_panel in enumerate(_array(source_shot.get("panels"), f"storyboard_artifact.story.shots[{shot_index}].panels", "STORYBOARD_ARTIFACT_INVALID"))
+            ]
+            if not source_panels:
+                _fail("STORYBOARD_ARTIFACT_INVALID", "Every source Shot requires a Panel", "storyboard_artifact.story")
+            source_panel = source_panels[0]
+            source_continuity = _object(source_panel.get("continuity"), f"storyboard_artifact.story.shots[{shot_index}].panels[0].continuity", "STORYBOARD_ARTIFACT_INVALID")
+            action = _text(beat.get("action"), f"storyboard_artifact.story.beats[{beat_index - 1}].action", "STORYBOARD_ARTIFACT_INVALID")
+            prompt = _text(source_panel.get("prompt"), f"storyboard_artifact.story.shots[{shot_index}].panels[0].prompt", "STORYBOARD_ARTIFACT_INVALID")
+            framing = _text(source_shot.get("framing"), f"storyboard_artifact.story.shots[{shot_index}].framing", "STORYBOARD_ARTIFACT_INVALID")
+            scene_state = _source_text(source_continuity.get("scene_state", source_continuity.get("scene_background")), _source_text(scene.get("setting"), "source storyboard scene"))
+            character_state = _source_text(source_continuity.get("character_state", source_continuity.get("hand", source_continuity.get("actor_outfit"))), "source storyboard character")
+            continuity = {
+                "active_product_id": product_id,
+                "active_sku_id": sku_id,
+                "product_state": _source_text(source_continuity.get("product_state", source_continuity.get("product_identity")), prompt),
+                "package_state": _source_text(source_continuity.get("package_state"), "source storyboard package state"),
+                "container_state": _source_text(source_continuity.get("container_state"), "source storyboard container state"),
+                "scale_constraints": normalized_scale,
+                "character_state": character_state,
+                "wardrobe_state": _source_text(source_continuity.get("wardrobe_state", source_continuity.get("actor_outfit")), character_state),
+                "scene_state": scene_state,
+            }
+            panel_base, panel_remainder = divmod(duration, len(source_panels))
+            panel_start = start_ms
+            projected_panels = []
+            for panel_index, panel in enumerate(source_panels, 1):
+                panel_duration = panel_base + (1 if panel_index <= panel_remainder else 0)
+                panel_end = panel_start + panel_duration
+                projected_panels.append({
+                    "beat_id": beat_id,
+                    "shot_id": generated_shot_id,
+                    "panel_id": f"{generated_shot_id}-P{panel_index:02d}",
+                    "panel_sequence": panel_index,
+                    "panel_timing_mode": "TEMPORAL_SEGMENT",
+                    "start_ms": panel_start,
+                    "end_ms": panel_end,
+                    "duration_ms": panel_duration,
+                    "prompt": _text(panel.get("prompt"), f"storyboard_artifact.story.shots[{shot_index}].panels[{panel_index - 1}].prompt", "STORYBOARD_ARTIFACT_INVALID"),
+                    "source_panel_id": panel.get("panel_id"),
+                })
+                panel_start = panel_end
+            projected_shot = {
+                "beat_id": beat_id,
+                "shot_id": generated_shot_id,
+                "shot_sequence": shot_index + 1,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "duration_ms": duration,
+                "start_state": _source_text(source_shot.get("start_state"), prompt),
+                "action_path": action,
+                "middle_state": action,
+                "end_state": _source_text(source_shot.get("end_state"), action),
+                "motion_path": action,
+                "emotion_transition": _source_text(source_shot.get("emotion_transition"), _source_text(scene.get("emotion"), "engaged")),
+                "emotion": _source_text(scene.get("emotion"), "engaged"),
+                "audience_psychology": _source_text(source_shot.get("audience_psychology"), "retain attention"),
+                "conversion_function": _source_text(source_shot.get("conversion_function"), "hook" if shot_index == 0 else "cta" if shot_index == shot_count - 1 else "proof"),
+                "dialogue_or_voiceover": _source_text(source_shot.get("dialogue_or_voiceover", source_shot.get("voiceover")), "none"),
+                "voiceover": _source_text(source_shot.get("dialogue_or_voiceover", source_shot.get("voiceover")), "none"),
+                "subtitle": _source_text(source_shot.get("subtitle", source_shot.get("caption")), "none"),
+                "caption": _source_text(source_shot.get("subtitle", source_shot.get("caption")), "none"),
+                "sound_design": _source_text(source_shot.get("sound_design", source_shot.get("sound_effect")), "none"),
+                "sound_effect": _source_text(source_shot.get("sound_design", source_shot.get("sound_effect")), "none"),
+                "cta": _source_text(source_shot.get("cta"), ""),
+                "transition": {"kind": "none", "duration_ms": 0, "timing_policy": "none"},
+                "required_assets": list(required),
+                "forbidden_assets": list(forbidden),
+                "first_frame_role": "clean_panel" if shot_index == 0 else "production_panel",
+                "provider_reference_role": "product_reference",
+                "camera_motion": {
+                    "structured_definition": f"locked {framing}",
+                    "visual_annotation": {"label": "CAMERA", "line_style": "solid", "marker": "triangle", "arrow_form": "open"},
+                },
+                "subject_motion": {
+                    "structured_definition": action,
+                    "visual_annotation": {"label": "SUBJECT", "line_style": "dashed", "marker": "circle", "arrow_form": "filled"},
+                },
+                "active_product_id": product_id,
+                "active_sku_id": sku_id,
+                "visible_sku_ids": [sku_id],
+                "forbidden_sku_ids": [],
+                **continuity,
+                "panels": projected_panels,
+                "source_shot_id": source_shot.get("shot_id"),
+            }
+            if prior_continuity is not None and prior_continuity != continuity:
+                projected_shot["continuity_transition"] = {
+                    "approval_status": "APPROVED",
+                    "approval_basis": "validated_storyboard_artifact",
+                    "source_storyboard_id": source.get("storyboard_id"),
+                    "changes": {
+                        key: {"from": prior_continuity.get(key), "to": continuity.get(key)}
+                        for key in continuity
+                        if prior_continuity.get(key) != continuity.get(key)
+                    },
+                }
+            prior_continuity = continuity
+            shots.append(projected_shot)
+            shot_index += 1
+            current_ms = end_ms
+
+    projected = {
+        "workflow_profile": "storyboard_artifact",
+        "workflow_profile_rules": {"storyboard_artifact": {"min_shots": shot_count, "max_shots": shot_count}},
+        "total_duration_ms": total_duration_ms,
+        "product_scope": {
+            "mode": "single_sku",
+            "active_product_id": product_id,
+            "active_sku_id": sku_id,
+            "allowed_sku_ids": [sku_id],
+        },
+        "beats": beats,
+        "shots": shots,
+    }
+    return thaw_json(freeze_json(projected))
 
 
 def validate_structured_storyboard(

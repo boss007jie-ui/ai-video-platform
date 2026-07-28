@@ -152,6 +152,7 @@ def run_cli_document(
                 replication_pattern=document.get("replication_pattern"),
                 creative_constraints=document.get("creative_constraints", {}),
                 production_constraints=document.get("production_constraints", {}),
+                storyboard_artifact=document.get("storyboard_artifact"),
             )
             output_root = document.get("output_root")
             if not isinstance(output_root, str) or not output_root.strip():

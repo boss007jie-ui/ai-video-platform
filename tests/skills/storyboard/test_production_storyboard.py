@@ -8,10 +8,10 @@ from tempfile import TemporaryDirectory
 
 from ai_video_platform.skills.storyboard import StoryboardError, derive_production_storyboard
 from ai_video_platform.skills.storyboard.cli import run_cli_document
-from ai_video_platform.contracts.serialization import thaw_json
+from ai_video_platform.contracts.serialization import content_digest, thaw_json
 from ai_video_platform.contracts.validation import validate_envelope
 
-from .fixtures import envelope_document, product_context, task_spec
+from .fixtures import envelope_document, product_context, task_spec, valid_plan
 
 
 def reference_analysis(*, version: str = "1.0.0") -> dict:
@@ -659,6 +659,74 @@ class ProductionStoryboardTests(unittest.TestCase):
             self.assertEqual(json.loads(plan_path.read_text(encoding="utf-8")), payload["production_storyboard_plan"])
             self.assertEqual(json.loads(panel_path.read_text(encoding="utf-8")), payload["production_storyboard_panel_plan"])
             self.assertEqual(payload["output_files"], [str(plan_path), str(panel_path)])
+
+    def test_cli_derives_from_storyboard_artifact_without_manual_structured_plan(self) -> None:
+        story = valid_plan()
+        storyboard_artifact = {
+            "storyboard_id": "storyboard-owner-001-v1",
+            "version": 1,
+            "task_id": "task-storyboard-001",
+            "product_id": "product-001",
+            "source_contract_ids": [],
+            "source_hashes": [],
+            "content_digest": content_digest(story),
+            "story": story,
+            "created_at": "2026-07-20T09:00:00Z",
+            "supersedes_storyboard_id": None,
+        }
+        with TemporaryDirectory() as directory:
+            exit_code, payload = run_cli_document(
+                {
+                    "command": "derive-production-panels",
+                    "task_spec": envelope_document(task_spec()),
+                    "product_context": envelope_document(product_context()),
+                    "storyboard_artifact": storyboard_artifact,
+                    "production_constraints": {"duration_ms": 6000, "aspect_ratio": "9:16"},
+                    "output_root": directory,
+                }
+            )
+
+        self.assertEqual(exit_code, 0, payload)
+        plan = payload["production_storyboard_plan"]
+        panel_plan = payload["production_storyboard_panel_plan"]
+        self.assertEqual(plan["artifact_name"], "ProductionStoryboardPlan")
+        self.assertEqual(plan["contract_id"], "avp.contract.production-storyboard-plan")
+        self.assertEqual(plan["target_aspect_ratio"], "9:16")
+        self.assertEqual([shot["shot_id"] for shot in plan["shots"]], ["S01", "S02"])
+        self.assertEqual(sum(shot["duration_ms"] for shot in plan["shots"]), 6000)
+        required = {
+            "sequence", "start_state", "middle_state", "end_state", "motion_path",
+            "character_state", "product_state", "emotion", "camera_motion", "transition",
+            "voiceover", "caption", "sound_effect", "cta",
+        }
+        self.assertTrue(all(required <= set(shot) for shot in plan["shots"]))
+        self.assertEqual(panel_plan["panel_order"], ["S01-P01", "S01-P02", "S02-P01"])
+        self.assertEqual(payload["metrics"], {"provider_calls": 0, "network_calls": 0})
+
+    def test_cli_rejects_tampered_storyboard_artifact(self) -> None:
+        story = valid_plan()
+        storyboard_artifact = {
+            "storyboard_id": "storyboard-owner-001-v1",
+            "version": 1,
+            "task_id": "task-storyboard-001",
+            "product_id": "product-001",
+            "content_digest": "sha256:" + "0" * 64,
+            "story": story,
+        }
+
+        exit_code, payload = run_cli_document(
+            {
+                "command": "derive-production-panels",
+                "task_spec": envelope_document(task_spec()),
+                "product_context": envelope_document(product_context()),
+                "storyboard_artifact": storyboard_artifact,
+                "production_constraints": {"duration_ms": 6000, "aspect_ratio": "9:16"},
+                "output_root": "unused-for-rejected-input",
+            }
+        )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["error"]["code"], "STORYBOARD_ARTIFACT_INVALID")
 
 
 if __name__ == "__main__":

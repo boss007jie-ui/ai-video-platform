@@ -12,7 +12,7 @@ from ai_video_platform.contracts.serialization import content_digest, freeze_jso
 from ai_video_platform.contracts.validation import validate_envelope
 
 from .interface import StoryboardError, safe_field_segment
-from .structured_plan import validate_structured_storyboard
+from .structured_plan import project_storyboard_artifact, validate_structured_storyboard
 
 
 PRODUCTION_STORYBOARD_VERSION = "1.0.0"
@@ -321,6 +321,40 @@ def _artifact_id(prefix: str, body: Mapping[str, Any]) -> str:
     return f"{prefix}-{content_digest(body).removeprefix('sha256:')[:20]}"
 
 
+def _motion_text(value: object, fallback: str) -> str:
+    if isinstance(value, Mapping):
+        value = value.get("structured_definition")
+    return _text(value, fallback)
+
+
+def _video_planning_shots(shots: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    projected: list[dict[str, Any]] = []
+    for index, shot in enumerate(shots, 1):
+        action = _text(shot.get("action_path"), "show the planned product action")
+        transition = shot.get("transition")
+        transition_text = _text(transition.get("kind") if isinstance(transition, Mapping) else transition, "cut")
+        projected.append({
+            "shot_id": _text(shot.get("shot_id"), f"shot-{index:03d}"),
+            "sequence": int(shot.get("shot_sequence", shot.get("order", index))),
+            "duration_ms": int(shot.get("duration_ms", max(1, int(shot.get("end_ms", index)) - int(shot.get("start_ms", index - 1))))),
+            "start_state": _text(shot.get("start_state"), action),
+            "middle_state": _text(shot.get("middle_state"), action),
+            "end_state": _text(shot.get("end_state"), action),
+            "motion_path": _motion_text(shot.get("subject_motion", shot.get("motion_path")), action),
+            "character_state": _text(shot.get("character_state"), "source storyboard character"),
+            "product_state": _text(shot.get("product_state"), "source storyboard product"),
+            "emotion": _text(shot.get("emotion"), _text(shot.get("emotion_transition"), "engaged")),
+            "camera_motion": _motion_text(shot.get("camera_motion", shot.get("camera")), "locked"),
+            "transition": transition_text,
+            "voiceover": _text(shot.get("voiceover", shot.get("dialogue_or_voiceover")), "none"),
+            "caption": _text(shot.get("caption", shot.get("subtitle")), "none"),
+            "sound_effect": _text(shot.get("sound_effect", shot.get("sound_design")), "none"),
+            "cta": _text(shot.get("cta"), ""),
+            "conversion_function": _text(shot.get("conversion_function"), "proof"),
+        })
+    return projected
+
+
 def derive_production_storyboard(
     *,
     task_spec: ContractEnvelope,
@@ -329,6 +363,7 @@ def derive_production_storyboard(
     production_constraints: Mapping[str, Any],
     reference_storyboard_analysis: Mapping[str, Any] | None = None,
     replication_pattern: Mapping[str, Any] | None = None,
+    storyboard_artifact: Mapping[str, Any] | None = None,
 ) -> ProductionStoryboardResult:
     """Derive canonical production planning artifacts without media or Provider work."""
 
@@ -377,7 +412,37 @@ def derive_production_storyboard(
     pattern_by_beat = _replication_by_beat(replication)
     patterns = _replication_patterns(replication)
     structured = None
-    if production.get("structured_plan") is not None:
+    if production.get("structured_plan") is not None and storyboard_artifact is not None:
+        raise StoryboardError(
+            "STORYBOARD_INPUT_INVALID",
+            "validation",
+            "Use storyboard_artifact or production_constraints.structured_plan, not both",
+            field_paths=("storyboard_artifact", "production_constraints.structured_plan"),
+        )
+    if storyboard_artifact is not None:
+        sku_id = validated_product.payload.sku_id
+        if not isinstance(sku_id, str) or not sku_id:
+            raise StoryboardError(
+                "STORYBOARD_PRODUCT_SCOPE_INVALID",
+                "validation",
+                "StoryboardArtifact derivation requires ProductContextBundle sku_id",
+                field_paths=("product_context.payload.sku_id",),
+            )
+        structured = project_storyboard_artifact(
+            _object(storyboard_artifact, "storyboard_artifact"),
+            task_id=task_id,
+            product_id=product_id,
+            sku_id=sku_id,
+            total_duration_ms=production.get("duration_ms", 4500),
+            required_assets=_string_list(creative.get("required_assets"), "creative_constraints.required_assets"),
+            forbidden_assets=_string_list(creative.get("forbidden_assets"), "creative_constraints.forbidden_assets"),
+            scale_constraints=_object(production.get("scale_constraints", {}), "production_constraints.scale_constraints"),
+        )
+        structured = validate_structured_storyboard(
+            structured,
+            {"constraints": thaw_json(validated_task.payload.constraints or {})},
+        )
+    elif production.get("structured_plan") is not None:
         structured = validate_structured_storyboard(
             _object(production["structured_plan"], "production_constraints.structured_plan"),
             {"constraints": thaw_json(validated_task.payload.constraints or {})},
@@ -466,6 +531,12 @@ def derive_production_storyboard(
                 "payload_digest": content_digest(replication),
             }
         )
+    if storyboard_artifact is not None:
+        source_provenance.append({
+            "artifact_identity": "StoryboardArtifact",
+            "artifact_id": storyboard_artifact.get("storyboard_id"),
+            "payload_digest": storyboard_artifact.get("content_digest"),
+        })
 
     panels: list[dict[str, Any]] = []
     beat_plan: list[dict[str, Any]] = []
@@ -513,7 +584,9 @@ def derive_production_storyboard(
                 )
 
         plan_body = {
+            "artifact_name": "ProductionStoryboardPlan",
             "artifact_type": "ProductionStoryboardPlan",
+            "contract_id": PRODUCTION_STORYBOARD_PLAN_IDENTITY,
             "contract_identity": PRODUCTION_STORYBOARD_PLAN_IDENTITY,
             "schema_version": PRODUCTION_STORYBOARD_VERSION,
             "producer": STORYBOARD_PRODUCER,
@@ -526,6 +599,7 @@ def derive_production_storyboard(
             "product_scope": thaw_json(freeze_json(structured["product_scope"])),
             "BeatPlan": beat_plan,
             "ShotPlan": shot_plan,
+            "shots": _video_planning_shots(shot_plan),
             "source_provenance": source_provenance,
             "reference_analysis_provenance": reference_provenance,
         }
@@ -539,7 +613,9 @@ def derive_production_storyboard(
                 "digest": plan_digest,
             }
         panel_body = {
+            "artifact_name": "ProductionStoryboardPanelPlan",
             "artifact_type": "ProductionStoryboardPanelPlan",
+            "contract_id": PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY,
             "contract_identity": PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY,
             "schema_version": PRODUCTION_STORYBOARD_VERSION,
             "producer": STORYBOARD_PRODUCER,
@@ -650,16 +726,21 @@ def derive_production_storyboard(
 
     if structured is None:
         plan_body = {
+            "artifact_name": "ProductionStoryboardPlan",
             "artifact_type": "ProductionStoryboardPlan",
+            "contract_id": PRODUCTION_STORYBOARD_PLAN_IDENTITY,
             "contract_identity": PRODUCTION_STORYBOARD_PLAN_IDENTITY,
             "schema_version": PRODUCTION_STORYBOARD_VERSION,
             "producer": STORYBOARD_PRODUCER,
             "task_id": task_id,
             "product_id": product_id,
+            "planning_revision": 1,
+            "target_aspect_ratio": _text(production.get("aspect_ratio"), "9:16"),
             "NarrativeArc": {"goal": narrative_goal, "ordered_scene_ids": [item["scene_id"] for item in scene_plan]},
             "ScenePlan": scene_plan,
             "BeatPlan": beat_plan,
             "ShotPlan": shot_plan,
+            "shots": _video_planning_shots(shot_plan),
             "EmotionArc": emotion_arc,
             "AudiencePsychologyArc": psychology_arc,
             "ConversionArc": conversion_arc,
@@ -679,13 +760,17 @@ def derive_production_storyboard(
         }
         plan_body["artifact_id"] = _artifact_id("production-storyboard-plan", plan_body)
         panel_body = {
+            "artifact_name": "ProductionStoryboardPanelPlan",
             "artifact_type": "ProductionStoryboardPanelPlan",
+            "contract_id": PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY,
             "contract_identity": PRODUCTION_STORYBOARD_PANEL_PLAN_IDENTITY,
             "schema_version": PRODUCTION_STORYBOARD_VERSION,
             "producer": STORYBOARD_PRODUCER,
             "task_id": task_id,
             "product_id": product_id,
             "production_storyboard_plan_ref": plan_body["artifact_id"],
+            "production_storyboard_plan_digest": content_digest(plan_body),
+            "planning_revision": 1,
             "panel_order": [item["panel_id"] for item in panels],
             "panels": panels,
             "source_provenance": source_provenance,
