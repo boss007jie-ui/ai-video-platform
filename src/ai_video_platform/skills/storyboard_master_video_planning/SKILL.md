@@ -27,11 +27,12 @@ or writes a Product Library.
 
 ## Vision-guided Sheet motion
 
-Before invoking the CLI for a review Sheet, the execution Agent must inspect
-every approved clean Panel with its image-understanding capability. It must
-cross-check the visible hands, product, packaging, contact points, and plausible
-motion paths against the matching Master Shot script. Script text alone is not a
-visual observation and must never be used to invent object coordinates.
+Before invoking the CLI for a review Sheet, the execution Agent must invoke its
+image-understanding capability on every approved clean Panel. It must cross-check
+the visible hands, product, packaging, contact points, and plausible motion paths
+against the matching Master Shot script. Script text alone is not a visual
+observation and must never be used to invent object coordinates. Do not invoke
+the CLI until every Panel has one observation entry, including static Panels.
 
 The Agent writes observations under
 `sheet_render_metadata.panel_visual_observations`, keyed by `panel_id`:
@@ -67,14 +68,50 @@ Coordinates are normalized to the clean Panel with `[0, 0]` at top-left and
 
 The Skill validates the observations, reconciles them with Camera Motion,
 Subject Motion, and Shot states, then automatically produces renderer-only
-`motion_annotations`. Missing, low-confidence, or incompatible visual evidence
-produces no in-frame arrow; readable CAM/ACT text remains. The Skill never calls
-the vision model itself and never writes observations or arrows into canonical
-Master semantics.
+`motion_annotations`. Missing observation coverage is a blocking input error;
+the CLI never silently emits a Sheet that skipped Agent vision. Low-confidence
+or incompatible visual evidence produces no in-frame arrow for that Panel, while
+readable CAM/ACT text remains. The Python renderer never calls a model itself and
+never writes observations or arrows into canonical Master semantics.
+
+## Seedance multimodal handoff
+
+The rendered storyboard Sheet has two authorized uses: human review and a
+multimodal structure reference. Its execution policy is
+`provider_reference_role=storyboard_structure_reference` and
+`provider_execution_input=true`, while `first_frame_eligible` always remains
+`false`. Never send the Sheet through a first-frame, last-frame, or literal frame
+input. The grid, labels, captions, and arrows are planning instructions and must
+not appear in the generated video.
+
+For `seedance-2.0-fast-multi`, the execution Agent or downstream Video Generation
+owner must use one full-timeline task by default when the approved video is at
+most 15 seconds and the selected reference set fits the Provider limit. Do not
+submit one Provider task per Shot by default. Use the Sheet as `@Image 1`, then
+bind clean product, character, scene, or critical Panel references to the
+remaining image slots. The prompt must explicitly assign every reference role,
+state that the storyboard is executed in reading order, and forbid borders,
+labels, arrows, captions, or simultaneous grid Panels in the output.
+
+Recommended prompt skeleton:
+
+```text
+Use @Image 1 only as the shooting script and storyboard. Follow its shot order,
+shot scale, camera movement, subject motion, composition, and timing.
+Keep the product identical to @Image 2 and @Image 3. Use @Image 4 for the scene.
+Execute one complete shot at a time in storyboard reading order. Do not display
+the storyboard grid, borders, arrows, labels, captions, or multiple Panels.
+```
+
+Split generation only when the full timeline or reference set exceeds Provider
+limits, or when a reviewed section needs targeted replacement. Split into the
+fewest coherent consecutive blocks, preserve Shot order, and keep each block's
+Panels adjacent. The Sheet remains a reference, never a generated-video frame.
 
 The first frame is always the first shot's approved clean full-frame production
-panel at the target ratio. Grids, numbers, labels, captions, other shots, contact
-sheets, analysis boards, evidence boards, and replication boards are ineligible.
+Panel at the target ratio. Grids, numbers, labels, captions, other shots, contact
+sheets, storyboard Sheets, analysis boards, evidence boards, and replication
+boards are ineligible.
 Approved character/product/style references may be Provider inputs; analysis-board
 assets are forced to `global_structure_reference`,
 `provider_execution_input=false`, and `first_frame_eligible=false`.

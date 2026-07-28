@@ -94,6 +94,20 @@ def planning_request() -> dict[str, object]:
             "locale": "en-US",
             "render_width": 1200,
             "render_height": 720,
+            "panel_visual_observations": {
+                "panel-001": {
+                    "confidence": 0.95,
+                    "objects": [],
+                    "contacts": [],
+                    "motion_candidates": [],
+                },
+                "panel-002": {
+                    "confidence": 0.95,
+                    "objects": [],
+                    "contacts": [],
+                    "motion_candidates": [],
+                },
+            },
         },
     }
 
@@ -136,6 +150,10 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
         self.assertEqual(set(artifacts), {"video_generation_storyboard_master", "shot_motion_plan", "video_execution_package", "first_frame_mapping", "reference_role_mapping"})
         self.assertEqual(artifacts["video_generation_storyboard_master"]["artifact_name"], "VideoGenerationStoryboardMaster")
         self.assertEqual(artifacts["video_generation_storyboard_master"]["contract_id"], "avp.contract.video-generation-storyboard-master")
+        sheet_policy = artifacts["video_generation_storyboard_master"]["sheet_outputs"]["execution_policy"]
+        self.assertTrue(sheet_policy["provider_execution_input"])
+        self.assertEqual(sheet_policy["provider_reference_role"], "storyboard_structure_reference")
+        self.assertFalse(sheet_policy["first_frame_eligible"])
         self.assertEqual(artifacts["video_execution_package"]["schema_version"], "1.0.0")
         artifact_names = {item["artifact_name"] for item in artifacts.values()}
         self.assertNotIn("StoryboardMaster", artifact_names)
@@ -177,10 +195,19 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
             )
             self.assertGreater((root / "storyboard_master_sheet_001.png").stat().st_size, 0)
             manifest = json.loads((root / "storyboard_master_sheet_manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["renderer_version"], "1.2.0")
+            self.assertEqual(manifest["renderer_version"], "1.3.0")
             self.assertEqual(manifest["layout_version"], "storyboard-master-strip-v3")
             self.assertEqual(manifest["pages"][0]["row_panel_counts"], [2])
-            self.assertFalse(manifest["execution_policy"]["provider_execution_input"])
+            self.assertEqual(
+                manifest["execution_policy"]["role"],
+                "human_review_and_multimodal_structure_reference",
+            )
+            self.assertTrue(manifest["execution_policy"]["provider_execution_input"])
+            self.assertEqual(
+                manifest["execution_policy"]["provider_reference_role"],
+                "storyboard_structure_reference",
+            )
+            self.assertFalse(manifest["execution_policy"]["first_frame_eligible"])
 
     def test_cli_automatically_plans_arrows_from_agent_visual_observations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -191,6 +218,12 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
             request = planning_request()
             request["output_root"] = str(Path(temporary) / "vision-guided")
             request["sheet_render_metadata"]["panel_visual_observations"] = {
+                "panel-001": {
+                    "confidence": 0.95,
+                    "objects": [],
+                    "contacts": [],
+                    "motion_candidates": [],
+                },
                 "panel-002": {
                     "confidence": 0.95,
                     "objects": [
@@ -251,6 +284,7 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
         self.assertEqual(first.manifest["max_panels_per_page"], 9)
         self.assertEqual(first.manifest["renderer_code_commit"], "test-commit")
         self.assertFalse(first.manifest["execution_policy"]["first_frame_eligible"])
+        self.assertTrue(first.manifest["execution_policy"]["provider_execution_input"])
         self.assertIn(b"storyboard-master-strip-v3", first.pages[0])
 
         seven_panel_strip = render_storyboard_sheets(

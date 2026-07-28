@@ -116,6 +116,24 @@ class VideoPlanningFailureTests(unittest.TestCase):
             self.assertEqual(result["error"]["code"], PlanningErrorCode.INVALID_INPUT.value)
             self.assertFalse((Path(temporary) / "video_generation_storyboard").exists())
 
+    def test_cli_requires_agent_visual_observation_for_every_panel(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            for missing_panel in (None, "panel-001", "panel-002"):
+                with self.subTest(missing_panel=missing_panel):
+                    request = planning_request()
+                    request["output_root"] = str(Path(temporary) / str(missing_panel or "all"))
+                    observations = request["sheet_render_metadata"]["panel_visual_observations"]
+                    if missing_panel is None:
+                        del request["sheet_render_metadata"]["panel_visual_observations"]
+                    else:
+                        del observations[missing_panel]
+
+                    result = run_cli("build-storyboard-master", request)
+
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["error"]["code"], PlanningErrorCode.INVALID_INPUT.value)
+                    self.assertFalse((Path(request["output_root"]) / "video_generation_storyboard").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

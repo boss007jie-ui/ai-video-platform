@@ -13,13 +13,14 @@ from typing import Any
 from .models import content_digest, snapshot
 
 
-RENDERER_VERSION = "1.2.0"
+RENDERER_VERSION = "1.3.0"
 LAYOUT_VERSION = "storyboard-master-strip-v3"
 MAX_PANELS_PER_PAGE = 9
 EXECUTION_POLICY = {
-    "role": "human_review_only",
+    "role": "human_review_and_multimodal_structure_reference",
     "first_frame_eligible": False,
-    "provider_execution_input": False,
+    "provider_execution_input": True,
+    "provider_reference_role": "storyboard_structure_reference",
     "semantic_authority": False,
     "ocr_semantic_writeback": False,
 }

@@ -312,6 +312,19 @@ def plan_motion_annotations(
     entries = master.get("master_panel_entries")
     if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes, bytearray)):
         raise ValueError("Master requires master_panel_entries")
+    panel_ids = [
+        entry.get("panel_id")
+        for entry in entries
+        if isinstance(entry, Mapping)
+    ]
+    if (
+        len(panel_ids) != len(entries)
+        or any(not isinstance(panel_id, str) or not panel_id for panel_id in panel_ids)
+        or len(set(panel_ids)) != len(panel_ids)
+    ):
+        raise ValueError("Master Panel entries require unique panel_id values")
+    if set(observations) != set(panel_ids):
+        raise ValueError("panel_visual_observations must cover every Master Panel exactly once")
     result: dict[str, list[dict[str, Any]]] = {}
     shots = master.get("shots")
     shot_by_id = {

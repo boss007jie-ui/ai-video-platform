@@ -39,13 +39,12 @@ def _write_outputs(output_root: Path, result: Mapping[str, object], document: Ma
     render_metadata = dict(metadata)
     observations = render_metadata.get("panel_visual_observations")
     try:
-        if observations is not None:
-            render_metadata["motion_annotations"] = plan_motion_annotations(master, observations)
+        render_metadata["motion_annotations"] = plan_motion_annotations(master, observations)
         rendered = render_storyboard_sheets(master, panel_bytes, render_metadata)
     except ValueError as exc:
         raise PlanningError(
             PlanningErrorCode.INVALID_INPUT,
-            "Sheet visual observations or render metadata are invalid",
+            "Agent visual observations must be valid and cover every Panel before Sheet rendering",
             field_paths=("sheet_render_metadata",),
         ) from exc
 
