@@ -37,6 +37,7 @@ The copy request contains only:
 - source project directory;
 - destination project directory;
 - new project ID;
+- `inventory_digest` returned by inspection;
 - candidate IDs explicitly selected by the user.
 
 The complete script set is always copied. JSON scripts are converted to a draft
@@ -128,6 +129,9 @@ calls.
 - Project ID follows the Runner's existing conservative identifier syntax.
 - Every selected candidate ID must come from a fresh inspection of the same
   source project.
+- The supplied inventory digest must match that fresh inspection, so a source
+  change after the user chooses assets fails instead of silently copying a
+  different revision.
 - Source files are re-hashed while copying; mutation between inspection and copy
   fails and removes the incomplete destination. Sanitized JSON script output is
   hashed separately.
