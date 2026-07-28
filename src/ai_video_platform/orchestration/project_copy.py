@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 
 
 SCHEMA_VERSION = "1.0.0"
@@ -19,6 +22,30 @@ SCRIPT_NAMES = frozenset({
 IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 ASSET_ROLES = ("character", "scene", "product", "storyboard_panel", "other_reference")
 _PANEL_NAME = re.compile(r"^s\d+(?:-detail)?-p\d+$", re.IGNORECASE)
+_PROJECT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
+_COPY_REQUEST_FIELDS = frozenset({
+    "source_project",
+    "destination_project",
+    "project_id",
+    "inventory_digest",
+    "selected_candidate_ids",
+})
+_REMOVED_SCRIPT_KEYS = frozenset({
+    "approval_record",
+    "approval_status",
+    "approved_by",
+    "artifact_id",
+    "authorization_id",
+    "contract_id",
+    "contract_identity",
+    "idempotency_key",
+    "payload_digest",
+    "producer",
+    "source_contract_ids",
+    "source_hashes",
+    "source_provenance",
+    "task_id",
+})
 _EXCLUDED_DIRECTORIES = frozenset({
     ".hermes",
     "audit",
@@ -159,3 +186,168 @@ def inspect_project(source: Path | str) -> dict[str, object]:
     }
     inventory["inventory_digest"] = _content_digest(_canonical_json(inventory).encode("utf-8"))
     return inventory
+
+
+def _format_time(now: datetime | None) -> str:
+    value = now or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _sanitize_script(value: object, *, top_level: bool = False) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _sanitize_script(item)
+            for key, item in value.items()
+            if key not in _REMOVED_SCRIPT_KEYS and not (top_level and key == "status")
+        }
+    if isinstance(value, list):
+        return [_sanitize_script(item) for item in value]
+    return value
+
+
+def _verified_source_bytes(source: Path, record: Mapping[str, object]) -> bytes:
+    content = source.read_bytes()
+    if len(content) != record.get("size_bytes") or _content_digest(content) != record.get("sha256"):
+        raise ProjectCopyError("source project changed after inspection")
+    return content
+
+
+def copy_project(
+    request: Mapping[str, object],
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    if set(request) != _COPY_REQUEST_FIELDS:
+        raise ProjectCopyError("project copy request fields are invalid")
+    source_value = request.get("source_project")
+    destination_value = request.get("destination_project")
+    project_id = request.get("project_id")
+    inventory_digest = request.get("inventory_digest")
+    selected_ids = request.get("selected_candidate_ids")
+    if not isinstance(source_value, str) or not source_value:
+        raise ProjectCopyError("source_project is invalid")
+    if not isinstance(destination_value, str) or not destination_value:
+        raise ProjectCopyError("destination_project is invalid")
+    if not isinstance(project_id, str) or _PROJECT_ID.fullmatch(project_id) is None:
+        raise ProjectCopyError("project_id is invalid")
+    if not isinstance(inventory_digest, str) or not inventory_digest:
+        raise ProjectCopyError("inventory_digest is invalid")
+    if (
+        not isinstance(selected_ids, list)
+        or any(not isinstance(item, str) or not item for item in selected_ids)
+        or len(set(selected_ids)) != len(selected_ids)
+    ):
+        raise ProjectCopyError("selected_candidate_ids is invalid")
+
+    inventory = inspect_project(source_value)
+    if inventory["inventory_digest"] != inventory_digest:
+        raise ProjectCopyError("source project changed after inspection")
+    source_path = Path(str(inventory["source_project"]))
+    supplied_destination = Path(destination_value)
+    if supplied_destination.is_symlink() or supplied_destination.exists():
+        raise ProjectCopyError("destination project already exists")
+    destination = supplied_destination.resolve(strict=False)
+    if destination.is_relative_to(source_path):
+        raise ProjectCopyError("destination project must be outside the source project")
+    if not destination.parent.is_dir() or destination.parent.is_symlink():
+        raise ProjectCopyError("destination project parent is invalid")
+
+    raw_assets = inventory.get("assets")
+    if not isinstance(raw_assets, Mapping):
+        raise ProjectCopyError("project inventory is invalid")
+    candidate_by_id: dict[str, Mapping[str, object]] = {}
+    for role in ASSET_ROLES:
+        group = raw_assets.get(role)
+        if not isinstance(group, list):
+            raise ProjectCopyError("project inventory is invalid")
+        for item in group:
+            if not isinstance(item, Mapping) or not isinstance(item.get("candidate_id"), str):
+                raise ProjectCopyError("project inventory is invalid")
+            candidate_by_id[str(item["candidate_id"])] = item
+    unknown = set(selected_ids).difference(candidate_by_id)
+    if unknown:
+        raise ProjectCopyError("selected asset is not in the inspected project")
+
+    destination.mkdir()
+    try:
+        script_records: list[dict[str, object]] = []
+        raw_scripts = inventory.get("scripts")
+        if not isinstance(raw_scripts, list):
+            raise ProjectCopyError("project inventory is invalid")
+        for item in raw_scripts:
+            if not isinstance(item, Mapping) or not isinstance(item.get("relative_path"), str):
+                raise ProjectCopyError("project inventory is invalid")
+            relative = Path(str(item["relative_path"]))
+            content = _verified_source_bytes(source_path / relative, item)
+            copied_relative = Path("reuse_source") / "scripts" / relative
+            copied_path = destination / copied_relative
+            copied_path.parent.mkdir(parents=True, exist_ok=True)
+            if relative.suffix.lower() == ".json":
+                try:
+                    parsed = json.loads(content.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    raise ProjectCopyError("reusable script JSON is invalid") from None
+                envelope = {
+                    "schema_version": SCHEMA_VERSION,
+                    "document_type": "project-copy-draft-script-v1",
+                    "source_relative_path": relative.as_posix(),
+                    "content": _sanitize_script(parsed, top_level=True),
+                }
+                copied_content = (_canonical_json(envelope) + "\n").encode("utf-8")
+            else:
+                copied_content = content
+            copied_path.write_bytes(copied_content)
+            script_records.append({
+                "source_relative_path": relative.as_posix(),
+                "copied_relative_path": copied_relative.as_posix(),
+                "source_size_bytes": len(content),
+                "source_sha256": _content_digest(content),
+                "copied_size_bytes": len(copied_content),
+                "copied_sha256": _content_digest(copied_content),
+            })
+
+        asset_records: list[dict[str, object]] = []
+        for candidate_id in sorted(selected_ids):
+            item = candidate_by_id[candidate_id]
+            relative = Path(str(item["relative_path"]))
+            content = _verified_source_bytes(source_path / relative, item)
+            role = str(item["role"])
+            digest_hex = str(item["sha256"]).removeprefix("sha256:")
+            copied_relative = Path("reuse_source") / "assets" / role / f"{digest_hex}-{relative.name}"
+            copied_path = destination / copied_relative
+            copied_path.parent.mkdir(parents=True, exist_ok=True)
+            copied_path.write_bytes(content)
+            if _content_digest(copied_path.read_bytes()) != item["sha256"]:
+                raise ProjectCopyError("copied asset integrity check failed")
+            asset_records.append({
+                "candidate_id": candidate_id,
+                "role": role,
+                "source_relative_path": relative.as_posix(),
+                "copied_relative_path": copied_relative.as_posix(),
+                "size_bytes": len(content),
+                "sha256": str(item["sha256"]),
+            })
+
+        manifest: dict[str, object] = {
+            "schema_version": SCHEMA_VERSION,
+            "project_id": project_id,
+            "source_project": str(source_path),
+            "created_at": _format_time(now),
+            "status": "draft",
+            "inventory_digest": inventory_digest,
+            "scripts": script_records,
+            "assets": asset_records,
+        }
+        (destination / "PROJECT_COPY.json").write_text(
+            _canonical_json(manifest) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return manifest
+    except Exception as error:
+        shutil.rmtree(destination)
+        if isinstance(error, ProjectCopyError):
+            raise
+        raise ProjectCopyError("project copy failed") from None

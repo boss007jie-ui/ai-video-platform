@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
 
-from ai_video_platform.orchestration.project_copy import inspect_project
+from ai_video_platform.orchestration.project_copy import ProjectCopyError, copy_project, inspect_project
 
 
 def _write(path: Path, content: bytes | str) -> None:
@@ -29,7 +30,12 @@ def _project_fixture(root: Path) -> None:
     plan = {
         "task_id": "old-task-001",
         "artifact_id": "old-storyboard-plan",
+        "contract_id": "old-contract-001",
+        "producer": {"agent": "skill"},
+        "source_provenance": [{"contract_id": "source-contract-001"}],
         "status": "completed",
+        "product_id": "product-laser-pointer",
+        "cta": "Buy the laser pointer today",
         "ShotPlan": [{
             "shot_id": "S01",
             "action_path": "Presenter demonstrates the product",
@@ -50,6 +56,7 @@ def _project_fixture(root: Path) -> None:
     script_root = root / "storyboard" / "production_storyboard_plan"
     _write(script_root / "production_storyboard_plan.json", json.dumps(plan))
     _write(script_root / "production_storyboard_panel_plan.json", json.dumps(panel_plan))
+    _write(root / "CTA_OPTIONS.md", "CTA A: Buy now\nCTA B: Learn more\n")
 
     character = b"synthetic-character-image"
     _write(root / "image_panel" / "deliverables" / "character-anchor-A.png", character)
@@ -80,6 +87,7 @@ class ProjectCopyTests(unittest.TestCase):
         self.assertEqual(
             [item["relative_path"] for item in inventory["scripts"]],
             [
+                "CTA_OPTIONS.md",
                 "storyboard/production_storyboard_plan/production_storyboard_panel_plan.json",
                 "storyboard/production_storyboard_plan/production_storyboard_plan.json",
             ],
@@ -99,6 +107,152 @@ class ProjectCopyTests(unittest.TestCase):
         self.assertNotIn("provider.png", all_paths)
         self.assertNotIn("seedance_nz_video", all_paths)
         self.assertEqual(after, before)
+
+    def test_copy_preserves_full_creative_script_and_only_selected_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            destination = root / "copied-project"
+            source.mkdir()
+            _project_fixture(source)
+            before = _tree_snapshot(source)
+            source_cta = (source / "CTA_OPTIONS.md").read_bytes()
+            inventory = inspect_project(source)
+            character = inventory["assets"]["character"][0]
+            scene = inventory["assets"]["scene"][0]
+            request = {
+                "source_project": str(source),
+                "destination_project": str(destination),
+                "project_id": "copied-project-001",
+                "inventory_digest": inventory["inventory_digest"],
+                "selected_candidate_ids": [character["candidate_id"], scene["candidate_id"]],
+            }
+
+            result = copy_project(
+                request,
+                now=datetime(2026, 7, 28, 8, 0, tzinfo=timezone.utc),
+            )
+
+            copied_plan_record = next(
+                item for item in result["scripts"]
+                if item["source_relative_path"].endswith("production_storyboard_plan.json")
+            )
+            copied_plan = json.loads(
+                (destination / copied_plan_record["copied_relative_path"]).read_text(encoding="utf-8")
+            )
+            copied_cta_record = next(
+                item for item in result["scripts"]
+                if item["source_relative_path"] == "CTA_OPTIONS.md"
+            )
+            copied_cta = (destination / copied_cta_record["copied_relative_path"]).read_bytes()
+            copied_asset_bytes = {
+                item["role"]: (destination / item["copied_relative_path"]).read_bytes()
+                for item in result["assets"]
+            }
+            persisted = json.loads((destination / "PROJECT_COPY.json").read_text(encoding="utf-8"))
+            after = _tree_snapshot(source)
+
+        self.assertEqual(result, persisted)
+        self.assertEqual(result["status"], "draft")
+        self.assertEqual(result["created_at"], "2026-07-28T08:00:00Z")
+        self.assertEqual({item["role"] for item in result["assets"]}, {"character", "scene"})
+        self.assertEqual(copied_asset_bytes["character"], b"synthetic-character-image")
+        self.assertEqual(copied_asset_bytes["scene"], b"synthetic-scene-image")
+        self.assertEqual(copied_cta, source_cta)
+        self.assertEqual(copied_plan["document_type"], "project-copy-draft-script-v1")
+        content = copied_plan["content"]
+        self.assertEqual(content["product_id"], "product-laser-pointer")
+        self.assertEqual(content["cta"], "Buy the laser pointer today")
+        self.assertEqual(content["ShotPlan"][0]["action_path"], "Presenter demonstrates the product")
+        self.assertEqual(content["ShotPlan"][0]["dialogue_or_voiceover"], "See the result now")
+        serialized_content = json.dumps(content, ensure_ascii=False)
+        for excluded in (
+            "task_id", "artifact_id", "contract_id", "producer", "source_provenance",
+            "approval_status", "approved_by",
+        ):
+            self.assertNotIn(f'"{excluded}"', serialized_content)
+        self.assertNotIn('"status"', serialized_content)
+        self.assertEqual(after, before)
+
+    def test_inspect_rejects_missing_script_and_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            empty = root / "empty"
+            empty.mkdir()
+            with self.assertRaisesRegex(ProjectCopyError, "no reusable script"):
+                inspect_project(empty)
+
+            source = root / "source"
+            source.mkdir()
+            _project_fixture(source)
+            try:
+                (source / "linked-image.png").symlink_to(
+                    source / "image_panel" / "deliverables" / "scene-anchor-A.png"
+                )
+            except OSError:
+                return
+            with self.assertRaisesRegex(ProjectCopyError, "symlink"):
+                inspect_project(source)
+
+    def test_copy_rejects_unknown_stale_existing_and_nested_destinations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            _project_fixture(source)
+            inventory = inspect_project(source)
+
+            def request_for(destination: Path) -> dict[str, object]:
+                return {
+                    "source_project": str(source),
+                    "destination_project": str(destination),
+                    "project_id": "copied-project-001",
+                    "inventory_digest": inventory["inventory_digest"],
+                    "selected_candidate_ids": [],
+                }
+
+            unknown = request_for(root / "unknown")
+            unknown["selected_candidate_ids"] = ["asset:scene:" + "0" * 64]
+            with self.assertRaisesRegex(ProjectCopyError, "not in the inspected project"):
+                copy_project(unknown)
+
+            existing = root / "existing"
+            existing.mkdir()
+            with self.assertRaisesRegex(ProjectCopyError, "already exists"):
+                copy_project(request_for(existing))
+
+            with self.assertRaisesRegex(ProjectCopyError, "outside the source"):
+                copy_project(request_for(source / "nested-copy"))
+
+            scene = source / "image_panel" / "deliverables" / "scene-anchor-A.png"
+            scene.write_bytes(b"changed-scene")
+            stale = request_for(root / "stale")
+            with self.assertRaisesRegex(ProjectCopyError, "changed after inspection"):
+                copy_project(stale)
+            self.assertFalse((root / "stale").exists())
+
+    def test_invalid_script_copy_removes_incomplete_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            _project_fixture(source)
+            script = source / "storyboard" / "production_storyboard_plan" / "production_storyboard_plan.json"
+            script.write_text("{broken", encoding="utf-8")
+            inventory = inspect_project(source)
+            destination = root / "invalid-script-copy"
+            request = {
+                "source_project": str(source),
+                "destination_project": str(destination),
+                "project_id": "copied-project-001",
+                "inventory_digest": inventory["inventory_digest"],
+                "selected_candidate_ids": [],
+            }
+
+            with self.assertRaisesRegex(ProjectCopyError, "script JSON is invalid"):
+                copy_project(request)
+
+            self.assertFalse(destination.exists())
 
 
 if __name__ == "__main__":
