@@ -16,8 +16,10 @@ container bytes, actual byte length, caller-declared byte length, SHA-256, and t
 30MB upload ceiling. It then applies the selected workflow profile's duration,
 resolution, FPS, output-transform, execution, and cost caps. There is deliberately
 no invented platform-wide duration limit; the Fake profile owns only its test cap,
-and every RunningHub profile must bind its approved `workflowId`, exported workflow
-JSON SHA-256, input node/field, exact `nodeInfoList`, and output origin allowlist.
+and the original RunningHub workflow mode still binds its approved `workflowId`,
+exported workflow JSON SHA-256, input node/field, exact `nodeInfoList`, and output
+origin allowlist. RunningHub AI application mode is separate and never pretends to
+be a workflow binding.
 
 Only `OWNED` and `SYNTHETIC` media with `provider_eligible` lifecycle may pass.
 `UNKNOWN`, `internal_analysis_only`, third-party references, Research Library media,
@@ -53,15 +55,22 @@ writes `runninghub_enhanced.mp4` and `runninghub_enhancement_receipt.json` besid
 input, and an exact replay returns the verified local receipt without another
 adapter call.
 
-`--adapter runninghub` is the only production selection. Before using it, all of the
-following must be true: `RUNNINGHUB_API_KEY` is available through the environment;
-the request uses work item `FT-05-003`; `workflow_profile.workflow_binding` contains
-the externally approved workflow ID and exported JSON SHA-256, the exact input
-node/field and node values, and approved HTTPS output origins; the input is an
-approved local MP4/AVI/MOV/MKV no larger than 30MB; and a separate real-execution
-gate authorizes the call. Missing or incomplete prerequisites fail before transport.
-The adapter does not use instance selection, webhook, personal queue, retention,
-cancel, WSS, or the legacy status endpoint.
+`--adapter runninghub` is the only production selection. For the normal video
+enhancement AI application, set only `provider_mode=ai_app`; do not send an App ID,
+node ID, field name, base URL, workflow ID, workflow JSON SHA, or API key. The
+approved profile `runninghub-ai-app-video-enhance-v1` is built in with App ID
+`2035633294867439618`, input node `25`, field `video`, and base URL
+`https://www.runninghub.cn/openapi/v2`. It uploads through
+`/media/upload/binary`, creates through `/run/ai-app/{appId}`, and queries through
+`/query`. The API key is read only from the Windows user environment variable
+`RUNNINGHUB_API_KEY`; a missing key fails before transport.
+
+The original workflow mode remains available when a request supplies its approved
+`workflow_profile.workflow_binding`. In either mode the request must use work item
+`FT-05-003`, provide approved local media no larger than 30MB, and have a separate
+real-execution approval. AI application receipts record the mode, profile, App ID,
+and input node/field but never the key or complete temporary download URL. No real
+RunningHub execution has been performed by this implementation.
 
 The independent acceptance command creates one small synthetic fixture and a
 sanitized business sample, denies socket access, and demonstrates preflight, Fake

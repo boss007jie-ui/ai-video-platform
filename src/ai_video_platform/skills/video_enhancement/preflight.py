@@ -29,6 +29,11 @@ DENIED_TIKTOK_DIGESTS = {
     "sha256:c13b6c53f551e1ca30aeb946ff05eb82b70167ae97770cc03202cb016a7ff681",
 }
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+RUNNINGHUB_AI_APP_PROFILE_ID = "runninghub-ai-app-video-enhance-v1"
+RUNNINGHUB_AI_APP_ID = "2035633294867439618"
+RUNNINGHUB_AI_APP_INPUT_NODE_ID = "25"
+RUNNINGHUB_AI_APP_INPUT_FIELD_NAME = "video"
+RUNNINGHUB_AI_APP_BASE_URL = "https://www.runninghub.cn/openapi/v2"
 
 
 def fake_workflow_profile(profile_id: str = "fake-enhancement-profile") -> dict[str, object]:
@@ -123,6 +128,53 @@ def runninghub_workflow_profile(
             "input_field_name": input_field_name,
             "node_info_list": node_info_list,
             "output_origins": output_origins,
+        },
+    }
+    return snapshot({**body, "profile_digest": content_digest(body)})
+
+
+def runninghub_ai_app_profile() -> dict[str, object]:
+    """Return the fixed approved RunningHub AI application profile."""
+
+    body = {
+        "profile_id": RUNNINGHUB_AI_APP_PROFILE_ID,
+        "profile_version": "1.0.0",
+        "provider_kind": "runninghub",
+        "provider_mode": "ai_app",
+        "supported_operations": ["upscale", "frame_interpolation", "denoise_restore"],
+        "operation_limits": {
+            "upscale_factors": [2, 4],
+            "frame_interpolation_factors": [2],
+            "denoise_strength_min": 0.0,
+            "denoise_strength_max": 1.0,
+        },
+        "media_limits": {
+            "max_duration_seconds": 30,
+            "max_width": 4096,
+            "max_height": 4096,
+            "max_fps": 120,
+        },
+        "execution_limits": {
+            "max_requests": 1,
+            "max_concurrency": 1,
+            "max_attempts": 1,
+            "max_timeout_seconds": 600,
+            "max_runtime_seconds": 600,
+        },
+        "rate_snapshot": {
+            "snapshot_at": "2026-07-22T00:00:00Z",
+            "instance_type": "unfixed",
+            "currency": "USD",
+            "rate_per_hour": 0.70,
+            "public_source": "RunningHub Enterprise Shared public page",
+            "estimate_only": True,
+            "not_a_quote": True,
+        },
+        "ai_app_binding": {
+            "app_id": RUNNINGHUB_AI_APP_ID,
+            "input_node_id": RUNNINGHUB_AI_APP_INPUT_NODE_ID,
+            "input_field_name": RUNNINGHUB_AI_APP_INPUT_FIELD_NAME,
+            "base_url": RUNNINGHUB_AI_APP_BASE_URL,
         },
     }
     return snapshot({**body, "profile_digest": content_digest(body)})
@@ -313,13 +365,22 @@ class EnhancementPreflight:
             "operation_limits", "media_limits", "execution_limits", "rate_snapshot",
         }
         provider_kind = value.get("provider_kind")
-        required = common if provider_kind == "offline_fake" else common | {"workflow_binding"}
+        provider_mode = value.get("provider_mode")
+        if provider_kind == "offline_fake":
+            required = common
+        elif provider_mode == "ai_app":
+            required = common | {"provider_mode", "ai_app_binding"}
+        else:
+            required = common | {"workflow_binding"}
         if set(value) != required or provider_kind not in {"offline_fake", "runninghub"} or value.get("profile_version") != "1.0.0":
             raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "workflow profile shape is invalid")
         if provider_kind == "offline_fake":
             approved = fake_workflow_profile(str(value.get("profile_id", "")))
             if value != approved:
                 raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "workflow profile does not match an approved offline Fake profile")
+        elif provider_mode == "ai_app":
+            if value != runninghub_ai_app_profile():
+                raise EnhancementError(EnhancementErrorCode.WORKFLOW_PROFILE_INVALID, "RunningHub AI application profile is not approved")
         else:
             binding = _mapping(value.get("workflow_binding"), "workflow_profile.workflow_binding")
             if set(binding) != {

@@ -23,7 +23,13 @@ from ai_video_platform.skills.video_enhancement.runninghub_adapter import (
 )
 from ai_video_platform.skills.video_enhancement.runninghub_ledger import ARTIFACT_NAME, RECEIPT_NAME
 from ai_video_platform.skills.video_enhancement.preflight import runninghub_workflow_profile
-from tests.skills.video_enhancement.test_runninghub_adapter import FakeClock, FakeTransport, SYNTHETIC_MP4, WORKFLOW_DIGEST
+from tests.skills.video_enhancement.test_runninghub_adapter import (
+    AiAppTransport,
+    FakeClock,
+    FakeTransport,
+    SYNTHETIC_MP4,
+    WORKFLOW_DIGEST,
+)
 
 
 def runninghub_request(path: Path) -> dict[str, object]:
@@ -69,6 +75,14 @@ def runninghub_request(path: Path) -> dict[str, object]:
         },
         "idempotency_key": "ft-05-003-runninghub-001",
     }
+
+
+def runninghub_ai_app_request(path: Path) -> dict[str, object]:
+    request = runninghub_request(path)
+    request.pop("workflow_profile")
+    request["provider_mode"] = "ai_app"
+    request["idempotency_key"] = "ft-05-003-runninghub-ai-app-001"
+    return request
 
 
 class ReceiptAwareTransport(FakeTransport):
@@ -155,6 +169,38 @@ class RunningHubCliTests(unittest.TestCase):
         self.assertEqual(receipt["output_sha256"], "sha256:" + hashlib.sha256(SYNTHETIC_MP4).hexdigest())
         self.assertEqual(receipt["workflow_id"], "workflow-approved-001")
         self.assertEqual(receipt["workflow_json_sha256"], WORKFLOW_DIGEST)
+        self.assertNotIn("signature=secret", json.dumps(receipt))
+
+    def test_ai_app_cli_injects_fixed_profile_records_config_and_replays_without_submit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "input.mp4"
+            media.write_bytes(SYNTHETIC_MP4)
+            request = runninghub_ai_app_request(media)
+            transport = AiAppTransport()
+
+            first = execute_enhancement(
+                request,
+                adapter_name="runninghub",
+                adapter=self._adapter(transport),
+            )
+            replay_transport = AiAppTransport(fail_stage="upload")
+            replay = execute_enhancement(
+                request,
+                adapter_name="runninghub",
+                adapter=self._adapter(replay_transport),
+            )
+            receipt = json.loads((media.parent / RECEIPT_NAME).read_text(encoding="utf-8"))
+
+        self.assertFalse(first["replayed"])
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(replay_transport.network_calls, 0)
+        self.assertEqual(receipt["provider_mode"], "ai_app")
+        self.assertEqual(receipt["profile_id"], "runninghub-ai-app-video-enhance-v1")
+        self.assertEqual(receipt["app_id"], "2035633294867439618")
+        self.assertEqual(receipt["input_node_id"], "25")
+        self.assertEqual(receipt["input_field_name"], "video")
+        self.assertIsNone(receipt["workflow_id"])
+        self.assertIsNone(receipt["workflow_json_sha256"])
         self.assertNotIn("signature=secret", json.dumps(receipt))
 
     def test_tampered_or_incomplete_evidence_fails_before_adapter_calls(self) -> None:

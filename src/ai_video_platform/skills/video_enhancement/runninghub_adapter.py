@@ -16,6 +16,14 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .adapters import AdapterFailure
 from .errors import contains_sensitive_text
+from .preflight import (
+    RUNNINGHUB_AI_APP_BASE_URL,
+    RUNNINGHUB_AI_APP_ID,
+    RUNNINGHUB_AI_APP_INPUT_FIELD_NAME,
+    RUNNINGHUB_AI_APP_INPUT_NODE_ID,
+    RUNNINGHUB_AI_APP_PROFILE_ID,
+    runninghub_ai_app_profile,
+)
 
 
 BASE_URL = "https://www.runninghub.ai"
@@ -29,7 +37,7 @@ _CREDENTIAL = re.compile(r"^[A-Za-z0-9._~-]{12,256}$")
 _IDENTITY = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RUNNING = {"RUNNING", "QUEUED", "PENDING", "SUBMITTED"}
-_FAILED = {"FAILED", "FAILURE", "ERROR"}
+_FAILED = {"FAILED", "FAILURE", "ERROR", "CANCELED", "CANCELLED"}
 _SUCCEEDED = {"SUCCESS", "SUCCEEDED", "COMPLETED"}
 
 
@@ -82,6 +90,15 @@ class RunningHubCredentialResolver:
 
 class _RunningHubTransport(Protocol):
     def upload_multipart(
+        self,
+        credential: str,
+        *,
+        file_name: str,
+        file_bytes: bytes,
+        media_type: str,
+    ) -> object: ...
+
+    def upload_binary(
         self,
         credential: str,
         *,
@@ -147,6 +164,36 @@ class _UrllibRunningHubTransport:
         raw, _ = self._open(request, max_bytes=1024 * 1024)
         return self._decode_json(raw)
 
+    def upload_binary(
+        self,
+        credential: str,
+        *,
+        file_name: str,
+        file_bytes: bytes,
+        media_type: str,
+    ) -> object:
+        boundary = "runninghub-" + hashlib.sha256(file_name.encode("utf-8") + b"\0" + file_bytes).hexdigest()[:24]
+        body = b"".join((
+            f"--{boundary}\r\n".encode("ascii"),
+            f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'.encode("utf-8"),
+            f"Content-Type: {media_type}\r\n\r\n".encode("ascii"),
+            file_bytes,
+            f"\r\n--{boundary}--\r\n".encode("ascii"),
+        ))
+        request = Request(
+            RUNNINGHUB_AI_APP_BASE_URL + "/media/upload/binary",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + credential,
+                "Accept": "application/json",
+                "Content-Type": "multipart/form-data; boundary=" + boundary,
+                "Content-Length": str(len(body)),
+            },
+        )
+        raw, _ = self._open(request, max_bytes=1024 * 1024)
+        return self._decode_json(raw)
+
     def request_json(
         self,
         method: str,
@@ -155,10 +202,13 @@ class _UrllibRunningHubTransport:
         *,
         payload: dict[str, object],
     ) -> object:
-        if method != "POST" or path not in {"/task/openapi/create", "/task/openapi/outputs"}:
+        workflow_paths = {"/task/openapi/create", "/task/openapi/outputs"}
+        ai_app_paths = {f"/run/ai-app/{RUNNINGHUB_AI_APP_ID}", "/query"}
+        if method != "POST" or path not in workflow_paths | ai_app_paths:
             raise AdapterFailure("REQUEST_INVALID", "RunningHub request target is invalid", retryable=False)
+        base_url = RUNNINGHUB_AI_APP_BASE_URL if path in ai_app_paths else BASE_URL
         request = Request(
-            BASE_URL + path,
+            base_url + path,
             data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
             method="POST",
             headers={
@@ -250,37 +300,61 @@ class RunningHubVideoEnhancementAdapter:
 
     def submit(self, request: Mapping[str, object]) -> str:
         file_name, file_bytes, media_type = self._input_file(request)
-        (
-            workflow_id,
-            node_info_list,
-            output_origins,
-            workflow_digest,
-            input_node_id,
-            input_field_name,
-        ) = self._workflow_binding(request)
+        profile = request.get("workflow_profile")
+        provider_mode = profile.get("provider_mode") if isinstance(profile, Mapping) else None
+        if provider_mode == "ai_app":
+            app_id, input_node_id, input_field_name, profile_id = self._ai_app_binding(request)
+            workflow_id = None
+            workflow_digest = None
+            output_origins: tuple[str, ...] = ()
+            node_info_list: list[dict[str, object]] = []
+        else:
+            (
+                workflow_id,
+                node_info_list,
+                output_origins,
+                workflow_digest,
+                input_node_id,
+                input_field_name,
+            ) = self._workflow_binding(request)
+            app_id = None
+            profile_id = profile.get("profile_id") if isinstance(profile, Mapping) else None
+            provider_mode = "workflow"
         credential = self._credential_resolver.resolve()
-        upload = self._call(
-            "UPLOAD_FAILED",
-            lambda: self._transport.upload_multipart(
-                credential,
-                file_name=file_name,
-                file_bytes=file_bytes,
-                media_type=media_type,
-            ),
-        )
+        upload_method = self._transport.upload_binary if provider_mode == "ai_app" else self._transport.upload_multipart
+        upload = self._call("UPLOAD_FAILED", lambda: upload_method(
+            credential,
+            file_name=file_name,
+            file_bytes=file_bytes,
+            media_type=media_type,
+        ))
         uploaded_name = self._uploaded_file_name(upload)
-        populated_nodes = self._populate_input_node(
-            node_info_list,
-            uploaded_name,
-            input_node_id=input_node_id,
-            input_field_name=input_field_name,
-        )
-        payload: dict[str, object] = {"workflowId": workflow_id, "nodeInfoList": populated_nodes}
+        if provider_mode == "ai_app":
+            payload: dict[str, object] = {
+                "nodeInfoList": [{
+                    "nodeId": input_node_id,
+                    "fieldName": input_field_name,
+                    "fieldValue": uploaded_name,
+                    "description": input_field_name,
+                }],
+                "instanceType": "default",
+                "usePersonalQueue": "false",
+            }
+            create_path = f"/run/ai-app/{app_id}"
+        else:
+            populated_nodes = self._populate_input_node(
+                node_info_list,
+                uploaded_name,
+                input_node_id=input_node_id,
+                input_field_name=input_field_name,
+            )
+            payload = {"workflowId": workflow_id, "nodeInfoList": populated_nodes}
+            create_path = "/task/openapi/create"
         created = self._call(
             "CREATE_FAILED",
             lambda: self._transport.request_json(
                 "POST",
-                "/task/openapi/create",
+                create_path,
                 credential,
                 payload=payload,
             ),
@@ -298,6 +372,11 @@ class RunningHubVideoEnhancementAdapter:
             "task_cost_time": None,
             "downloaded": False,
             "output_origins": output_origins,
+            "provider_mode": provider_mode,
+            "profile_id": profile_id,
+            "app_id": app_id,
+            "input_node_id": input_node_id,
+            "input_field_name": input_field_name,
             "workflow_id": workflow_id,
             "workflow_json_sha256": workflow_digest,
             "status_chain": ["SUBMITTED"],
@@ -325,7 +404,7 @@ class RunningHubVideoEnhancementAdapter:
             "POLL_FAILED",
             lambda: self._transport.request_json(
                 "POST",
-                "/task/openapi/outputs",
+                "/query" if job["provider_mode"] == "ai_app" else "/task/openapi/outputs",
                 str(job["credential"]),
                 payload={"taskId": provider_job_id},
             ),
@@ -384,6 +463,11 @@ class RunningHubVideoEnhancementAdapter:
             "task_id": provider_job_id,
             "task_cost_time": job["task_cost_time"],
             "status_chain": list(job["status_chain"]),
+            "provider_mode": job["provider_mode"],
+            "profile_id": job["profile_id"],
+            "app_id": job["app_id"],
+            "input_node_id": job["input_node_id"],
+            "input_field_name": job["input_field_name"],
             "workflow_id": job["workflow_id"],
             "workflow_json_sha256": job["workflow_json_sha256"],
             "poll_calls": job["poll_count"],
@@ -404,6 +488,8 @@ class RunningHubVideoEnhancementAdapter:
             outputs = data.get("outputs")
         if outputs is None:
             outputs = response.get("outputs")
+        if job["provider_mode"] == "ai_app":
+            outputs = response.get("results")
         if status in _FAILED:
             job["state"] = "failed"
             job["status_chain"].append("FAILED")
@@ -434,22 +520,40 @@ class RunningHubVideoEnhancementAdapter:
         if not isinstance(outputs, list) or len(outputs) != 1 or not isinstance(outputs[0], Mapping):
             raise AdapterFailure("RESPONSE_INVALID", "RunningHub output list is invalid", retryable=False)
         output = outputs[0]
-        result_url = output.get("fileUrl")
-        file_type = output.get("fileType")
-        task_cost_time = output.get("taskCostTime")
+        if job["provider_mode"] == "ai_app":
+            result_url = output.get("url")
+            file_type = output.get("outputType")
+            task_cost_time = output.get("taskCostTime")
+        else:
+            result_url = output.get("fileUrl")
+            file_type = output.get("fileType")
+            task_cost_time = output.get("taskCostTime")
         if (
             not _safe_https_url(result_url)
-            or _origin(str(result_url)) not in job["output_origins"]
+            or (job["provider_mode"] != "ai_app" and _origin(str(result_url)) not in job["output_origins"])
             or not isinstance(file_type, str)
-            or file_type.lower().lstrip(".") not in {"mp4", "video/mp4"}
-            or isinstance(task_cost_time, bool)
-            or not isinstance(task_cost_time, (int, float))
-            or task_cost_time < 0
+            or file_type.lower().lstrip(".") not in {"mp4", "video/mp4", "video"}
+            or (
+                task_cost_time is not None
+                and (isinstance(task_cost_time, bool) or not isinstance(task_cost_time, (int, float)) or task_cost_time < 0)
+            )
         ):
             raise AdapterFailure("RESPONSE_INVALID", "RunningHub completed output is invalid", retryable=False)
         job["result_url"] = result_url
         job["task_cost_time"] = task_cost_time
         return {"state": "succeeded", "status": "SUCCEEDED", "task_cost_time": task_cost_time}
+
+    @staticmethod
+    def _ai_app_binding(request: Mapping[str, object]) -> tuple[str, str, str, str]:
+        profile = request.get("workflow_profile")
+        if profile != runninghub_ai_app_profile():
+            raise AdapterFailure("WORKFLOW_PROFILE_INVALID", "RunningHub AI application profile is not fixed", retryable=False)
+        return (
+            RUNNINGHUB_AI_APP_ID,
+            RUNNINGHUB_AI_APP_INPUT_NODE_ID,
+            RUNNINGHUB_AI_APP_INPUT_FIELD_NAME,
+            RUNNINGHUB_AI_APP_PROFILE_ID,
+        )
 
     @staticmethod
     def _input_file(request: Mapping[str, object]) -> tuple[str, bytes, str]:

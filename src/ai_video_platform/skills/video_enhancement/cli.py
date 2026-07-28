@@ -14,6 +14,7 @@ from .adapters import AdapterFailure, RejectingVideoEnhancementAdapter
 from .errors import EnhancementError, EnhancementErrorCode
 from .interface import VideoEnhancementInterface
 from .models import canonical_json, content_digest, snapshot
+from .preflight import runninghub_ai_app_profile
 from .runninghub_adapter import FakeRunningHubVideoEnhancementAdapter, RunningHubVideoEnhancementAdapter
 from .runninghub_ledger import ARTIFACT_NAME, RECEIPT_NAME, RunningHubCliLedger
 
@@ -69,9 +70,10 @@ def execute_enhancement(
 ) -> dict[str, object]:
     if adapter_name not in {"rejecting", "fake", "runninghub"}:
         raise EnhancementError(EnhancementErrorCode.INVALID_INPUT, "Enhancement adapter selection is invalid")
-    inspected = VideoEnhancementInterface().inspect_enhancement_request(document, now=now)
-    raw_input = document.get("input")
-    raw_profile = document.get("workflow_profile")
+    execution_document = _execution_document(document, adapter_name=adapter_name)
+    inspected = VideoEnhancementInterface().inspect_enhancement_request(execution_document, now=now)
+    raw_input = execution_document.get("input")
+    raw_profile = execution_document.get("workflow_profile")
     if not isinstance(raw_input, Mapping) or not isinstance(raw_profile, Mapping):
         raise EnhancementError(EnhancementErrorCode.INVALID_INPUT, "Enhancement request is invalid")
     path_value = raw_input.get("path")
@@ -131,6 +133,11 @@ def execute_enhancement(
             "task_id": task_id,
             "task_cost_time": summary["task_cost_time"],
             "status_chain": summary["status_chain"],
+            "provider_mode": summary["provider_mode"],
+            "profile_id": summary["profile_id"],
+            "app_id": summary["app_id"],
+            "input_node_id": summary["input_node_id"],
+            "input_field_name": summary["input_field_name"],
             "workflow_id": summary["workflow_id"],
             "workflow_json_sha256": summary["workflow_json_sha256"],
             "input_file": inspected["input_summary"]["file_name"],
@@ -193,6 +200,20 @@ def _selected_adapter(name: str) -> object:
     return RejectingVideoEnhancementAdapter()
 
 
+def _execution_document(document: Mapping[str, object], *, adapter_name: str) -> dict[str, object]:
+    value = snapshot(document)
+    provider_mode = value.get("provider_mode")
+    if provider_mode is None:
+        return value
+    if provider_mode != "ai_app" or adapter_name != "runninghub" or "workflow_profile" in value:
+        raise EnhancementError(
+            EnhancementErrorCode.WORKFLOW_PROFILE_INVALID,
+            "RunningHub AI application mode must use the built-in profile",
+        )
+    value["workflow_profile"] = runninghub_ai_app_profile()
+    return value
+
+
 def _raise_adapter_failure(error: AdapterFailure) -> None:
     code = (
         EnhancementErrorCode.CREDENTIAL_UNAVAILABLE
@@ -220,12 +241,22 @@ def _execution_summary(
             return {
                 "task_cost_time": summary.get("task_cost_time"),
                 "status_chain": list(summary.get("status_chain", fallback_chain)),
+                "provider_mode": summary.get("provider_mode"),
+                "profile_id": summary.get("profile_id"),
+                "app_id": summary.get("app_id"),
+                "input_node_id": summary.get("input_node_id"),
+                "input_field_name": summary.get("input_field_name"),
                 "workflow_id": summary.get("workflow_id"),
                 "workflow_json_sha256": summary.get("workflow_json_sha256"),
             }
     return {
         "task_cost_time": fallback_cost_time,
         "status_chain": list(fallback_chain),
+        "provider_mode": None,
+        "profile_id": None,
+        "app_id": None,
+        "input_node_id": None,
+        "input_field_name": None,
         "workflow_id": None,
         "workflow_json_sha256": None,
     }

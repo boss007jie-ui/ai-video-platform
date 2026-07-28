@@ -18,6 +18,7 @@ from ai_video_platform.skills.video_enhancement.runninghub_adapter import (
     RunningHubCredentialResolver,
     RunningHubVideoEnhancementAdapter,
 )
+from ai_video_platform.skills.video_enhancement.preflight import runninghub_ai_app_profile
 
 
 SYNTHETIC_MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isomrunninghub-test"
@@ -88,6 +89,50 @@ class FakeTransport:
         return self.download_content, self.download_content_type
 
 
+class AiAppTransport(FakeTransport):
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.poll_responses = [
+            {"status": "RUNNING"},
+            {
+                "status": "SUCCESS",
+                "results": [{
+                    "url": "https://files.runninghub.cn/output/final.mp4?signature=secret",
+                    "outputType": "mp4",
+                }],
+            },
+        ]
+
+    def upload_binary(
+        self,
+        credential: str,
+        *,
+        file_name: str,
+        file_bytes: bytes,
+        media_type: str,
+    ) -> dict[str, object]:
+        self.calls.append(("/media/upload/binary", {
+            "credential": credential,
+            "file_name": file_name,
+            "media_type": media_type,
+        }))
+        if self.fail_stage == "upload":
+            raise AdapterFailure("UPLOAD_FAILED", "synthetic upload failure", retryable=False)
+        return {"data": {"fileName": "api/test/input.mp4"}}
+
+    def request_json(self, method: str, path: str, credential: str, *, payload: dict[str, object]) -> object:
+        self.calls.append((path, payload))
+        if path == "/run/ai-app/2035633294867439618":
+            if self.fail_stage == "create":
+                raise AdapterFailure("CREATE_FAILED", "synthetic create failure", retryable=False)
+            return {"taskId": "task-ai-app-12345678"}
+        if path == "/query":
+            if self.fail_stage == "poll":
+                raise AdapterFailure("POLL_FAILED", "synthetic poll failure", retryable=False)
+            return self.poll_responses.pop(0)
+        raise AssertionError(f"unexpected AI App path: {path}")
+
+
 def request_for(path: Path, *, include_workflow_id: bool = True, include_digest: bool = True) -> dict[str, object]:
     binding: dict[str, object] = {
         "input_node_id": "10",
@@ -113,6 +158,12 @@ def request_for(path: Path, *, include_workflow_id: bool = True, include_digest:
         },
         "workflow_profile": {"workflow_binding": binding},
     }
+
+
+def ai_app_request_for(path: Path) -> dict[str, object]:
+    request = request_for(path)
+    request["workflow_profile"] = runninghub_ai_app_profile()
+    return request
 
 
 class RunningHubAdapterTests(unittest.TestCase):
@@ -180,6 +231,70 @@ class RunningHubAdapterTests(unittest.TestCase):
         self.assertEqual(artifact["sha256"], "sha256:" + hashlib.sha256(SYNTHETIC_MP4).hexdigest())
         self.assertEqual(adapter.status_chain, ("SUBMITTED", "RUNNING", "SUCCEEDED", "DOWNLOADED"))
         self.assertEqual(adapter.network_calls, 5)
+
+    def test_ai_app_uses_fixed_upload_create_query_profile_without_workflow_binding(self) -> None:
+        transport = AiAppTransport()
+        adapter = self._adapter(transport)
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "input.mp4"
+            media.write_bytes(SYNTHETIC_MP4)
+            request = ai_app_request_for(media)
+            self.assertNotIn("workflow_binding", request["workflow_profile"])
+
+            task_id = adapter.submit(request)
+            running = adapter.poll(task_id)
+            succeeded = adapter.poll(task_id)
+            artifact = adapter.download(task_id)
+
+        self.assertEqual(task_id, "task-ai-app-12345678")
+        self.assertEqual(running, {"state": "running", "status": "RUNNING"})
+        self.assertEqual(succeeded["state"], "succeeded")
+        self.assertEqual([item[0] for item in transport.calls], [
+            "/media/upload/binary",
+            "/run/ai-app/2035633294867439618",
+            "/query",
+            "/query",
+            "download",
+        ])
+        self.assertEqual(transport.calls[1][1], {
+            "nodeInfoList": [{
+                "nodeId": "25",
+                "fieldName": "video",
+                "fieldValue": "api/test/input.mp4",
+                "description": "video",
+            }],
+            "instanceType": "default",
+            "usePersonalQueue": "false",
+        })
+        self.assertEqual(transport.calls[2][1], {"taskId": "task-ai-app-12345678"})
+        self.assertEqual(artifact["content"], SYNTHETIC_MP4)
+        self.assertEqual(adapter.execution_summary(task_id), {
+            "task_id": "task-ai-app-12345678",
+            "task_cost_time": None,
+            "status_chain": ["SUBMITTED", "RUNNING", "SUCCEEDED", "DOWNLOADED"],
+            "provider_mode": "ai_app",
+            "profile_id": "runninghub-ai-app-video-enhance-v1",
+            "app_id": "2035633294867439618",
+            "input_node_id": "25",
+            "input_field_name": "video",
+            "workflow_id": None,
+            "workflow_json_sha256": None,
+            "poll_calls": 2,
+        })
+
+    def test_ai_app_missing_key_fails_before_upload(self) -> None:
+        transport = AiAppTransport()
+        adapter = RunningHubVideoEnhancementAdapter(
+            transport=transport,
+            credential_resolver=RunningHubCredentialResolver(environ={}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "input.mp4"
+            media.write_bytes(SYNTHETIC_MP4)
+            with self.assertRaises(AdapterFailure) as captured:
+                adapter.submit(ai_app_request_for(media))
+        self.assertEqual(captured.exception.code, "CREDENTIAL_UNAVAILABLE")
+        self.assertEqual(transport.network_calls, 0)
 
     def test_failed_poll_stops_and_does_not_download(self) -> None:
         transport = FakeTransport(poll_responses=[{"data": {"status": "FAILED", "error": "safe failure"}}])
