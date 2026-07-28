@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -101,6 +101,15 @@ def execute_enhancement(
             _raise_adapter_failure(error)
         if not isinstance(task_id, str) or not task_id:
             raise EnhancementError(EnhancementErrorCode.PROVIDER_REJECTED, "Enhancement adapter returned an invalid task")
+        submitted_at = _submitted_at(now)
+        ledger.persist_pending(
+            {
+                "task_id": task_id,
+                "idempotency_key": idempotency_key,
+                "request_hash": request_hash,
+                "submitted_at": submitted_at,
+            }
+        )
         local_status_chain = ["SUBMITTED"]
         task_cost_time: object = None
         while True:
@@ -131,6 +140,7 @@ def execute_enhancement(
             "adapter": adapter_name,
             "state": "succeeded",
             "task_id": task_id,
+            "submitted_at": submitted_at,
             "task_cost_time": summary["task_cost_time"],
             "status_chain": summary["status_chain"],
             "provider_mode": summary["provider_mode"],
@@ -198,6 +208,13 @@ def _selected_adapter(name: str) -> object:
     if name == "fake":
         return FakeRunningHubVideoEnhancementAdapter()
     return RejectingVideoEnhancementAdapter()
+
+
+def _submitted_at(now: datetime | None) -> str:
+    value = now or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _execution_document(document: Mapping[str, object], *, adapter_name: str) -> dict[str, object]:

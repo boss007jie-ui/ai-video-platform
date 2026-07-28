@@ -171,6 +171,33 @@ class RunningHubCliTests(unittest.TestCase):
         self.assertEqual(receipt["workflow_json_sha256"], WORKFLOW_DIGEST)
         self.assertNotIn("signature=secret", json.dumps(receipt))
 
+    def test_poll_failure_retains_pending_receipt_with_task_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "input.mp4"
+            media.write_bytes(SYNTHETIC_MP4)
+            request = runninghub_request(media)
+
+            with self.assertRaises(EnhancementError):
+                execute_enhancement(
+                    request,
+                    adapter_name="runninghub",
+                    adapter=self._adapter(FakeTransport(fail_stage="poll")),
+                )
+
+            receipt_path = media.parent / RECEIPT_NAME
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            artifact_exists = (media.parent / ARTIFACT_NAME).exists()
+
+        self.assertFalse(artifact_exists)
+        self.assertEqual(
+            set(receipt),
+            {"task_id", "idempotency_key", "request_hash", "submitted_at"},
+        )
+        self.assertEqual(receipt["task_id"], "task-runninghub-12345678")
+        self.assertEqual(receipt["idempotency_key"], request["idempotency_key"])
+        self.assertRegex(receipt["request_hash"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(receipt["submitted_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
     def test_ai_app_cli_injects_fixed_profile_records_config_and_replays_without_submit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             media = Path(directory) / "input.mp4"

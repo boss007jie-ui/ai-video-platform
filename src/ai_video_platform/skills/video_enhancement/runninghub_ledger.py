@@ -15,6 +15,7 @@ from .models import canonical_json, snapshot
 ARTIFACT_NAME = "runninghub_enhanced.mp4"
 RECEIPT_NAME = "runninghub_enhancement_receipt.json"
 LOCK_NAME = ".runninghub_enhancement.lock"
+PENDING_RECEIPT_FIELDS = frozenset({"task_id", "idempotency_key", "request_hash", "submitted_at"})
 
 
 class RunningHubCliLedger:
@@ -76,16 +77,59 @@ class RunningHubCliLedger:
             self.release()
             self._mismatch("RunningHub evidence already exists")
 
-    def persist_before_download(self, receipt: Mapping[str, object]) -> None:
+    def persist_pending(self, receipt: Mapping[str, object]) -> None:
         if self._lock_fd is None:
             raise EnhancementError(EnhancementErrorCode.INVALID_TRANSITION, "RunningHub output is not reserved")
+        value = snapshot(receipt)
+        if (
+            set(value) != PENDING_RECEIPT_FIELDS
+            or any(not isinstance(value.get(field), str) or not value[field] for field in PENDING_RECEIPT_FIELDS)
+            or contains_sensitive_text(canonical_json(value))
+        ):
+            self._mismatch("RunningHub pending receipt is invalid")
+        if self.artifact_path.exists() or self.receipt_path.exists():
+            self._mismatch("RunningHub evidence already exists")
+        receipt_temp = self.workspace / (RECEIPT_NAME + ".tmp")
+        if receipt_temp.exists():
+            self._mismatch("RunningHub temporary evidence already exists")
         try:
-            with self.receipt_path.open("x", encoding="utf-8", newline="\n") as stream:
-                stream.write(canonical_json(receipt) + "\n")
+            with receipt_temp.open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(canonical_json(value) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-        except FileExistsError:
-            self._mismatch("RunningHub receipt already exists")
+            receipt_temp.replace(self.receipt_path)
+        finally:
+            receipt_temp.unlink(missing_ok=True)
+
+    def persist_before_download(self, receipt: Mapping[str, object]) -> None:
+        if self._lock_fd is None or not self.receipt_path.is_file() or self.artifact_path.exists():
+            self._mismatch("RunningHub pending receipt cannot be promoted")
+        try:
+            raw_pending = json.loads(self.receipt_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            self._mismatch("RunningHub pending receipt is unreadable")
+        if not isinstance(raw_pending, Mapping):
+            self._mismatch("RunningHub pending receipt is invalid")
+        pending = snapshot(raw_pending)
+        value = snapshot(receipt)
+        if (
+            set(pending) != PENDING_RECEIPT_FIELDS
+            or any(pending.get(field) != value.get(field) for field in PENDING_RECEIPT_FIELDS)
+            or contains_sensitive_text(canonical_json(pending))
+            or contains_sensitive_text(canonical_json(value))
+        ):
+            self._mismatch("RunningHub pending receipt identity does not match")
+        receipt_temp = self.workspace / (RECEIPT_NAME + ".tmp")
+        if receipt_temp.exists():
+            self._mismatch("RunningHub temporary evidence already exists")
+        try:
+            with receipt_temp.open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(canonical_json(value) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            receipt_temp.replace(self.receipt_path)
+        finally:
+            receipt_temp.unlink(missing_ok=True)
 
     def finalize(self, content: bytes, receipt: Mapping[str, object]) -> None:
         if self._lock_fd is None or not self.receipt_path.is_file() or self.artifact_path.exists():
