@@ -30,9 +30,12 @@ DENIED_TIKTOK_DIGESTS = {
 }
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 RUNNINGHUB_AI_APP_PROFILE_ID = "runninghub-ai-app-video-enhance-v1"
-RUNNINGHUB_AI_APP_ID = "2035633294867439618"
-RUNNINGHUB_AI_APP_INPUT_NODE_ID = "25"
+RUNNINGHUB_AI_APP_ID = "2066340206713851905"
+RUNNINGHUB_AI_APP_INPUT_NODE_ID = "16"
 RUNNINGHUB_AI_APP_INPUT_FIELD_NAME = "video"
+RUNNINGHUB_AI_APP_RESOLUTION_NODE_ID = "84"
+RUNNINGHUB_AI_APP_RESOLUTION_FIELD_NAME = "value"
+RUNNINGHUB_AI_APP_RESOLUTION_VALUE = "1080"
 RUNNINGHUB_AI_APP_BASE_URL = "https://www.runninghub.cn/openapi/v2"
 
 
@@ -174,6 +177,9 @@ def runninghub_ai_app_profile() -> dict[str, object]:
             "app_id": RUNNINGHUB_AI_APP_ID,
             "input_node_id": RUNNINGHUB_AI_APP_INPUT_NODE_ID,
             "input_field_name": RUNNINGHUB_AI_APP_INPUT_FIELD_NAME,
+            "resolution_node_id": RUNNINGHUB_AI_APP_RESOLUTION_NODE_ID,
+            "resolution_field_name": RUNNINGHUB_AI_APP_RESOLUTION_FIELD_NAME,
+            "resolution_value": RUNNINGHUB_AI_APP_RESOLUTION_VALUE,
             "base_url": RUNNINGHUB_AI_APP_BASE_URL,
         },
     }

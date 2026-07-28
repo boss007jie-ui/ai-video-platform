@@ -93,7 +93,7 @@ class AiAppTransport(FakeTransport):
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.poll_responses = [
-            {"status": "RUNNING"},
+            {"status": "QUEUED"},
             {
                 "status": "SUCCESS",
                 "results": [{
@@ -122,7 +122,7 @@ class AiAppTransport(FakeTransport):
 
     def request_json(self, method: str, path: str, credential: str, *, payload: dict[str, object]) -> object:
         self.calls.append((path, payload))
-        if path == "/run/ai-app/2035633294867439618":
+        if path == "/run/ai-app/2066340206713851905":
             if self.fail_stage == "create":
                 raise AdapterFailure("CREATE_FAILED", "synthetic create failure", retryable=False)
             return {"taskId": "task-ai-app-12345678"}
@@ -240,6 +240,18 @@ class RunningHubAdapterTests(unittest.TestCase):
             media.write_bytes(SYNTHETIC_MP4)
             request = ai_app_request_for(media)
             self.assertNotIn("workflow_binding", request["workflow_profile"])
+            self.assertEqual(
+                request["workflow_profile"]["ai_app_binding"],
+                {
+                    "app_id": "2066340206713851905",
+                    "input_node_id": "16",
+                    "input_field_name": "video",
+                    "resolution_node_id": "84",
+                    "resolution_field_name": "value",
+                    "resolution_value": "1080",
+                    "base_url": "https://www.runninghub.cn/openapi/v2",
+                },
+            )
 
             task_id = adapter.submit(request)
             running = adapter.poll(task_id)
@@ -247,22 +259,30 @@ class RunningHubAdapterTests(unittest.TestCase):
             artifact = adapter.download(task_id)
 
         self.assertEqual(task_id, "task-ai-app-12345678")
-        self.assertEqual(running, {"state": "running", "status": "RUNNING"})
+        self.assertEqual(running, {"state": "running", "status": "QUEUED"})
         self.assertEqual(succeeded["state"], "succeeded")
         self.assertEqual([item[0] for item in transport.calls], [
             "/media/upload/binary",
-            "/run/ai-app/2035633294867439618",
+            "/run/ai-app/2066340206713851905",
             "/query",
             "/query",
             "download",
         ])
         self.assertEqual(transport.calls[1][1], {
-            "nodeInfoList": [{
-                "nodeId": "25",
-                "fieldName": "video",
-                "fieldValue": "api/test/input.mp4",
-                "description": "video",
-            }],
+            "nodeInfoList": [
+                {
+                    "nodeId": "16",
+                    "fieldName": "video",
+                    "fieldValue": "api/test/input.mp4",
+                    "description": "video上传要放大的视频",
+                },
+                {
+                    "nodeId": "84",
+                    "fieldName": "value",
+                    "fieldValue": "1080",
+                    "description": "value放大尺寸",
+                },
+            ],
             "instanceType": "default",
             "usePersonalQueue": "false",
         })
@@ -274,8 +294,8 @@ class RunningHubAdapterTests(unittest.TestCase):
             "status_chain": ["SUBMITTED", "RUNNING", "SUCCEEDED", "DOWNLOADED"],
             "provider_mode": "ai_app",
             "profile_id": "runninghub-ai-app-video-enhance-v1",
-            "app_id": "2035633294867439618",
-            "input_node_id": "25",
+            "app_id": "2066340206713851905",
+            "input_node_id": "16",
             "input_field_name": "video",
             "workflow_id": None,
             "workflow_json_sha256": None,

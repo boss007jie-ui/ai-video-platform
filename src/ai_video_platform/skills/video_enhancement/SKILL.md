@@ -59,7 +59,8 @@ adapter call.
 enhancement AI application, set only `provider_mode=ai_app`; do not send an App ID,
 node ID, field name, base URL, workflow ID, workflow JSON SHA, or API key. The
 approved profile `runninghub-ai-app-video-enhance-v1` is built in with App ID
-`2035633294867439618`, input node `25`, field `video`, and base URL
+`2066340206713851905`, video input node `16` / field `video`, fixed resolution
+node `84` / field `value` / value `1080`, and base URL
 `https://www.runninghub.cn/openapi/v2`. It uploads through
 `/media/upload/binary`, creates through `/run/ai-app/{appId}`, and queries through
 `/query`. The API key is read only from the Windows user environment variable

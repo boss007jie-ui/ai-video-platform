@@ -22,6 +22,9 @@ from .preflight import (
     RUNNINGHUB_AI_APP_INPUT_FIELD_NAME,
     RUNNINGHUB_AI_APP_INPUT_NODE_ID,
     RUNNINGHUB_AI_APP_PROFILE_ID,
+    RUNNINGHUB_AI_APP_RESOLUTION_FIELD_NAME,
+    RUNNINGHUB_AI_APP_RESOLUTION_NODE_ID,
+    RUNNINGHUB_AI_APP_RESOLUTION_VALUE,
     runninghub_ai_app_profile,
 )
 
@@ -331,12 +334,20 @@ class RunningHubVideoEnhancementAdapter:
         uploaded_name = self._uploaded_file_name(upload)
         if provider_mode == "ai_app":
             payload: dict[str, object] = {
-                "nodeInfoList": [{
-                    "nodeId": input_node_id,
-                    "fieldName": input_field_name,
-                    "fieldValue": uploaded_name,
-                    "description": input_field_name,
-                }],
+                "nodeInfoList": [
+                    {
+                        "nodeId": input_node_id,
+                        "fieldName": input_field_name,
+                        "fieldValue": uploaded_name,
+                        "description": "video上传要放大的视频",
+                    },
+                    {
+                        "nodeId": RUNNINGHUB_AI_APP_RESOLUTION_NODE_ID,
+                        "fieldName": RUNNINGHUB_AI_APP_RESOLUTION_FIELD_NAME,
+                        "fieldValue": RUNNINGHUB_AI_APP_RESOLUTION_VALUE,
+                        "description": "value放大尺寸",
+                    },
+                ],
                 "instanceType": "default",
                 "usePersonalQueue": "false",
             }
