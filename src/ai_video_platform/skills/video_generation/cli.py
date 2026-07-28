@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -107,6 +107,11 @@ def _seedance_request_fields(inspected: Mapping[str, object]) -> tuple[str, str,
     return MODEL_ID, str(seconds), resolution, float(timeout)
 
 
+def _submitted_at(now: datetime | None) -> str:
+    value = now or datetime.now(timezone.utc)
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def execute_seedance_nz(
     document: Mapping[str, object],
     *,
@@ -152,6 +157,13 @@ def execute_seedance_nz(
             raise _adapter_failure(error) from None
         if not isinstance(provider_job_id, str) or not provider_job_id or contains_sensitive_text(provider_job_id):
             raise GenerationError(GenerationErrorCode.PROVIDER_REJECTED, "Seedance.nz returned an invalid task identity")
+        submitted_at = _submitted_at(now)
+        ledger.persist_pending({
+            "task_id": provider_job_id,
+            "idempotency_key": idempotency_key,
+            "request_hash": request_hash,
+            "submitted_at": submitted_at,
+        })
         status_history.append({"state": "submitted"})
         started_at = clock()
         while True:
@@ -239,13 +251,14 @@ def execute_seedance_nz(
             },
             "request_hash": request_hash,
             "idempotency_key": idempotency_key,
+            "submitted_at": submitted_at,
             "artifact_file": ARTIFACT_NAME,
             "receipt_file": RECEIPT_NAME,
             "release_status": "CONTROLLED_FIRST_RUN_REQUIRED",
             "replayed": False,
         })
         receipt["receipt_digest"] = "sha256:" + hashlib.sha256(canonical_json(receipt).encode("utf-8")).hexdigest()
-        ledger.persist(content, receipt)
+        ledger.promote(content, receipt)
         return receipt
     finally:
         ledger.release()

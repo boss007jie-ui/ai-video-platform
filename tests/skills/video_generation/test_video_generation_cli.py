@@ -87,6 +87,18 @@ class FailingAdapter(ScriptedAdapter):
         return super().download(provider_job_id)
 
 
+class PendingReceiptObservingAdapter(ScriptedAdapter):
+    def __init__(self, receipt_path: Path) -> None:
+        super().__init__()
+        self.receipt_path = receipt_path
+        self.pending_receipt: dict[str, object] | None = None
+
+    def poll(self, provider_job_id: str) -> dict[str, object]:
+        if self.pending_receipt is None:
+            self.pending_receipt = json.loads(self.receipt_path.read_text(encoding="utf-8"))
+        return super().poll(provider_job_id)
+
+
 class FakeClock:
     def __init__(self) -> None:
         self.value = 0.0
@@ -139,6 +151,38 @@ def seedance_request() -> dict[str, object]:
 
 
 class VideoGenerationSeedanceCliTests(unittest.TestCase):
+    def test_submit_persists_pending_receipt_before_first_poll(self) -> None:
+        clock = FakeClock()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            request_path = workspace / "request.json"
+            request = seedance_request()
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+            output_dir = workspace / "output"
+            receipt_path = output_dir / "seedance_nz_video_receipt.json"
+            adapter = PendingReceiptObservingAdapter(receipt_path)
+
+            execute_seedance_nz(
+                request,
+                input_path=request_path,
+                output_dir=output_dir,
+                now=NOW,
+                adapter=adapter,
+                clock=clock,
+                sleep=clock.sleep,
+            )
+
+            pending = adapter.pending_receipt
+            self.assertIsNotNone(pending)
+            assert pending is not None
+            self.assertEqual(set(pending), {"task_id", "idempotency_key", "request_hash", "submitted_at"})
+            self.assertEqual(pending["idempotency_key"], request["idempotency_key"])
+            self.assertEqual(pending["submitted_at"], "2026-07-20T12:00:00Z")
+            self.assertEqual(pending["task_id"], "task-offline-12345678")
+            final_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(final_receipt["state"], "downloaded")
+            self.assertEqual(final_receipt["submitted_at"], pending["submitted_at"])
+
     def test_complete_chain_writes_validated_mp4_and_sanitized_receipt(self) -> None:
         adapter = ScriptedAdapter()
         clock = FakeClock()
@@ -292,7 +336,7 @@ class VideoGenerationSeedanceCliTests(unittest.TestCase):
                         )
                     self.assertEqual(captured.exception.code, GenerationErrorCode.INVALID_INPUT)
 
-    def test_provider_failures_and_download_validation_write_no_success_evidence(self) -> None:
+    def test_provider_failures_retain_task_identity_without_success_artifact(self) -> None:
         cases: list[tuple[str, ScriptedAdapter]] = [
             ("missing-credential", FailingAdapter("submit")),
             ("failed-poll", FailingAdapter("poll")),
@@ -328,7 +372,16 @@ class VideoGenerationSeedanceCliTests(unittest.TestCase):
                         sleep=clock.sleep,
                     )
                 self.assertFalse((output_dir / "seedance_nz_video.mp4").exists())
-                self.assertFalse((output_dir / "seedance_nz_video_receipt.json").exists())
+                receipt_path = output_dir / "seedance_nz_video_receipt.json"
+                if name == "missing-credential":
+                    self.assertFalse(receipt_path.exists())
+                else:
+                    pending = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    self.assertEqual(
+                        set(pending),
+                        {"task_id", "idempotency_key", "request_hash", "submitted_at"},
+                    )
+                    self.assertEqual(pending["task_id"], "task-offline-12345678")
 
     def test_missing_environment_key_fails_before_transport(self) -> None:
         transport = NoNetworkTransport()

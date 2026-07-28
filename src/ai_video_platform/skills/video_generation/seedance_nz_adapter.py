@@ -28,6 +28,7 @@ _SENSITIVE_DIAGNOSTIC_KEY = re.compile(
     r"(?i)(authorization|credential|api[_-]?key|token|secret|password|private[_-]?key|signature|sig)"
 )
 _VIDEO_STATUS = {
+    "unknown": ("running", "submitted"),
     "queued": ("running", "queued"),
     "not_start": ("running", "not_start"),
     "submitted": ("running", "submitted"),

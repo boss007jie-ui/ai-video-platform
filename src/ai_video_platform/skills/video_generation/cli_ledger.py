@@ -15,6 +15,7 @@ from .models import canonical_json, snapshot
 ARTIFACT_NAME = "seedance_nz_video.mp4"
 RECEIPT_NAME = "seedance_nz_video_receipt.json"
 LOCK_NAME = ".seedance_nz_execution.lock"
+PENDING_RECEIPT_FIELDS = {"task_id", "idempotency_key", "request_hash", "submitted_at"}
 
 
 def resolve_output_directory(input_path: Path, output_dir: Path) -> Path:
@@ -101,7 +102,31 @@ class SeedanceNzCliLedger:
             self.release()
             raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz evidence already exists")
 
-    def persist(self, content: bytes, receipt: Mapping[str, object]) -> None:
+    def persist_pending(self, receipt: Mapping[str, object]) -> None:
+        if self._lock_fd is None:
+            raise GenerationError(GenerationErrorCode.INVALID_TRANSITION, "Seedance.nz output is not reserved")
+        receipt_temp = self.output_dir / (RECEIPT_NAME + ".tmp")
+        pending = snapshot(receipt)
+        if (
+            set(pending) != PENDING_RECEIPT_FIELDS
+            or any(not isinstance(pending.get(field), str) or not pending[field] for field in PENDING_RECEIPT_FIELDS)
+            or contains_sensitive_text(canonical_json(pending))
+        ):
+            raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Seedance.nz pending receipt is invalid")
+        if self.artifact_path.exists() or self.receipt_path.exists() or receipt_temp.exists():
+            raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz evidence already exists")
+        try:
+            with receipt_temp.open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(canonical_json(pending) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            if self.artifact_path.exists() or self.receipt_path.exists():
+                raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz evidence already exists")
+            receipt_temp.replace(self.receipt_path)
+        finally:
+            receipt_temp.unlink(missing_ok=True)
+
+    def promote(self, content: bytes, receipt: Mapping[str, object]) -> None:
         if self._lock_fd is None:
             raise GenerationError(GenerationErrorCode.INVALID_TRANSITION, "Seedance.nz output is not reserved")
         artifact_temp = self.output_dir / (ARTIFACT_NAME + ".tmp")
@@ -109,16 +134,32 @@ class SeedanceNzCliLedger:
         if artifact_temp.exists() or receipt_temp.exists():
             raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz temporary evidence already exists")
         try:
+            pending_text = self.receipt_path.read_text(encoding="utf-8")
+            pending = json.loads(pending_text)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz pending receipt is invalid") from None
+        final = snapshot(receipt)
+        if (
+            not isinstance(pending, Mapping)
+            or set(pending) != PENDING_RECEIPT_FIELDS
+            or pending.get("task_id") != final.get("provider_job_id")
+            or pending.get("idempotency_key") != final.get("idempotency_key")
+            or pending.get("request_hash") != final.get("request_hash")
+            or pending.get("submitted_at") != final.get("submitted_at")
+            or contains_sensitive_text(canonical_json(pending))
+        ):
+            raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz pending receipt identity diverges")
+        try:
             with artifact_temp.open("xb") as stream:
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
             with receipt_temp.open("x", encoding="utf-8", newline="\n") as stream:
-                stream.write(canonical_json(receipt) + "\n")
+                stream.write(canonical_json(final) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-            if self.artifact_path.exists() or self.receipt_path.exists():
-                raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz evidence already exists")
+            if self.artifact_path.exists() or self.receipt_path.read_text(encoding="utf-8") != pending_text:
+                raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz pending receipt was modified")
             artifact_temp.replace(self.artifact_path)
             receipt_temp.replace(self.receipt_path)
         finally:

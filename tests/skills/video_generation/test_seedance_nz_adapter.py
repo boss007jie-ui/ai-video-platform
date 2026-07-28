@@ -390,6 +390,32 @@ class SeedanceNzProductionAdapterTests(unittest.TestCase):
             ["https://download.example/nested-video.mp4?signature=opaque"],
         )
 
+    def test_poll_maps_unknown_initial_state_then_completed(self) -> None:
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        task_id = adapter.submit(self._request())
+        transport.response = {"status": "unknown"}
+
+        self.assertEqual(
+            adapter.poll(task_id),
+            {"state": "running", "status": "submitted", "progress": 0},
+        )
+
+        transport.response = {
+            "status": "completed",
+            "progress": 100,
+            "metadata": {"url": "https://download.example/completed-after-unknown.mp4"},
+        }
+        self.assertEqual(
+            adapter.poll(task_id),
+            {"state": "succeeded", "status": "completed", "progress": 100},
+        )
+
     def test_poll_uses_nested_video_url_fallback(self) -> None:
         transport = RecordingTransport()
         adapter = SeedanceNzVideoProviderAdapter(
