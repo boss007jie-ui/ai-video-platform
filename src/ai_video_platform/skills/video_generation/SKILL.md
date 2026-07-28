@@ -44,6 +44,16 @@ successful receipt is marked `CONTROLLED_FIRST_RUN_REQUIRED`; it is not a
 Production Ready claim. Cancellation remains unsupported and late media is not
 chased after the deadline.
 
+For `seedance-2.0-fast-multi`, build image references in this canonical order:
+approved individual production Panels first in `shot_order`/`panel_order`, clean
+product references next, and the storyboard master Sheet last. Mark internal
+`metadata.content` items with `reference_role=production_panel`,
+`product_reference`, or `storyboard_structure_reference`; the adapter performs a
+stable role sort and removes that internal field from the Provider payload. Build
+the prompt's concrete `@Image N` references from this canonical order. The Sheet
+is a structure reference only, never a first frame, and its borders, labels,
+captions, and arrows must be forbidden in generated video.
+
 Reference analysis boards, shot evidence boards, replication boards, and contact
 sheets cannot be first frames or Provider inputs. Unapproved panels, mismatched
 revisions, order divergence, legacy `0.1.0` packages, and the obsolete

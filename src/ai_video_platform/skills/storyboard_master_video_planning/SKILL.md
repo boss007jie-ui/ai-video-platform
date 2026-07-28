@@ -87,18 +87,20 @@ not appear in the generated video.
 For `seedance-2.0-fast-multi`, the execution Agent or downstream Video Generation
 owner must use one full-timeline task by default when the approved video is at
 most 15 seconds and the selected reference set fits the Provider limit. Do not
-submit one Provider task per Shot by default. Use the Sheet as `@Image 1`, then
-bind clean product, character, scene, or critical Panel references to the
-remaining image slots. The prompt must explicitly assign every reference role,
-state that the storyboard is executed in reading order, and forbid borders,
-labels, arrows, captions, or simultaneous grid Panels in the output.
+submit one Provider task per Shot by default. Bind approved individual production
+Panels first in `shot_order` and `panel_order`, bind clean product references
+next, and bind the Sheet last. The prompt must use the resulting concrete
+`@Image N` positions, explicitly assign every reference role, state that the
+storyboard is executed in reading order, and forbid borders, labels, arrows,
+captions, or simultaneous grid Panels in the output.
 
-Recommended prompt skeleton:
+Recommended prompt skeleton (replace `P`, `R`, and `S` with concrete indices):
 
 ```text
-Use @Image 1 only as the shooting script and storyboard. Follow its shot order,
-shot scale, camera movement, subject motion, composition, and timing.
-Keep the product identical to @Image 2 and @Image 3. Use @Image 4 for the scene.
+Use @Image 1 through @Image P as the ordered production Panels. Follow their shot
+scale, composition, action progression, camera movement, and subject motion.
+Keep the product identical to @Image P+1 through @Image R.
+Use @Image S only as the storyboard structure and timing reference.
 Execute one complete shot at a time in storyboard reading order. Do not display
 the storyboard grid, borders, arrows, labels, captions, or multiple Panels.
 ```

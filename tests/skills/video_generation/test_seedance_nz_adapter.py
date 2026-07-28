@@ -271,6 +271,56 @@ class SeedanceNzProductionAdapterTests(unittest.TestCase):
         self.assertIsInstance(call["payload"]["seconds"], str)
         self.assertEqual(adapter.network_calls, 1)
 
+    def test_submit_orders_storyboard_panels_then_products_then_master_sheet(self) -> None:
+        transport = RecordingTransport()
+        adapter = SeedanceNzVideoProviderAdapter(
+            transport=transport,
+            credential_resolver=SeedanceNzCredentialResolver(
+                environ={"SEEDANCE_NZ_API_KEY": "sk-test-key"},
+            ),
+        )
+        request = self._request()
+        request["output"]["metadata"]["content"] = [
+            {
+                "type": "image_url",
+                "reference_role": "storyboard_structure_reference",
+                "image_url": {"url": "https://assets.example/storyboard-sheet.png"},
+            },
+            {
+                "type": "image_url",
+                "reference_role": "product_reference",
+                "image_url": {"url": "https://assets.example/product-front.png"},
+            },
+            {
+                "type": "image_url",
+                "reference_role": "production_panel",
+                "image_url": {"url": "https://assets.example/panel-s01-p01.png"},
+            },
+            {
+                "type": "image_url",
+                "reference_role": "production_panel",
+                "image_url": {"url": "https://assets.example/panel-s01-p02.png"},
+            },
+            {
+                "type": "image_url",
+                "reference_role": "product_reference",
+                "image_url": {"url": "https://assets.example/product-detail.png"},
+            },
+        ]
+
+        adapter.submit(request)
+
+        self.assertEqual(
+            transport.calls[0]["payload"]["metadata"]["content"],
+            [
+                {"type": "image_url", "image_url": {"url": "https://assets.example/panel-s01-p01.png"}},
+                {"type": "image_url", "image_url": {"url": "https://assets.example/panel-s01-p02.png"}},
+                {"type": "image_url", "image_url": {"url": "https://assets.example/product-front.png"}},
+                {"type": "image_url", "image_url": {"url": "https://assets.example/product-detail.png"}},
+                {"type": "image_url", "image_url": {"url": "https://assets.example/storyboard-sheet.png"}},
+            ],
+        )
+
     def test_missing_credential_and_invalid_seconds_fail_before_network(self) -> None:
         transport = RecordingTransport()
         with patch.dict(os.environ, {}, clear=True):

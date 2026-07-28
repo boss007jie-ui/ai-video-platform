@@ -38,6 +38,11 @@ _VIDEO_STATUS = {
     "failed": ("failed", "failed"),
     "failure": ("failed", "failure"),
 }
+_REFERENCE_ROLE_PRIORITY = {
+    "production_panel": 0,
+    "product_reference": 1,
+    "storyboard_structure_reference": 3,
+}
 
 
 def _provider_summary(value: object, credential: str | None) -> str:
@@ -810,20 +815,22 @@ class SeedanceNzVideoProviderAdapter:
             or not content
         ):
             raise AdapterFailure("REQUEST_INVALID", "Seedance.nz output is invalid", retryable=False)
-        normalized: list[dict[str, object]] = []
-        for item in content:
+        normalized: list[tuple[int, int, dict[str, object]]] = []
+        for index, item in enumerate(content):
             if not isinstance(item, Mapping) or item.get("type") not in {"image_url", "video_url"}:
                 raise AdapterFailure("REQUEST_INVALID", "Seedance.nz content item is invalid", retryable=False)
             kind = str(item["type"])
             nested = item.get(kind)
             if not isinstance(nested, Mapping) or set(nested) != {"url"} or not _safe_https_uri(nested.get("url")):
                 raise AdapterFailure("REQUEST_INVALID", "Seedance.nz content URL is invalid", retryable=False)
-            normalized.append({"type": kind, kind: {"url": nested["url"]}})
+            priority = _REFERENCE_ROLE_PRIORITY.get(str(item.get("reference_role")), 2)
+            normalized.append((priority, index, {"type": kind, kind: {"url": nested["url"]}}))
+        ordered_content = [item for _, _, item in sorted(normalized)]
         return {
             "model": MODEL_ID,
             "prompt": prompt,
             "seconds": str(seconds),
-            "metadata": {"resolution": self._resolution, "content": normalized},
+            "metadata": {"resolution": self._resolution, "content": ordered_content},
         }
 
     @staticmethod
