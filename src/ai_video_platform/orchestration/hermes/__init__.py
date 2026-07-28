@@ -1,2 +1,1 @@
-"""Placeholder only. Hermes implementation requires IR-4 authorization."""
-"""Hermes integration placeholder pending stable Skill public interfaces."""
+"""Minimal Hermes project sequencing without business Skill ownership."""
