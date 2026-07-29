@@ -26,13 +26,13 @@ def _ffmpeg() -> str:
     return resolve_local_media_tool("ffmpeg")
 
 
-def _visual_signals(
+def scan_visual_change_evidence(
     media: Path,
     duration_ms: int,
     *,
     sampling_fps: int,
-    threshold: float,
 ) -> list[dict[str, object]]:
+    """Return every non-zero local RGB transition for bounded coverage rescans."""
     width = height = 32
     completed = _run_local(
         [
@@ -60,13 +60,33 @@ def _visual_signals(
     for index, (previous, current) in enumerate(zip(frames, frames[1:]), start=1):
         score = sum(abs(left - right) for left, right in zip(previous, current)) / (frame_size * 255)
         timestamp_ms = round(index * 1000 / sampling_fps)
-        if score >= threshold and 0 < timestamp_ms < duration_ms:
+        if score > 0 and 0 < timestamp_ms < duration_ms:
             signals.append({
                 "timestamp_ms": timestamp_ms,
                 "reasons": ["visual_frame_change"],
                 "evidence": {"method": "local_rgb_frame_difference", "score": round(score, 6)},
             })
     return signals
+
+
+def _visual_signals(
+    media: Path,
+    duration_ms: int,
+    *,
+    sampling_fps: int,
+    threshold: float,
+    visual_evidence: Sequence[Mapping[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    evidence = (
+        scan_visual_change_evidence(media, duration_ms, sampling_fps=sampling_fps)
+        if visual_evidence is None
+        else visual_evidence
+    )
+    return [
+        dict(signal)
+        for signal in evidence
+        if float(signal.get("evidence", {}).get("score", 0.0)) >= threshold  # type: ignore[union-attr]
+    ]
 
 
 def _audio_signals(media: Path, duration_ms: int) -> list[dict[str, object]]:
@@ -100,6 +120,8 @@ def detect_boundary_signals(
     media: Path,
     duration_ms: int,
     policy: Mapping[str, object],
+    *,
+    visual_evidence: Sequence[Mapping[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     """Return ordered local visual/audio boundary evidence without network access."""
     sampling_fps = int(policy["sampling_fps"])
@@ -109,6 +131,7 @@ def detect_boundary_signals(
         duration_ms,
         sampling_fps=sampling_fps,
         threshold=threshold,
+        visual_evidence=visual_evidence,
     )
     if bool(policy["enable_audio_boundaries"]):
         signals.extend(_audio_signals(media, duration_ms))
@@ -170,4 +193,4 @@ def build_fine_segments(
     return segments
 
 
-__all__ = ["build_fine_segments", "detect_boundary_signals"]
+__all__ = ["build_fine_segments", "detect_boundary_signals", "scan_visual_change_evidence"]

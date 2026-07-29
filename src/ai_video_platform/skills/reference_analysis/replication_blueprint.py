@@ -364,23 +364,94 @@ def _narrative_groups(
     return groups
 
 
-def _derived_event_roles(group: Mapping[str, object], index: int, count: int) -> list[str]:
+def _derived_event_roles(group: Mapping[str, object]) -> list[str]:
+    """Derive only roles supported by event text, revelations, or verified state change."""
     facts = group["facts"]  # type: ignore[assignment]
-    title = str(group["stage_title"]).casefold()
+    evidence_text = " ".join(
+        [str(group["stage_title"])]
+        + [
+            str(fact[field])
+            for fact in facts
+            for field in ("action", "trigger", "result", "information_revealed", "spoken_text", "subtitle_text")
+            if str(fact[field]) != "UNAVAILABLE"
+        ]
+    ).casefold()
     roles: list[str] = []
-    if index == 0:
-        roles.append("SETUP")
-    elif index == 1:
-        roles.append("INCITING_EVENT")
-    elif index < count - 1:
-        roles.append("ESCALATION")
+    role_cues = {
+        "SETUP": ("setup", "introduction", "opening", "problem hook", "establish"),
+        "INCITING_EVENT": ("inciting", "problem appears", "discover", "unexpected arrival"),
+        "ESCALATION": ("escalation", "intensif", "complication", "stakes rise"),
+        "DECISION": ("decision", "decide", "choose"),
+        "TURNING_POINT": ("turning point", "reversal", "changes course"),
+        "REACTION": ("reaction", "reacts", "responds emotionally"),
+        "CONSEQUENCE": ("consequence", "therefore", "as a result"),
+        "RESOLUTION": ("resolution", "resolved", "problem solved"),
+        "CTA": ("call to action", "buy now", "shop now", "learn more"),
+        "NATURAL_CLOSE": ("natural close", "soft close", "quiet ending"),
+    }
+    for role, cues in role_cues.items():
+        if any(cue in evidence_text for cue in cues):
+            roles.append(role)
     if any(str(fact["information_revealed"]) != "UNAVAILABLE" for fact in facts):
         roles.extend(("INFORMATION_CHANGE", "REVEAL"))
-    if any(token in title for token in ("demo", "proof", "result", "reveal")):
+    elif any(str(fact["start_state"]) != str(fact["end_state"]) for fact in facts):
+        roles.append("INFORMATION_CHANGE")
+    if "reveal" in evidence_text:
+        roles.append("REVEAL")
+    if any(token in evidence_text for token in ("demo", "proof", "visible result", "show ", "display", "demonstrat")):
         roles.append("PRODUCT_PROOF")
-    if index == count - 1:
-        roles.append("NATURAL_CLOSE")
-    return list(dict.fromkeys(roles or ["INFORMATION_CHANGE"]))
+    return list(dict.fromkeys(roles))
+
+
+def _best_source_probe(
+    source_visual_evidence: Sequence[Mapping[str, object]],
+    start_ms: int,
+    end_ms: int,
+    *,
+    excluded_timestamps: Sequence[int] = (),
+) -> dict[str, object] | None:
+    excluded = set(excluded_timestamps)
+    candidates: list[dict[str, object]] = []
+    for signal in source_visual_evidence:
+        timestamp_ms = int(signal["timestamp_ms"])
+        evidence = signal.get("evidence")
+        if not isinstance(evidence, Mapping):
+            continue
+        score = float(evidence.get("score", 0.0))
+        if start_ms < timestamp_ms < end_ms and timestamp_ms not in excluded and score > 0:
+            candidates.append({
+                "timestamp_ms": timestamp_ms,
+                "method": str(evidence.get("method", "local_visual_change")),
+                "score": score,
+            })
+    if not candidates:
+        return None
+    midpoint = start_ms + ((end_ms - start_ms) // 2)
+    return min(candidates, key=lambda item: (-float(item["score"]), abs(int(item["timestamp_ms"]) - midpoint), int(item["timestamp_ms"])))
+
+
+def _derived_motion_coverage_state(
+    before: Mapping[str, object],
+    after: Mapping[str, object],
+    existing_states: set[str],
+) -> tuple[str, str] | None:
+    before_contact = str(before["contact_state"])
+    after_contact = str(after["contact_state"])
+    candidates: list[tuple[str, str]] = []
+    if before_contact in {"NO_CONTACT", "APPROACHING", "PRE_CONTACT"} and after_contact in {
+        "FIRST_CONTACT", "GRIPPING", "HOLDING", "MANIPULATING",
+    }:
+        candidates.append(("FIRST_CONTACT", "FIRST_CONTACT"))
+    if before_contact in {"GRIPPING", "HOLDING", "MANIPULATING"} and after_contact in {
+        "RELEASING", "SEPARATED", "NO_CONTACT",
+    }:
+        candidates.append(("RELEASE_OR_REVERSAL", "RELEASING"))
+    candidates.extend((
+        ("ACTION_ONSET", before_contact),
+        ("ACTION_APEX", after_contact),
+        ("ACTION_END", after_contact),
+    ))
+    return next((candidate for candidate in candidates if candidate[0] not in existing_states), None)
 
 
 def plan_coverage_keyframe_requests(
@@ -389,6 +460,7 @@ def plan_coverage_keyframe_requests(
     motion_actions: Sequence[Mapping[str, object]],
     narrative_facts: Sequence[Mapping[str, object]],
     segment_analysis: Sequence[Mapping[str, object]],
+    source_visual_evidence: Sequence[Mapping[str, object]] = (),
 ) -> tuple[list[dict[str, object]], dict[str, list[dict[str, object]]]]:
     """Check adjacent first-pass evidence and request one bounded supplementation pass."""
     requests: dict[tuple[str, int], dict[str, object]] = {}
@@ -409,6 +481,7 @@ def plan_coverage_keyframe_requests(
         initial_states = {"ACTION_START", "ACTION_APEX", "ACTION_END", "FINAL_HOLD"}
         for action in motion_actions:
             states = action["states"]  # type: ignore[assignment]
+            existing_state_names = {str(state["state"]) for state in states}
             selected_indices = [
                 index for index, state in enumerate(states)
                 if state["state"] in initial_states or index in {0, len(states) - 1}
@@ -427,7 +500,6 @@ def plan_coverage_keyframe_requests(
                     "missing_states": [state["state"] for state in missing],
                     "supplemented": bool(missing),
                 }
-                motion_checks.append(check)
                 for state in missing:
                     timestamp_ms = int(state["timestamp_ms"])
                     add(timestamp_ms, action_roles=(str(state["state"]),))
@@ -439,20 +511,50 @@ def plan_coverage_keyframe_requests(
                         "gap_end_ms": after["timestamp_ms"],
                         "reason": "adjacent_motion_keyframes_skip_an_evidenced_state",
                     })
+                if not missing:
+                    source_probe = _best_source_probe(
+                        source_visual_evidence,
+                        int(before["timestamp_ms"]),
+                        int(after["timestamp_ms"]),
+                        excluded_timestamps=[int(state["timestamp_ms"]) for state in states],
+                    )
+                    derived_state = _derived_motion_coverage_state(before, after, existing_state_names)
+                    if source_probe is not None and derived_state is not None:
+                        state_name, contact_state = derived_state
+                        timestamp_ms = int(source_probe["timestamp_ms"])
+                        add(timestamp_ms, action_roles=(state_name,))
+                        motion_added.append({
+                            "action_id": action["action_id"],
+                            "state": state_name,
+                            "contact_state": contact_state,
+                            "timestamp_ms": timestamp_ms,
+                            "gap_start_ms": before["timestamp_ms"],
+                            "gap_end_ms": after["timestamp_ms"],
+                            "reason": "local_source_scan_detected_unannotated_motion_change",
+                            "derived_from_source_scan": True,
+                            "source_evidence": source_probe,
+                        })
+                        check["supplemented"] = True
+                        check["source_scan"] = source_probe
+                        existing_state_names.add(state_name)
+                    else:
+                        check["source_scan"] = {"status": "NO_UNANNOTATED_VISUAL_CHANGE_CANDIDATE"}
+                motion_checks.append(check)
 
     narrative_added: list[dict[str, object]] = []
     narrative_checks: list[dict[str, object]] = []
     narrative_gaps: list[dict[str, object]] = []
     if profile_supports(profile, "narrative"):
         groups = _narrative_groups(narrative_facts, segments, segment_analysis)
-        for event_index, group in enumerate(groups):
-            roles = _derived_event_roles(group, event_index, len(groups))
+        for group in groups:
+            roles = _derived_event_roles(group)
             facts = group["facts"]  # type: ignore[assignment]
             if not facts:
                 continue
             first = facts[0]
             first_timestamp = int(first["start_ms"]) + ((int(first["end_ms"]) - int(first["start_ms"])) // 2)
-            add(first_timestamp, narrative_roles=roles)
+            if roles:
+                add(first_timestamp, narrative_roles=roles)
             for before, after in zip(facts, facts[1:]):
                 state_continuity = before["end_state"] == after["start_state"]
                 important_change = (
@@ -461,15 +563,15 @@ def plan_coverage_keyframe_requests(
                     or after["subtitle_text"] != "UNAVAILABLE"
                 )
                 timestamp_ms = int(after["start_ms"]) + ((int(after["end_ms"]) - int(after["start_ms"])) // 2)
-                narrative_checks.append({
+                check = {
                     "event_id": group["event_id"],
                     "from_fact_id": before["fact_id"],
                     "to_fact_id": after["fact_id"],
                     "state_continuity": state_continuity,
                     "important_change": important_change,
-                    "supplemented": important_change,
-                })
-                if important_change:
+                    "supplemented": bool(important_change and roles),
+                }
+                if important_change and roles:
                     add(timestamp_ms, narrative_roles=roles)
                     narrative_added.append({
                         "event_id": group["event_id"],
@@ -478,24 +580,84 @@ def plan_coverage_keyframe_requests(
                         "timestamp_ms": timestamp_ms,
                         "reason": "adjacent_narrative_evidence_skips_an_evidenced_state_change",
                     })
+                elif roles:
+                    before_timestamp = int(before["start_ms"]) + ((int(before["end_ms"]) - int(before["start_ms"])) // 2)
+                    source_probe = _best_source_probe(
+                        source_visual_evidence,
+                        before_timestamp,
+                        timestamp_ms,
+                        excluded_timestamps=(before_timestamp, timestamp_ms),
+                    )
+                    if source_probe is not None:
+                        probe_timestamp = int(source_probe["timestamp_ms"])
+                        add(probe_timestamp, narrative_roles=roles)
+                        narrative_added.append({
+                            "event_id": group["event_id"],
+                            "fact_id": after["fact_id"],
+                            "narrative_roles": roles,
+                            "timestamp_ms": probe_timestamp,
+                            "reason": "local_source_scan_detected_unannotated_narrative_change",
+                            "derived_from_source_scan": True,
+                            "source_evidence": source_probe,
+                        })
+                        check["supplemented"] = True
+                        check["source_scan"] = source_probe
+                    else:
+                        check["source_scan"] = {"status": "NO_UNANNOTATED_VISUAL_CHANGE_CANDIDATE"}
+                narrative_checks.append(check)
         for before_group, after_group in zip(groups, groups[1:]):
             before = before_group["facts"][-1]  # type: ignore[index]
             after = after_group["facts"][0]  # type: ignore[index]
             state_continuity = before["end_state"] == after["start_state"]
-            narrative_checks.append({
+            before_timestamp = int(before["start_ms"]) + ((int(before["end_ms"]) - int(before["start_ms"])) // 2)
+            after_timestamp = int(after["start_ms"]) + ((int(after["end_ms"]) - int(after["start_ms"])) // 2)
+            source_probe = (
+                _best_source_probe(
+                    source_visual_evidence,
+                    before_timestamp,
+                    after_timestamp,
+                    excluded_timestamps=(before_timestamp, after_timestamp),
+                )
+                if not state_continuity
+                else None
+            )
+            after_roles = _derived_event_roles(after_group)
+            if source_probe is not None and after_roles:
+                probe_timestamp = int(source_probe["timestamp_ms"])
+                add(probe_timestamp, narrative_roles=after_roles)
+                narrative_added.append({
+                    "event_id": after_group["event_id"],
+                    "fact_id": after["fact_id"],
+                    "narrative_roles": after_roles,
+                    "timestamp_ms": probe_timestamp,
+                    "reason": "local_source_scan_probed_inter_event_narrative_gap",
+                    "derived_from_source_scan": True,
+                    "source_evidence": source_probe,
+                })
+            check = {
                 "from_event_id": before_group["event_id"],
                 "to_event_id": after_group["event_id"],
                 "from_fact_id": before["fact_id"],
                 "to_fact_id": after["fact_id"],
                 "state_continuity": state_continuity,
-                "supplemented": False,
-            })
+                "supplemented": source_probe is not None,
+                "source_scan": source_probe or {"status": "NO_VISUAL_CHANGE_CANDIDATE"},
+            }
+            narrative_checks.append(check)
             if not state_continuity:
-                narrative_gaps.append({
+                gap = {
                     "from_event_id": before_group["event_id"],
                     "to_event_id": after_group["event_id"],
-                    "reason": "no_source_fact_explains_the_inter_event_state_jump",
-                })
+                    "reason": (
+                        "source_probe_cannot_establish_missing_narrative_fact"
+                        if source_probe is not None
+                        else "no_source_fact_explains_the_inter_event_state_jump"
+                    ),
+                }
+                if source_probe is not None:
+                    gap["source_probe_timestamp_ms"] = source_probe["timestamp_ms"]
+                    gap["source_evidence"] = source_probe
+                narrative_gaps.append(gap)
 
     ordered = sorted(requests.values(), key=lambda item: (int(item["timestamp_ms"]), str(item["segment_id"])))
     return ordered, {
@@ -559,20 +721,38 @@ def build_motion_artifacts(
     added_frame_ids, unresolved = _resolve_coverage_frames(coverage_candidates, segments, lookup)
     for action in actions:
         states: list[dict[str, object]] = []
-        for raw_state in action["states"]:  # type: ignore[union-attr]
+        raw_states = [dict(state) for state in action["states"]]  # type: ignore[union-attr]
+        raw_states.extend(
+            {
+                "state": candidate["state"],
+                "timestamp_ms": candidate["timestamp_ms"],
+                "contact_state": candidate["contact_state"],
+                "evidence_origin": "local_source_scan",
+                "source_evidence": candidate["source_evidence"],
+            }
+            for candidate in coverage_candidates
+            if candidate.get("action_id") == action["action_id"]
+            and candidate.get("derived_from_source_scan") is True
+        )
+        raw_states.sort(key=lambda state: (int(state["timestamp_ms"]), str(state["state"])))
+        for raw_state in raw_states:
             timestamp_ms = int(raw_state["timestamp_ms"])
             frame = _frame_for_timestamp(segments, lookup, timestamp_ms)
             if frame is None:
                 unresolved.append({"action_id": action["action_id"], "timestamp_ms": timestamp_ms, "state": raw_state["state"]})
                 continue
-            states.append({
+            state_record = {
                 "action_state": raw_state["state"],
                 "timestamp_ms": timestamp_ms,
                 "frame_id": frame["frame_id"],
                 "contact_state": raw_state["contact_state"],
                 "source_segment_id": frame["segment_id"],
                 "source_frame_id": frame["frame_id"],
-            })
+            }
+            if raw_state.get("evidence_origin") == "local_source_scan":
+                state_record["evidence_origin"] = "local_source_scan"
+                state_record["source_evidence"] = raw_state["source_evidence"]
+            states.append(state_record)
         if len(states) < 2:
             continue
         source_segments = list(dict.fromkeys(str(state["source_segment_id"]) for state in states))
@@ -625,7 +805,15 @@ def build_motion_artifacts(
         "motion_coverage": {
             "status": "PASS" if actions and not unresolved else ("UNAVAILABLE" if not actions else "INCOMPLETE"),
             "iterations": 1 if actions else 0,
-            "initial_keyframe_count": max(0, sum(len(action["states"]) for action in actions) - len(added_frame_ids)),
+            "initial_keyframe_count": max(
+                0,
+                sum(len(action["states"]) for action in actions)
+                - len(_resolve_coverage_frames(
+                    [candidate for candidate in coverage_candidates if candidate.get("derived_from_source_scan") is not True],
+                    segments,
+                    lookup,
+                )[0]),
+            ),
             "added_frame_count": len(added_frame_ids),
             "added_frame_ids": added_frame_ids,
             "checks": [dict(check) for check in coverage_checks],
@@ -635,6 +823,31 @@ def build_motion_artifacts(
     }
     motion["transitions"] = transitions
     return motion, coverage
+
+
+def _longest_common_action_sequence(left: Sequence[str], right: Sequence[str]) -> tuple[str, ...]:
+    lengths = [[0] * (len(right) + 1) for _ in range(len(left) + 1)]
+    for left_index, left_action in enumerate(left, start=1):
+        for right_index, right_action in enumerate(right, start=1):
+            if left_action == right_action:
+                lengths[left_index][right_index] = lengths[left_index - 1][right_index - 1] + 1
+            else:
+                lengths[left_index][right_index] = max(
+                    lengths[left_index - 1][right_index],
+                    lengths[left_index][right_index - 1],
+                )
+    result: list[str] = []
+    left_index, right_index = len(left), len(right)
+    while left_index and right_index:
+        if left[left_index - 1] == right[right_index - 1]:
+            result.append(left[left_index - 1])
+            left_index -= 1
+            right_index -= 1
+        elif lengths[left_index - 1][right_index] >= lengths[left_index][right_index - 1]:
+            left_index -= 1
+        else:
+            right_index -= 1
+    return tuple(reversed(result))
 
 
 def build_narrative_artifacts(
@@ -693,12 +906,12 @@ def build_narrative_artifacts(
 
     event_groups = _narrative_groups(normalized_facts, segments, segment_analysis)
     events: list[dict[str, object]] = []
-    for event_index, group in enumerate(event_groups):
+    for group in event_groups:
         event_id = str(group["event_id"])
         event_facts = group["facts"]  # type: ignore[assignment]
         event_facts.sort(key=lambda item: int(item["start_ms"]))
         first, last = event_facts[0], event_facts[-1]
-        roles = _derived_event_roles(group, event_index, len(event_groups))
+        roles = _derived_event_roles(group)
         events.append({
             "event_id": event_id,
             "stage_title": group["stage_title"],
@@ -743,38 +956,93 @@ def build_narrative_artifacts(
             })
 
     frame_by_id = {str(frame["frame_id"]): frame for frame in keyframes}
-    facts_by_scene: dict[str, list[dict[str, object]]] = {}
-    for fact in normalized_facts:
+    proof_groups: list[dict[str, object]] = []
+    for fact in sorted(normalized_facts, key=lambda item: int(item["start_ms"])):
         frame_id = str(fact["source_frames"][0])  # type: ignore[index]
         scene_id = str(frame_by_id[frame_id]["scene_id"])
-        facts_by_scene.setdefault(scene_id, []).append(fact)
-    candidates: list[tuple[str, list[dict[str, object]], tuple[str, ...]]] = []
-    for scene_id, scene_facts in facts_by_scene.items():
-        scene_facts.sort(key=lambda item: int(item["start_ms"]))
-        signature = tuple(str(item["action"]).casefold() for item in scene_facts)
+        group_key = (scene_id, str(fact["object"]).casefold())
+        if not proof_groups or proof_groups[-1]["group_key"] != group_key:
+            proof_groups.append({"group_key": group_key, "scene_id": scene_id, "facts": []})
+        proof_groups[-1]["facts"].append(fact)  # type: ignore[union-attr]
+    candidates: list[dict[str, object]] = []
+    for group in proof_groups:
+        loop_facts = group["facts"]  # type: ignore[assignment]
+        signature = tuple(str(item["action"]).casefold() for item in loop_facts)
         if len(signature) >= 2:
-            candidates.append((scene_id, scene_facts, signature))
-    repeated_signatures = {
-        signature for _, _, signature in candidates
-        if sum(1 for _, _, other in candidates if other == signature) >= 2
-    }
-    structure_ids = {
-        signature: f"proof-structure-{hashlib.sha256('|'.join(signature).encode('utf-8')).hexdigest()[:12]}"
-        for signature in repeated_signatures
-    }
+            candidates.append({**group, "signature": signature})
+
+    adjacency: dict[int, set[int]] = {index: set() for index in range(len(candidates))}
+    for left_index, left in enumerate(candidates):
+        for right_index in range(left_index + 1, len(candidates)):
+            right = candidates[right_index]
+            common = _longest_common_action_sequence(left["signature"], right["signature"])  # type: ignore[arg-type]
+            shorter = min(len(left["signature"]), len(right["signature"]))  # type: ignore[arg-type]
+            if len(common) >= 2 and len(common) / shorter >= 0.6:
+                adjacency[left_index].add(right_index)
+                adjacency[right_index].add(left_index)
+
     proof_loops: list[dict[str, object]] = []
-    for scene_id, loop_facts, signature in candidates:
-        if signature not in repeated_signatures:
+    visited: set[int] = set()
+    for start_index in range(len(candidates)):
+        if start_index in visited or not adjacency[start_index]:
             continue
-        proof_loops.append({
-            "proof_loop_id": f"proof-loop-{len(proof_loops) + 1:03d}",
-            "repeated_structure_id": structure_ids[signature],
-            "variation_type": "SCENE_VARIATION",
-            "retained_action_structure": [str(item["action"]) for item in loop_facts],
-            "changed_product_or_scene_elements": [scene_id, *list(dict.fromkeys(str(item["location"]) for item in loop_facts))],
-            "source_segments": list(dict.fromkeys(segment for item in loop_facts for segment in item["source_segments"])),
-            "source_frames": list(dict.fromkeys(frame for item in loop_facts for frame in item["source_frames"])),
-        })
+        component: list[int] = []
+        pending = [start_index]
+        while pending:
+            index = pending.pop()
+            if index in visited:
+                continue
+            visited.add(index)
+            component.append(index)
+            pending.extend(sorted(adjacency[index] - visited, reverse=True))
+        component.sort()
+        retained = tuple(candidates[component[0]]["signature"])  # type: ignore[arg-type]
+        for index in component[1:]:
+            retained = _longest_common_action_sequence(retained, candidates[index]["signature"])  # type: ignore[arg-type]
+        if len(retained) < 2:
+            continue
+        structure_id = f"proof-structure-{hashlib.sha256('|'.join(retained).encode('utf-8')).hexdigest()[:12]}"
+        scene_ids = {str(candidates[index]["scene_id"]) for index in component}
+        objects = {
+            str(fact["object"])
+            for index in component
+            for fact in candidates[index]["facts"]  # type: ignore[union-attr]
+        }
+        locations = {
+            str(fact["location"])
+            for index in component
+            for fact in candidates[index]["facts"]  # type: ignore[union-attr]
+        }
+        sequence_variation = len({tuple(candidates[index]["signature"]) for index in component}) > 1  # type: ignore[arg-type]
+        variation_count = int(len(scene_ids) > 1 or len(locations) > 1) + int(len(objects) > 1) + int(sequence_variation)
+        variation_type = (
+            "COMBINED_VARIATION"
+            if variation_count > 1
+            else "PRODUCT_OR_STYLE_VARIATION"
+            if len(objects) > 1
+            else "ACTION_SEQUENCE_VARIATION"
+            if sequence_variation
+            else "SCENE_VARIATION"
+        )
+        for index in component:
+            candidate = candidates[index]
+            loop_facts = candidate["facts"]  # type: ignore[assignment]
+            changed_elements = [
+                f"scene:{candidate['scene_id']}",
+                *(f"location:{location}" for location in dict.fromkeys(str(item["location"]) for item in loop_facts)),
+                *(f"object:{product}" for product in dict.fromkeys(str(item["object"]) for item in loop_facts)),
+            ]
+            if tuple(candidate["signature"]) != retained:  # type: ignore[arg-type]
+                changed_elements.append("action_sequence:variant")
+            proof_loops.append({
+                "proof_loop_id": f"proof-loop-{len(proof_loops) + 1:03d}",
+                "repeated_structure_id": structure_id,
+                "variation_type": variation_type,
+                "retained_action_structure": list(retained),
+                "changed_product_or_scene_elements": changed_elements,
+                "source_segments": list(dict.fromkeys(segment for item in loop_facts for segment in item["source_segments"])),
+                "source_frames": list(dict.fromkeys(frame for item in loop_facts for frame in item["source_frames"])),
+            })
     graph = {
         "analysis_profile": profile,
         "status": "PASS" if facts and not unresolved else ("UNAVAILABLE" if not facts else "INCOMPLETE"),

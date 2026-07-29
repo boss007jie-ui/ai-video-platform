@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 from .errors import ErrorCode, SkillError
-from .fine_segments import build_fine_segments, detect_boundary_signals
+from .fine_segments import build_fine_segments, detect_boundary_signals, scan_visual_change_evidence
 from .local_media import (
     extract_local_png_frame,
     probe_local_audio_available,
@@ -411,7 +411,17 @@ def _prepare_fine_breakdown(
     audio_available = probe_local_audio_available(media)
     policy = _fine_policy(normalized.get("segmentation_policy"))
     offline = _offline_analysis(normalized.get("offline_analysis"))
-    local_signals = detect_boundary_signals(media, int(metadata["duration_ms"]), policy)
+    source_visual_evidence = scan_visual_change_evidence(
+        media,
+        int(metadata["duration_ms"]),
+        sampling_fps=int(policy["sampling_fps"]),
+    )
+    local_signals = detect_boundary_signals(
+        media,
+        int(metadata["duration_ms"]),
+        policy,
+        visual_evidence=source_visual_evidence,
+    )
     signals = [*local_signals, *offline["boundary_signals"]]  # type: ignore[list-item]
     segments = build_fine_segments(
         str(source["source_id"]),
@@ -485,6 +495,7 @@ def _prepare_fine_breakdown(
         replication_inputs["motion_actions"],
         replication_inputs["narrative_facts"],
         segment_analysis,
+        source_visual_evidence,
     )
     for request in coverage_requests:
         store_keyframe(request)

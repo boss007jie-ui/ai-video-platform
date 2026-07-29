@@ -91,6 +91,19 @@ analysis proceeds from facts to events, causal edges, global story roles, and re
 proof loops. Each coverage mode performs at most one bounded source-evidence supplementation
 pass and never invents a missing frame or story event.
 
+The bounded coverage pass reuses the same locally decoded RGB transition scan that informs fine
+segmentation. When caller annotations omit an intermediate motion state, a non-zero source-video
+change between evidenced endpoints may add one conservative onset, contact, release, apex, or end
+state; the state records its local scan method, timestamp, and score. A narrative discontinuity
+also triggers an interval rescan, but a visual probe never becomes a fabricated fact: unresolved
+semantic continuity remains explicit in `coverage_report.json`.
+
+Global story roles are derived from event text, verified state changes, revelations, and explicit
+stage cues rather than event position. Stable supporting fact frames may remain role-free while
+retaining event ownership; a role-bearing event needs at least one—not every—source frame carrying
+one of its roles. Repeated product-proof detection compares retained ordered action subsequences,
+so scene, product/style, and added or omitted action-step variations can share one structure ID.
+
 The publication seam validates profile/source consistency, shot and scene ownership, semantic
 roles, duplicate timestamp storage, action-state and transition endpoints, narrative event
 evidence, scene blocking references, coverage-added frames, and blueprint component equality.

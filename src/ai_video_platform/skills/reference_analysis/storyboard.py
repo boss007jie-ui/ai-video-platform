@@ -705,12 +705,35 @@ def _validate_replication_package(
         for state_index, state in enumerate(states):
             state_field = f"{field}.states[{state_index}]"
             state_keys = {"action_state", "timestamp_ms", "frame_id", "contact_state", "source_segment_id", "source_frame_id"}
-            _strict_keys(state, state_keys, state_keys, state_field)
+            source_scan_keys = {"evidence_origin", "source_evidence"}
+            _strict_keys(state, state_keys, state_keys | source_scan_keys, state_field)
+            present_source_scan_keys = source_scan_keys.intersection(state)
+            if present_source_scan_keys and present_source_scan_keys != source_scan_keys:
+                raise SkillError(
+                    ErrorCode.VALIDATION_FAILED,
+                    "Motion source-scan evidence is incomplete",
+                    field_paths=(state_field,),
+                )
             role = _text(state.get("action_state"), f"{state_field}.action_state")
             frame_id = _text(state.get("frame_id"), f"{state_field}.frame_id")
             source_frame_id = _text(state.get("source_frame_id"), f"{state_field}.source_frame_id")
             segment_id = _text(state.get("source_segment_id"), f"{state_field}.source_segment_id")
             timestamp_ms = _integer(state.get("timestamp_ms"), f"{state_field}.timestamp_ms")
+            if present_source_scan_keys:
+                if _text(state.get("evidence_origin"), f"{state_field}.evidence_origin") != "local_source_scan":
+                    raise SkillError(ErrorCode.VALIDATION_FAILED, "Motion evidence origin is invalid", field_paths=(state_field,))
+                source_evidence = _mapping(state.get("source_evidence"), f"{state_field}.source_evidence")
+                source_evidence_keys = {"timestamp_ms", "method", "score"}
+                _strict_keys(source_evidence, source_evidence_keys, source_evidence_keys, f"{state_field}.source_evidence")
+                score = source_evidence.get("score")
+                if (
+                    _integer(source_evidence.get("timestamp_ms"), f"{state_field}.source_evidence.timestamp_ms") != timestamp_ms
+                    or _text(source_evidence.get("method"), f"{state_field}.source_evidence.method") != "local_rgb_frame_difference"
+                    or isinstance(score, bool)
+                    or not isinstance(score, (int, float))
+                    or not 0 < float(score) <= 1
+                ):
+                    raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Motion source-scan evidence is invalid", field_paths=(state_field,))
             if role not in ACTION_STATES or frame_id != source_frame_id or frame_id not in keyframes:
                 raise SkillError(ErrorCode.EVIDENCE_MISSING, "Motion state references invalid source-frame evidence", field_paths=(state_field,))
             frame = keyframes[frame_id]
@@ -811,17 +834,21 @@ def _validate_replication_package(
         source_frames = _string_list(event.get("source_frames"), f"{field}.source_frames", allow_empty=False)
         event_frame_ids.update(source_frames)
         source_segments = _string_list(event.get("source_segments"), f"{field}.source_segments", allow_empty=False)
-        roles = _string_list(event.get("narrative_roles"), f"{field}.narrative_roles", allow_empty=False)
+        roles = _string_list(event.get("narrative_roles"), f"{field}.narrative_roles")
         if any(role not in NARRATIVE_ROLES for role in roles):
             raise SkillError(ErrorCode.VALIDATION_FAILED, "Narrative event role is invalid", field_paths=(f"{field}.narrative_roles",))
         if any(frame_id not in keyframes for frame_id in source_frames):
             raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative event references an unknown source frame", field_paths=(f"{field}.source_frames",))
         derived_segments = list(dict.fromkeys(str(keyframes[frame_id]["segment_id"]) for frame_id in source_frames))
-        if source_segments != derived_segments or any(
+        source_ownership_crossed = any(
             keyframes[frame_id].get("source_video_id") != source_video_id
-            or not set(roles).intersection(keyframes[frame_id].get("narrative_roles", []))
             for frame_id in source_frames
-        ):
+        )
+        role_evidence_missing = bool(roles) and not any(
+            set(roles).intersection(keyframes[frame_id].get("narrative_roles", []))
+            for frame_id in source_frames
+        )
+        if source_segments != derived_segments or source_ownership_crossed or role_evidence_missing:
             raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Narrative event evidence crossed its source ownership", field_paths=(field,))
         audio_refs = _string_list(event.get("audio_evidence"), f"{field}.audio_evidence")
         subtitle_refs = _string_list(event.get("subtitle_evidence"), f"{field}.subtitle_evidence")

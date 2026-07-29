@@ -74,6 +74,33 @@ class ReplicationBlueprintPublicationTests(unittest.TestCase):
             self.assertEqual(len(provenance["blueprint_trace"]["action_ids"]), 3)
             self.assertEqual(len(provenance["blueprint_trace"]["event_ids"]), 5)
 
+    def test_stable_supporting_fact_without_a_narrative_role_remains_publishable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
+            fact = request["offline_analysis"]["narrative_facts"][1]  # type: ignore[index]
+            fact["end_state"] = fact["start_state"]
+            fact["information_revealed"] = "UNAVAILABLE"
+            fact["subtitle_text"] = "UNAVAILABLE"
+
+            prepared = prepare_reference_breakdown(request, workspace=workspace)
+            draft_root = workspace / prepared.output_root
+            publication_request = json.loads(
+                (draft_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+            frames = publication_request["analysis_configuration"]["keyframes"]
+            fact_frame = next(frame for frame in frames if frame["timestamp_ms"] == 600)
+            event = publication_request["analysis_configuration"]["narrative_event_graph"]["events"][0]
+            event_frames = {frame["keyframe_id"]: frame for frame in frames if frame["keyframe_id"] in event["source_frames"]}
+
+            self.assertEqual(fact_frame["narrative_roles"], [])
+            self.assertIn(fact_frame["keyframe_id"], event["source_frames"])
+            self.assertTrue(any(set(event["narrative_roles"]) & set(frame["narrative_roles"]) for frame in event_frames.values()))
+
+            published = analyze_storyboard(publication_request, workspace=workspace)
+
+            self.assertEqual(published.status, "COMPLETED")
+
 
 if __name__ == "__main__":
     unittest.main()

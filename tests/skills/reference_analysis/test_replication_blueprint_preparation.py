@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ai_video_platform.skills.reference_analysis import prepare_reference_breakdown
+from ai_video_platform.skills.reference_analysis import analyze_storyboard, prepare_reference_breakdown
 
 from tests.skills.reference_analysis.fine_segment_fixture import replication_request
 
@@ -93,7 +93,8 @@ class ReplicationBlueprintPreparationTests(unittest.TestCase):
             request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
             facts = request["offline_analysis"]["narrative_facts"]  # type: ignore[index]
             facts[2]["start_state"] = "unconnected-state"
-            facts[5]["action"] = "perform a distinct nonrepeated action"
+            for index, fact in enumerate(facts[5:], start=1):
+                fact["action"] = f"perform unrelated action {index}"
 
             result = prepare_reference_breakdown(request, workspace=workspace)
 
@@ -102,6 +103,116 @@ class ReplicationBlueprintPreparationTests(unittest.TestCase):
             )
             self.assertEqual(len(graph["causal_edges"]), 3)
             self.assertEqual(graph["repeated_product_proof_loops"], [])
+
+    def test_narrative_roles_are_derived_from_evidence_not_event_position(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
+            annotations = request["offline_analysis"]["segment_annotations"]  # type: ignore[index]
+            for index, annotation in enumerate(annotations):
+                annotation["stage_title"] = f"Product Proof {index // 2 + 1}"
+            facts = request["offline_analysis"]["narrative_facts"]  # type: ignore[index]
+            for index, fact in enumerate(facts):
+                fact["action"] = f"demonstrate product evidence step {index % 2 + 1}"
+
+            result = prepare_reference_breakdown(request, workspace=workspace)
+
+            graph = json.loads(
+                (workspace / result.output_root / "narrative_event_graph.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                {role for event in graph["events"] for role in event["narrative_roles"]},
+                {"PRODUCT_PROOF", "REVEAL", "INFORMATION_CHANGE"},
+            )
+            self.assertTrue(
+                {"SETUP", "INCITING_EVENT", "ESCALATION", "NATURAL_CLOSE"}.isdisjoint(
+                    {role for event in graph["events"] for role in event["narrative_roles"]}
+                )
+            )
+
+    def test_repeated_product_proof_allows_product_and_sequence_variation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
+            facts = request["offline_analysis"]["narrative_facts"]  # type: ignore[index]
+            for fact in facts[5:]:
+                fact["object"] = "striped garment"
+            facts[7]["action"] = "show optional size label"
+
+            result = prepare_reference_breakdown(request, workspace=workspace)
+
+            graph = json.loads(
+                (workspace / result.output_root / "narrative_event_graph.json").read_text(encoding="utf-8")
+            )
+            loops = graph["repeated_product_proof_loops"]
+            self.assertEqual(len(loops), 2)
+            self.assertEqual(len({loop["repeated_structure_id"] for loop in loops}), 1)
+            self.assertEqual({loop["variation_type"] for loop in loops}, {"COMBINED_VARIATION"})
+            self.assertTrue(
+                all(
+                    any(element.startswith("object:") for element in loop["changed_product_or_scene_elements"])
+                    for loop in loops
+                )
+            )
+
+    def test_motion_coverage_discovers_unannotated_intermediate_source_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="MOTION_REPLICATION")
+            action = request["offline_analysis"]["motion_actions"][1]  # type: ignore[index]
+            action["states"] = [action["states"][0], action["states"][-1]]
+
+            result = prepare_reference_breakdown(request, workspace=workspace)
+
+            motion = json.loads(
+                (workspace / result.output_root / "motion_keyframes.json").read_text(encoding="utf-8")
+            )
+            coverage = json.loads(
+                (workspace / result.output_root / "coverage_report.json").read_text(encoding="utf-8")
+            )["motion_coverage"]
+            chain = next(item for item in motion["action_chains"] if item["action_id"] == "action-002")
+            discovered = [state for state in chain["states"] if state.get("evidence_origin") == "local_source_scan"]
+            self.assertEqual(
+                [(state["action_state"], state["timestamp_ms"]) for state in discovered],
+                [("ACTION_ONSET", 2000)],
+            )
+            self.assertTrue(
+                any(check.get("source_scan", {}).get("method") == "local_rgb_frame_difference" for check in coverage["checks"])
+            )
+            publication_request = json.loads(
+                (workspace / result.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+
+            published = analyze_storyboard(publication_request, workspace=workspace)
+
+            self.assertEqual(published.status, "COMPLETED")
+
+    def test_narrative_gap_rescans_source_without_inventing_a_missing_fact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
+            annotations = request["offline_analysis"]["segment_annotations"]  # type: ignore[index]
+            for index, annotation in enumerate(annotations):
+                annotation["stage_title"] = "Product Proof Before" if index < 5 else "Product Proof After"
+            facts = request["offline_analysis"]["narrative_facts"]  # type: ignore[index]
+            facts[4]["end_state"] = "state-before-gap"
+            facts[5]["start_state"] = "state-after-gap"
+
+            result = prepare_reference_breakdown(request, workspace=workspace)
+
+            coverage = json.loads(
+                (workspace / result.output_root / "coverage_report.json").read_text(encoding="utf-8")
+            )["narrative_coverage"]
+            inter_event = next(check for check in coverage["checks"] if "from_event_id" in check)
+            self.assertTrue(inter_event["supplemented"])
+            self.assertEqual(inter_event["source_scan"]["timestamp_ms"], 2000)
+            self.assertEqual(inter_event["source_scan"]["method"], "local_rgb_frame_difference")
+            self.assertEqual(len(coverage["unresolved_gaps"]), 1)
+            self.assertEqual(coverage["unresolved_gaps"][0]["source_probe_timestamp_ms"], 2000)
+            self.assertEqual(
+                coverage["unresolved_gaps"][0]["reason"],
+                "source_probe_cannot_establish_missing_narrative_fact",
+            )
 
     def test_motion_blueprint_captures_contact_states_transitions_and_coverage_additions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

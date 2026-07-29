@@ -23,6 +23,9 @@ profiles while retaining legacy `local_draft_v1` behavior and all formal Contrac
 - profile-specific semantic keyframes deduplicated by `(segment_id, timestamp_ms)` with independent action and narrative roles;
 - evidenced motion state chains, contact states, adjacent motion transitions, and one bounded Motion Coverage supplementation pass;
 - verified facts, grouped events, causal edges, global story roles, repeated product-proof loops, and one bounded Narrative Coverage pass;
+- local RGB transition rescans that can recover an unannotated intermediate motion state while keeping unresolved narrative semantics explicit;
+- evidence-derived narrative roles with stable role-free supporting frames accepted inside traceable events;
+- repeated proof-loop matching across scene, product/style, and added or omitted action-step variations;
 - scene/blocking maps plus `MUST_PRESERVE`, `REPLACEABLE`, and `CONDITIONALLY_REPLACEABLE` constraints;
 - owner-local `ReferenceBlueprint` with `formal_contract_identity=null` and a shared keyframe timeline;
 - publication-time validation of profile/source ownership, semantic roles, transition/event references, coverage additions, and blueprint consistency;
@@ -35,9 +38,10 @@ profiles while retaining legacy `local_draft_v1` behavior and all formal Contrac
 
 | Command | Result |
 |---|---|
-| `$env:PYTHONPATH='src'; python -m py_compile ...; python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 51 passed, 1 host-capability skip, 0 failures, 311.819s |
+| `$env:PYTHONPATH='src'; python -m py_compile ...; python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 58 passed, 1 host-capability skip, 0 failures, 386.793s |
 | `python -m unittest tests.contracts.test_storyboard_artifact_chain tests.contracts.test_root_cli_routing tests.architecture.test_clean_room_boundaries -v` | 19 passed; 1 known external worktree-path error |
-| Offline CLI prepare plus analyze E2E | PASS - `HYBRID_REPLICATION`, completed locally |
+| Replication profile group | PASS - 21 passed, 0 failures, 331.076s |
+| Offline CLI prepare plus analyze E2E | PASS - `HYBRID_REPLICATION`, completed locally in `review-03` |
 | Visual inspection of storyboard and motion atlas | PASS - no overlap; labels, timecodes, directions, and action ordering readable |
 | `git diff --check` and owner-scope inspection | PASS |
 
@@ -50,7 +54,7 @@ outside the authorized `reference_analysis` scope and was not modified.
 
 ## Offline review sample
 
-- Root: `run/FT-02-001-reference-analysis-replication/reference_analysis/`
+- Root: `run/FT-02-001-reference-analysis-replication-review-03/reference_analysis/`
 - Source fixture: versioned synthetic local video, 4000 ms
 - Profile: `HYBRID_REPLICATION`
 - Fine segments: 10
@@ -58,7 +62,7 @@ outside the authorized `reference_analysis` scope and was not modified.
 - Core beats: 5
 - Motion actions/transitions: 3 / 14
 - Narrative facts/events/causal edges/proof loops: 10 / 5 / 4 / 2
-- Coverage additions: 7 motion frames, 4 narrative frames
+- Coverage additions: 7 motion frames, 5 narrative frames
 - Counters: `network_calls=0`, `provider_calls=0`, `external_upload=false`
 
 The synthetic fixture contains simple red/blue source frames and exists to verify deterministic
