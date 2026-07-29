@@ -16,6 +16,7 @@ ARTIFACT_NAME = "seedance_nz_video.mp4"
 RECEIPT_NAME = "seedance_nz_video_receipt.json"
 LOCK_NAME = ".seedance_nz_execution.lock"
 PENDING_RECEIPT_FIELDS = {"task_id", "idempotency_key", "request_hash", "submitted_at"}
+SUBMISSION_REGISTRY_NAME = ".seedance_nz_submissions"
 
 
 def resolve_output_directory(input_path: Path, output_dir: Path) -> Path:
@@ -33,6 +34,114 @@ def resolve_output_directory(input_path: Path, output_dir: Path) -> Path:
     if resolved.exists() and not resolved.is_dir():
         raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Seedance.nz output path must be a directory")
     return resolved
+
+
+def resolve_submission_registry_directory(input_path: Path) -> Path:
+    request_path = input_path.resolve(strict=True)
+    for candidate in request_path.parents:
+        if (candidate / "pyproject.toml").is_file():
+            return candidate / "run" / SUBMISSION_REGISTRY_NAME
+    return request_path.parent / SUBMISSION_REGISTRY_NAME
+
+
+class SeedanceNzSubmissionRegistry:
+    """Project-wide, execution-fingerprint guard against duplicate paid submits."""
+
+    def __init__(self, root: Path, execution_fingerprint: str) -> None:
+        if (
+            not execution_fingerprint.startswith("sha256:")
+            or len(execution_fingerprint) != 71
+            or any(character not in "0123456789abcdef" for character in execution_fingerprint[7:])
+        ):
+            raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Seedance.nz execution fingerprint is invalid")
+        self.root = root
+        self.execution_fingerprint = execution_fingerprint
+        self.record_path = root / (execution_fingerprint.removeprefix("sha256:") + ".json")
+
+    def ensure_available(self) -> None:
+        if self.record_path.exists():
+            self._raise_duplicate()
+
+    def reserve(
+        self,
+        *,
+        request_hash: str,
+        idempotency_key: str,
+        approval_id: str,
+        output_dir: Path,
+        reserved_at: str,
+    ) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        record = snapshot({
+            "schema_version": "1.0.0",
+            "execution_fingerprint": self.execution_fingerprint,
+            "state": "reserved",
+            "request_hash": request_hash,
+            "idempotency_key": idempotency_key,
+            "approval_id": approval_id,
+            "output_dir": str(output_dir),
+            "reserved_at": reserved_at,
+        })
+        if contains_sensitive_text(canonical_json(record)):
+            raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Seedance.nz submission reservation is invalid")
+        try:
+            with self.record_path.open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(canonical_json(record) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except FileExistsError:
+            self._raise_duplicate()
+
+    def mark_submitted(self, *, task_id: str, submitted_at: str) -> None:
+        self._update(
+            expected_state="reserved",
+            changes={"state": "submitted", "task_id": task_id, "submitted_at": submitted_at},
+        )
+
+    def mark_downloaded(self, *, receipt_digest: str) -> None:
+        self._update(
+            expected_state="submitted",
+            changes={"state": "downloaded", "receipt_digest": receipt_digest},
+        )
+
+    def _update(self, *, expected_state: str, changes: Mapping[str, object]) -> None:
+        try:
+            current_text = self.record_path.read_text(encoding="utf-8")
+            raw = json.loads(current_text)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz submission registry is invalid") from None
+        if (
+            not isinstance(raw, Mapping)
+            or raw.get("execution_fingerprint") != self.execution_fingerprint
+            or raw.get("state") != expected_state
+        ):
+            raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz submission registry diverged")
+        updated = snapshot({**raw, **changes})
+        if contains_sensitive_text(canonical_json(updated)):
+            raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz submission registry is invalid")
+        temporary = self.record_path.with_suffix(".json.tmp")
+        try:
+            with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(canonical_json(updated) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            if self.record_path.read_text(encoding="utf-8") != current_text:
+                raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz submission registry was modified")
+            temporary.replace(self.record_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _raise_duplicate(self) -> None:
+        try:
+            raw = json.loads(self.record_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz submission registry is invalid") from None
+        if not isinstance(raw, Mapping) or raw.get("execution_fingerprint") != self.execution_fingerprint:
+            raise GenerationError(GenerationErrorCode.IDEMPOTENCY_MISMATCH, "Seedance.nz submission registry is invalid")
+        raise GenerationError(
+            GenerationErrorCode.IDEMPOTENCY_MISMATCH,
+            "Equivalent Seedance.nz video execution was already reserved or submitted",
+        )
 
 
 class SeedanceNzCliLedger:

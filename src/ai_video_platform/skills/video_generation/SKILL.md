@@ -28,12 +28,34 @@ adapter is:
 python -m ai_video_platform.skills.video_generation.cli execute-seedance-nz request.json --output-dir <task-workspace-output>
 ```
 
-It performs canonical preflight, one submission, four-second polling up to the
+An `ApprovalRecord` inside `request.json` is provenance for preflight; it is not
+live permission to spend money. Immediately before the first real Provider
+submission, this command opens a native confirmation dialog showing the project,
+package, model, duration, and resolution. The user must click **Yes** for that
+specific execution. **No** is the default button. Declining, closing the dialog,
+or running where the dialog cannot be shown fails closed before the production
+adapter is constructed. Agents must never invent `user-chat-approval-*` records
+or treat approval of panels, storyboards, analysis, or project continuation as
+approval to generate video.
+
+After live confirmation, the CLI computes a stable execution fingerprint from
+the Provider/model, prompt, settings, approved asset digests, and reference identities.
+Approval IDs, caller-provided idempotency keys, output directories, and temporary
+URL query signatures cannot change that identity. A project-wide registry under
+`run/.seedance_nz_submissions/` atomically reserves the fingerprint, so changing
+`v1` to `v2`, using a new approval ID, or selecting another output directory does
+not resubmit an equivalent paid task. Existing reserved, submitted, or downloaded
+identities fail closed; use the recorded task/receipt instead of trying another
+key.
+
+It then performs canonical preflight, one submission, four-second polling up to the
 approved deadline (never more than 600 seconds), success-only download, MP4
 content/digest validation, and exclusive evidence persistence. The output
 directory must be a child of the request file's task workspace. It writes
 `seedance_nz_video.mp4` and `seedance_nz_video_receipt.json`; existing or partial
-evidence is never overwritten. An exact persisted `idempotency_key` plus
+evidence is never overwritten. As soon as submission returns, the task ID is
+written both to the output pending receipt and the project-wide registry before
+polling. An exact persisted `idempotency_key` plus
 `request_hash` replay returns the verified receipt without constructing an
 adapter or making another Provider call. Changed or tampered evidence fails
 closed.

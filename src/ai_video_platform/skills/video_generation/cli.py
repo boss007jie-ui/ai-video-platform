@@ -10,9 +10,17 @@ from pathlib import Path
 import sys
 from time import monotonic, sleep as system_sleep
 from typing import Callable, Mapping, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 from .adapters import AdapterFailure
-from .cli_ledger import ARTIFACT_NAME, RECEIPT_NAME, SeedanceNzCliLedger, resolve_output_directory
+from .cli_ledger import (
+    ARTIFACT_NAME,
+    RECEIPT_NAME,
+    SeedanceNzCliLedger,
+    SeedanceNzSubmissionRegistry,
+    resolve_output_directory,
+    resolve_submission_registry_directory,
+)
 from .errors import GenerationError, GenerationErrorCode, contains_sensitive_text
 from .interface import VideoGenerationInterface
 from .models import canonical_json, content_digest, snapshot
@@ -112,6 +120,67 @@ def _submitted_at(now: datetime | None) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _stable_execution_value(value: object, *, field: str = "") -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _stable_execution_value(nested, field=str(key))
+            for key, nested in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, list):
+        return [_stable_execution_value(item) for item in value]
+    if field == "url" and isinstance(value, str):
+        parsed = urlsplit(value)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path, "", ""))
+    return value
+
+
+def _execution_fingerprint(
+    inspected: Mapping[str, object],
+    document: Mapping[str, object],
+) -> str:
+    binding = inspected["provider_binding"]
+    output = inspected["output"]
+    package = document.get("execution_package")
+    mappings = package.get("asset_mapping") if isinstance(package, Mapping) else None
+    if not isinstance(binding, Mapping) or not isinstance(output, Mapping) or not isinstance(mappings, list):
+        raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Seedance.nz execution identity is invalid")
+    assets: list[dict[str, object]] = []
+    for mapping in mappings:
+        if not isinstance(mapping, Mapping):
+            raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Seedance.nz execution asset identity is invalid")
+        assets.append({
+            key: mapping[key]
+            for key in ("role", "sha256", "shot_id", "panel_id", "provider_execution_input")
+            if key in mapping
+        })
+    return content_digest({
+        "provider_id": binding.get("provider_id"),
+        "model_id": binding.get("model_id"),
+        "assets": assets,
+        "output": _stable_execution_value(output),
+    })
+
+
+def _confirm_seedance_submission(summary: Mapping[str, object]) -> bool:
+    try:
+        import ctypes
+
+        message = (
+            "This action submits one paid Seedance video generation task.\n\n"
+            f"Project: {summary['project']}\n"
+            f"Package: {summary['package_id']}\n"
+            f"Model: {summary['model']}\n"
+            f"Duration: {summary['seconds']} seconds\n"
+            f"Resolution: {summary['resolution']}\n\n"
+            "Click Yes only if you explicitly approve this video generation now."
+        )
+        flags = 0x00000004 | 0x00000030 | 0x00000100 | 0x00040000
+        return ctypes.windll.user32.MessageBoxW(None, message, "Approve paid video generation", flags) == 6
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
 def execute_seedance_nz(
     document: Mapping[str, object],
     *,
@@ -121,6 +190,7 @@ def execute_seedance_nz(
     adapter: object | None = None,
     clock: Callable[[], float] = monotonic,
     sleep: Callable[[float], None] = system_sleep,
+    confirm_submission: Callable[[Mapping[str, object]], bool] | None = None,
 ) -> dict[str, object]:
     """Run the explicitly authorized Seedance.nz chain and persist safe evidence."""
 
@@ -133,13 +203,39 @@ def execute_seedance_nz(
     replay = ledger.replay(idempotency_key=idempotency_key, request_hash=request_hash)
     if replay is not None:
         return replay
-
-    provider = adapter or SeedanceNzVideoProviderAdapter(
-        resolution=resolution,
-        remaining_attempts=1,
-        timeout_seconds=deadline_seconds,
-        clock=clock,
+    execution_fingerprint = _execution_fingerprint(inspected, document)
+    registry = SeedanceNzSubmissionRegistry(
+        resolve_submission_registry_directory(input_path),
+        execution_fingerprint,
     )
+    registry.ensure_available()
+    if confirm_submission is None:
+        raise GenerationError(
+            GenerationErrorCode.APPROVAL_REQUIRED,
+            "Live human confirmation is required immediately before paid video submission",
+        )
+    confirmation_summary = snapshot({
+        "project": next(
+            (parent.name for parent in input_path.resolve().parents if parent.parent.name == "run"),
+            input_path.resolve().parent.name,
+        ),
+        "package_id": inspected["package_id"],
+        "approval_id": inspected["approval_id"],
+        "model": model,
+        "seconds": seconds,
+        "resolution": resolution,
+        "execution_fingerprint": execution_fingerprint,
+    })
+    try:
+        confirmed = confirm_submission(confirmation_summary)
+    except Exception:
+        confirmed = False
+    if confirmed is not True:
+        raise GenerationError(
+            GenerationErrorCode.APPROVAL_REQUIRED,
+            "Paid video submission was not confirmed by the user",
+        )
+
     job_id = "job-" + content_digest({
         "request_hash": request_hash,
         "idempotency_key": idempotency_key,
@@ -150,6 +246,19 @@ def execute_seedance_nz(
     download_calls = 0
     ledger.acquire()
     try:
+        registry.reserve(
+            request_hash=request_hash,
+            idempotency_key=idempotency_key,
+            approval_id=str(inspected["approval_id"]),
+            output_dir=resolved_output,
+            reserved_at=_submitted_at(now),
+        )
+        provider = adapter or SeedanceNzVideoProviderAdapter(
+            resolution=resolution,
+            remaining_attempts=1,
+            timeout_seconds=deadline_seconds,
+            clock=clock,
+        )
         try:
             submit_calls += 1
             provider_job_id = provider.submit(inspected)
@@ -164,6 +273,7 @@ def execute_seedance_nz(
             "request_hash": request_hash,
             "submitted_at": submitted_at,
         })
+        registry.mark_submitted(task_id=provider_job_id, submitted_at=submitted_at)
         status_history.append({"state": "submitted"})
         started_at = clock()
         while True:
@@ -259,6 +369,7 @@ def execute_seedance_nz(
         })
         receipt["receipt_digest"] = "sha256:" + hashlib.sha256(canonical_json(receipt).encode("utf-8")).hexdigest()
         ledger.promote(content, receipt)
+        registry.mark_downloaded(receipt_digest=str(receipt["receipt_digest"]))
         return receipt
     finally:
         ledger.release()
@@ -292,6 +403,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 document,
                 input_path=Path(args.input),
                 output_dir=Path(args.output_dir),
+                confirm_submission=_confirm_seedance_submission,
             )
             result = {"ok": True, "exit_code": 0, "result": execution}
         else:

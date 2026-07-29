@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import partial
 import hashlib
 import json
 from pathlib import Path
@@ -15,7 +16,7 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from ai_video_platform.skills.video_generation.adapters import AdapterFailure
-from ai_video_platform.skills.video_generation.cli import execute_seedance_nz, main, run_cli
+from ai_video_platform.skills.video_generation.cli import execute_seedance_nz as raw_execute_seedance_nz, main, run_cli
 from ai_video_platform.skills.video_generation.errors import GenerationError, GenerationErrorCode
 from ai_video_platform.skills.video_generation.seedance_nz_adapter import (
     SeedanceNzCredentialResolver,
@@ -25,6 +26,7 @@ from tests.skills.video_generation.test_video_generation_interface import genera
 
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=timezone.utc)
+execute_seedance_nz = partial(raw_execute_seedance_nz, confirm_submission=lambda summary: True)
 
 
 class ScriptedAdapter:
@@ -151,6 +153,87 @@ def seedance_request() -> dict[str, object]:
 
 
 class VideoGenerationSeedanceCliTests(unittest.TestCase):
+    def test_embedded_approval_cannot_submit_without_live_human_confirmation(self) -> None:
+        adapter = ScriptedAdapter()
+        clock = FakeClock()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            request_path = workspace / "request.json"
+            request = seedance_request()
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+
+            with self.assertRaises(GenerationError) as captured:
+                raw_execute_seedance_nz(
+                    request,
+                    input_path=request_path,
+                    output_dir=workspace / "output",
+                    now=NOW,
+                    adapter=adapter,
+                    clock=clock,
+                    sleep=clock.sleep,
+                )
+
+            self.assertEqual(captured.exception.code, GenerationErrorCode.APPROVAL_REQUIRED)
+            self.assertEqual(adapter.submit_calls, 0)
+
+    def test_same_execution_cannot_resubmit_with_new_approval_key_or_output_dir(self) -> None:
+        first_adapter = ScriptedAdapter()
+        clock = FakeClock()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            request_path = workspace / "request.json"
+            first = seedance_request()
+            request_path.write_text(json.dumps(first), encoding="utf-8")
+            execute_seedance_nz(
+                first,
+                input_path=request_path,
+                output_dir=workspace / "output-a",
+                now=NOW,
+                adapter=first_adapter,
+                clock=clock,
+                sleep=clock.sleep,
+            )
+
+            duplicate = seedance_request()
+            duplicate["idempotency_key"] = "another-idempotency-key"
+            duplicate["approval_record"]["approval_id"] = "another-approval-id"
+            duplicate["approval_record"]["decision_ref"] = "another-claimed-user-decision"
+            duplicate["output"]["metadata"]["content"][0]["image_url"]["url"] += "?q-signature=refreshed"
+            duplicate_adapter = ScriptedAdapter()
+
+            with self.assertRaises(GenerationError) as captured:
+                execute_seedance_nz(
+                    duplicate,
+                    input_path=request_path,
+                    output_dir=workspace / "output-b",
+                    now=NOW,
+                    adapter=duplicate_adapter,
+                    clock=FakeClock(),
+                    sleep=lambda seconds: None,
+                )
+
+            self.assertEqual(captured.exception.code, GenerationErrorCode.IDEMPOTENCY_MISMATCH)
+            self.assertEqual(duplicate_adapter.submit_calls, 0)
+
+    def test_cli_declined_live_confirmation_does_not_construct_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            request_path = workspace / "request.json"
+            request_path.write_text(json.dumps(seedance_request()), encoding="utf-8")
+            with (
+                patch("ai_video_platform.skills.video_generation.cli.SeedanceNzVideoProviderAdapter") as adapter_class,
+                patch("ai_video_platform.skills.video_generation.cli._confirm_seedance_submission", return_value=False),
+            ):
+                exit_code = main([
+                    "execute-seedance-nz",
+                    str(request_path),
+                    "--output-dir",
+                    str(workspace / "output"),
+                ])
+
+            self.assertEqual(exit_code, 2)
+            adapter_class.assert_not_called()
+
     def test_submit_persists_pending_receipt_before_first_poll(self) -> None:
         clock = FakeClock()
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -373,8 +456,13 @@ class VideoGenerationSeedanceCliTests(unittest.TestCase):
                     )
                 self.assertFalse((output_dir / "seedance_nz_video.mp4").exists())
                 receipt_path = output_dir / "seedance_nz_video_receipt.json"
+                registry_files = list((workspace / ".seedance_nz_submissions").glob("*.json"))
+                self.assertEqual(len(registry_files), 1)
+                registry_record = json.loads(registry_files[0].read_text(encoding="utf-8"))
                 if name == "missing-credential":
                     self.assertFalse(receipt_path.exists())
+                    self.assertEqual(registry_record["state"], "reserved")
+                    self.assertNotIn("task_id", registry_record)
                 else:
                     pending = json.loads(receipt_path.read_text(encoding="utf-8"))
                     self.assertEqual(
@@ -382,6 +470,7 @@ class VideoGenerationSeedanceCliTests(unittest.TestCase):
                         {"task_id", "idempotency_key", "request_hash", "submitted_at"},
                     )
                     self.assertEqual(pending["task_id"], "task-offline-12345678")
+                    self.assertEqual(registry_record["task_id"], "task-offline-12345678")
 
     def test_missing_environment_key_fails_before_transport(self) -> None:
         transport = NoNetworkTransport()
@@ -450,7 +539,10 @@ class VideoGenerationSeedanceCliTests(unittest.TestCase):
             output_dir = workspace / "output"
             fake = ScriptedAdapter()
             fake.states = [{"state": "succeeded", "status": "success", "progress": 100}]
-            with patch("ai_video_platform.skills.video_generation.cli.SeedanceNzVideoProviderAdapter", return_value=fake) as adapter_class:
+            with (
+                patch("ai_video_platform.skills.video_generation.cli.SeedanceNzVideoProviderAdapter", return_value=fake) as adapter_class,
+                patch("ai_video_platform.skills.video_generation.cli._confirm_seedance_submission", return_value=True),
+            ):
                 exit_code = main(["execute-seedance-nz", str(request_path), "--output-dir", str(output_dir)])
             self.assertEqual(exit_code, 0)
             adapter_class.assert_called_once()
