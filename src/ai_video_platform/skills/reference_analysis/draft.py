@@ -12,6 +12,11 @@ import shutil
 import subprocess
 import tempfile
 
+from .analysis_brief import (
+    derive_analysis_profile,
+    requires_replication_package,
+    validate_analysis_brief,
+)
 from .errors import ErrorCode, SkillError
 from .fine_segments import build_fine_segments, detect_boundary_signals, scan_visual_change_evidence
 from .local_media import (
@@ -23,7 +28,6 @@ from .local_media import (
 from .models import ReferenceBreakdownDraftResult
 from .replication_blueprint import (
     ANALYSIS_PROFILES,
-    DEFAULT_ANALYSIS_PROFILE,
     apply_segment_contexts,
     build_motion_artifacts,
     build_narrative_artifacts,
@@ -32,6 +36,7 @@ from .replication_blueprint import (
     normalize_replication_inputs,
     plan_coverage_keyframe_requests,
     plan_keyframe_requests,
+    profile_supports,
 )
 from .segment_storyboard import build_segment_analysis, derive_core_beats, derive_formula
 from .storyboard import _mapping, _strict_keys, _text, _validate_metadata, _validate_source, _workspace
@@ -41,7 +46,7 @@ _VERSION = "1.0.0"
 _MODE = "local_draft_v1"
 _FINE_MODE = "local_fine_segments_v1"
 _OUTPUT_ROOT = "reference_breakdown_draft"
-_REQUEST_REQUIRED = {"analysis_version", "mode", "selected_reference_video"}
+_REQUEST_REQUIRED = {"analysis_version", "mode", "selected_reference_video", "analysis_brief"}
 _REQUEST_ALLOWED = _REQUEST_REQUIRED | {"video_metadata", "current_product", "policy"}
 _FINE_ALLOWED = _REQUEST_REQUIRED | {
     "analysis_profile", "video_metadata", "current_product", "segmentation_policy", "offline_analysis",
@@ -75,15 +80,21 @@ def _number(value: object, field: str, *, minimum: float, maximum: float) -> flo
     return float(value)
 
 
-def _analysis_profile(value: object) -> str:
+def _analysis_profile(value: object, *, derived_profile: str) -> str:
     if value is None:
-        return DEFAULT_ANALYSIS_PROFILE
+        return derived_profile
     profile = _text(value, "analysis_profile")
     if profile not in ANALYSIS_PROFILES:
         raise SkillError(
             ErrorCode.VALIDATION_FAILED,
             "analysis_profile is unsupported",
             field_paths=("analysis_profile",),
+        )
+    if profile != derived_profile:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "analysis_profile conflicts with analysis_brief.focus",
+            field_paths=("analysis_profile", "analysis_brief.focus"),
         )
     return profile
 
@@ -94,17 +105,33 @@ def _fine_policy(value: object) -> dict[str, object]:
             "sampling_fps": 4,
             "visual_change_threshold": 0.22,
             "min_segment_ms": 250,
+            "max_review_interval_ms": 8000,
             "enable_audio_boundaries": True,
         }
     policy = _mapping(value, "segmentation_policy")
-    keys = {"sampling_fps", "visual_change_threshold", "min_segment_ms", "enable_audio_boundaries"}
-    _strict_keys(policy, keys, keys, "segmentation_policy")
+    required = {"sampling_fps", "visual_change_threshold", "min_segment_ms", "enable_audio_boundaries"}
+    allowed = required | {"max_review_interval_ms"}
+    _strict_keys(policy, required, allowed, "segmentation_policy")
     enabled = policy.get("enable_audio_boundaries")
     if not isinstance(enabled, bool):
         raise SkillError(
             ErrorCode.VALIDATION_FAILED,
             "enable_audio_boundaries must be a boolean",
             field_paths=("segmentation_policy.enable_audio_boundaries",),
+        )
+    min_segment_ms = _integer(
+        policy.get("min_segment_ms"), "segmentation_policy.min_segment_ms", minimum=1,
+    )
+    max_review_interval_ms = _integer(
+        policy.get("max_review_interval_ms", 8000),
+        "segmentation_policy.max_review_interval_ms",
+        minimum=2,
+    )
+    if max_review_interval_ms < min_segment_ms:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "max_review_interval_ms cannot be shorter than min_segment_ms",
+            field_paths=("segmentation_policy.max_review_interval_ms",),
         )
     return {
         "sampling_fps": _integer(policy.get("sampling_fps"), "segmentation_policy.sampling_fps", minimum=1, maximum=30),
@@ -114,9 +141,8 @@ def _fine_policy(value: object) -> dict[str, object]:
             minimum=0.0,
             maximum=1.0,
         ),
-        "min_segment_ms": _integer(
-            policy.get("min_segment_ms"), "segmentation_policy.min_segment_ms", minimum=1,
-        ),
+        "min_segment_ms": min_segment_ms,
+        "max_review_interval_ms": max_review_interval_ms,
         "enable_audio_boundaries": enabled,
     }
 
@@ -177,6 +203,27 @@ def _canonical(value: object) -> bytes:
 
 def _pretty(value: object) -> bytes:
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def _visual_observation_request(
+    keyframes: Sequence[Mapping[str, object]], *, source_media_sha256: str,
+) -> dict[str, object]:
+    """Describe the exact images an execution Agent must inspect before publication."""
+    return {
+        "status": "REQUIRED",
+        "observer_id": "UNAVAILABLE",
+        "method": "UNAVAILABLE",
+        "source_media_sha256": source_media_sha256,
+        "frames": [
+            {
+                "keyframe_id": str(frame.get("frame_id", frame.get("keyframe_id"))),
+                "sha256": str(frame["sha256"]),
+                "observed": False,
+                "visual_facts": [],
+            }
+            for frame in keyframes
+        ],
+    }
 
 
 def _digest(payload: bytes) -> str:
@@ -281,7 +328,7 @@ def _current_product(value: object) -> dict[str, str]:
 
 def _timestamps(duration_ms: int, policy: Mapping[str, int]) -> list[int]:
     timestamps = list(range(0, duration_ms, int(policy["interval_ms"])))
-    near_end = duration_ms - 1
+    near_end = max(0, duration_ms - 100)
     if near_end not in timestamps:
         timestamps.append(near_end)
     if len(timestamps) > int(policy["max_keyframes"]):
@@ -296,6 +343,8 @@ def _timestamps(duration_ms: int, policy: Mapping[str, int]) -> list[int]:
 def _observation(name: str, keyframe_id: str) -> dict[str, object]:
     if name == "comment_evidence":
         return {"value": "DRAFT: UNAVAILABLE; no comment evidence was supplied.", "evidence_refs": []}
+    if name == "product_transfer_suggestion":
+        return {"value": "UNAVAILABLE", "evidence_refs": []}
     descriptions = {
         "scene": "sequence placeholder; scene content is not visually confirmed",
         "shot_scale": "shot scale is not visually confirmed",
@@ -309,10 +358,12 @@ def _observation(name: str, keyframe_id: str) -> dict[str, object]:
         "viral_mechanism": "viral mechanism is not visually confirmed",
         "actual_reference_behavior": "reference behavior is not visually confirmed",
         "reusable_pattern": "reusable pattern requires human visual review",
-        "product_transfer_suggestion": "adapt only after human visual review; no reference identity is copied",
     }
+    value = f"DRAFT: {descriptions[name]}."
+    if name in {"audience_psychology", "viral_mechanism", "conversion_function"}:
+        value = f"HYPOTHESIS: {value}"
     return {
-        "value": f"DRAFT: {descriptions[name]}.",
+        "value": value,
         "evidence_refs": [f"keyframe:{keyframe_id}"],
     }
 
@@ -334,30 +385,8 @@ def _timeline(timestamps: list[int], duration_ms: int) -> list[dict[str, object]
     return beats
 
 
-def _extract_keyframe(media: Path, timestamp_ms: int, *, near_end: bool) -> bytes:
-    if not near_end:
-        return extract_local_png_frame(media, timestamp_ms)
-    seek = ["-sseof", "-0.100"] if near_end else ["-ss", f"{timestamp_ms / 1000:.3f}"]
-    command = [
-        _local_tool("ffmpeg"),
-        "-v", "error",
-        "-nostdin",
-        "-protocol_whitelist", "file,pipe",
-        *seek,
-        "-i", os.fspath(media),
-        "-frames:v", "1",
-        "-f", "image2pipe",
-        "-vcodec", "png",
-        "pipe:1",
-    ]
-    try:
-        completed = run_local_media(command, timeout=60)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise SkillError(ErrorCode.MEDIA_INVALID, "Local keyframe extraction failed") from exc
-    payload = completed.stdout
-    if completed.returncode != 0 or not payload.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise SkillError(ErrorCode.MEDIA_INVALID, "Local keyframe extraction rejected the media")
-    return payload
+def _extract_keyframe(media: Path, timestamp_ms: int) -> bytes:
+    return extract_local_png_frame(media, timestamp_ms)
 
 
 def _published_replay(workspace: Path, request_digest: str) -> ReferenceBreakdownDraftResult | None:
@@ -435,13 +464,14 @@ def _prepare_fine_breakdown(
         segments,
         str(normalized["analysis_profile"]),
         replication_inputs["motion_actions"],
+        max_review_interval_ms=int(policy["max_review_interval_ms"]),
     )
     stage = Path(tempfile.mkdtemp(prefix=f".{_OUTPUT_ROOT}-stage-", dir=root))
     target = root / _OUTPUT_ROOT
     keyframes: list[dict[str, object]] = []
     keyframe_dir = stage / "keyframes"
     keyframe_dir.mkdir()
-    semantic_counters: dict[str, int] = {}
+    extra_frame_counters: dict[str, int] = {}
     keyframe_by_source_point: dict[tuple[str, int], dict[str, object]] = {}
 
     def store_keyframe(request: Mapping[str, object]) -> None:
@@ -459,10 +489,10 @@ def _prepare_fine_breakdown(
         if role in {"start", "representative", "end"}:
             frame_id = f"{segment_id}-{role}"
         else:
-            semantic_counters[segment_id] = semantic_counters.get(segment_id, 0) + 1
-            frame_id = f"{segment_id}-semantic-{semantic_counters[segment_id]:03d}"
+            extra_frame_counters[segment_id] = extra_frame_counters.get(segment_id, 0) + 1
+            frame_id = f"{segment_id}-{role}-{extra_frame_counters[segment_id]:03d}"
         filename = f"{frame_id}.png"
-        payload = _extract_keyframe(media, timestamp_ms, near_end=False)
+        payload = _extract_keyframe(media, timestamp_ms)
         (keyframe_dir / filename).write_bytes(payload)
         record = {
             "frame_id": frame_id,
@@ -488,6 +518,7 @@ def _prepare_fine_breakdown(
         offline["segment_annotations"],  # type: ignore[arg-type]
         analyzer_id=str(offline["analyzer_id"]),
         audio_available=audio_available,
+        hypothesis_policy=str(normalized["analysis_brief"]["hypothesis_policy"]),  # type: ignore[index]
     )
     coverage_requests, coverage_candidates = plan_coverage_keyframe_requests(
         segments,
@@ -527,6 +558,17 @@ def _prepare_fine_breakdown(
         segments,
         keyframes,
         profile=str(normalized["analysis_profile"]),
+    )
+    requested_statuses: list[tuple[str, str]] = []
+    if profile_supports(str(normalized["analysis_profile"]), "motion"):
+        requested_statuses.append(("motion", str(coverage_report["motion_coverage"]["status"])))  # type: ignore[index]
+    if profile_supports(str(normalized["analysis_profile"]), "narrative"):
+        requested_statuses.append(("narrative", str(coverage_report["narrative_coverage"]["status"])))  # type: ignore[index]
+    if profile_supports(str(normalized["analysis_profile"]), "scene"):
+        requested_statuses.append(("scene", str(scene_blocking_map["status"])))
+    coverage_report["requested_capabilities"] = [name for name, _ in requested_statuses]
+    coverage_report["status"] = (
+        "PASS" if requested_statuses and all(status == "PASS" for _, status in requested_statuses) else "INCOMPLETE"
     )
     reference_blueprint = {
         "artifact_semantics": "ReferenceBlueprint",
@@ -577,7 +619,6 @@ def _prepare_fine_breakdown(
             }
 
         conversion = observed("conversion_function")
-        conversion_value = str(conversion["value"])
         timeline.append({
             "beat_id": beat["beat_id"],
             "start_ms": beat["start_ms"],
@@ -598,12 +639,8 @@ def _prepare_fine_breakdown(
             "actual_reference_behavior": observed("narrative_function"),
             "reusable_pattern": observed("viral_mechanism"),
             "product_transfer_suggestion": {
-                "value": (
-                    "UNAVAILABLE"
-                    if conversion_value == "UNAVAILABLE"
-                    else f"Adapt the category-level {conversion_value} mechanism to the current product."
-                ),
-                "evidence_refs": [] if conversion_value == "UNAVAILABLE" else [f"keyframe:{representative}"],
+                "value": "UNAVAILABLE",
+                "evidence_refs": [],
             },
         })
     publication_formula = {
@@ -613,11 +650,15 @@ def _prepare_fine_breakdown(
     current_product = _current_product(normalized.get("current_product"))
     analyze_request = {
         "analysis_version": _VERSION,
+        "analysis_brief": normalized["analysis_brief"],
         "analysis_profile": normalized["analysis_profile"],
         "selected_reference_video": source,
         "video_metadata": metadata,
         "analysis_configuration": {
             "current_product": current_product,
+            "visual_observation": _visual_observation_request(
+                keyframes, source_media_sha256=str(source["sha256"])
+            ),
             "keyframes": [
                 {
                     "keyframe_id": frame["frame_id"],
@@ -652,6 +693,7 @@ def _prepare_fine_breakdown(
         "draft": True,
         "draft_version": _FINE_MODE,
         "analysis_version": _VERSION,
+        "analysis_brief": normalized["analysis_brief"],
         "analysis_profile": normalized["analysis_profile"],
         "request_digest": request_digest,
         "method_provenance": {
@@ -660,11 +702,12 @@ def _prepare_fine_breakdown(
             "boundary_detector": "local_ffmpeg_plus_offline_signals",
             "offline_analyzer_id": offline["analyzer_id"],
             "analysis_profile": normalized["analysis_profile"],
-            "visual_confirmation": "OFFLINE_EVIDENCE_ONLY",
+            "visual_confirmation": "REQUIRED_BEFORE_PUBLICATION",
         },
         "network_calls": 0,
         "provider_calls": 0,
         "external_upload": False,
+        "visual_observation_status": "REQUIRED",
         "executable": False,
         "source_video": {"media_path": source["media_path"], "sha256": source["sha256"]},
         "segmentation_policy": policy,
@@ -740,9 +783,26 @@ def prepare_reference_breakdown(
             "Only local draft analysis version 1.0.0 is supported",
             field_paths=("analysis_version",),
         )
+    brief = validate_analysis_brief(normalized.get("analysis_brief"))
+    normalized["analysis_brief"] = brief
+    if brief["objective"] == "RESULT_COMPARISON":
+        raise SkillError(
+            ErrorCode.SCOPE_FORBIDDEN,
+            "RESULT_COMPARISON belongs to the compare-result command",
+            field_paths=("analysis_brief.objective",),
+        )
+    if mode == _MODE and requires_replication_package(brief):
+        raise SkillError(
+            ErrorCode.ANALYSIS_INCOMPLETE,
+            "local_draft_v1 supports only an overview editing-rhythm or audiovisual brief; use local_fine_segments_v1",
+            field_paths=("mode", "analysis_brief"),
+        )
     root = _workspace(workspace)
     if mode == _FINE_MODE:
-        normalized["analysis_profile"] = _analysis_profile(normalized.get("analysis_profile"))
+        normalized["analysis_profile"] = _analysis_profile(
+            normalized.get("analysis_profile"),
+            derived_profile=derive_analysis_profile(brief),
+        )
     request_digest = _digest(_canonical(normalized))
     if mode == _FINE_MODE:
         return _prepare_fine_breakdown(normalized, root=root, request_digest=request_digest)
@@ -778,11 +838,7 @@ def prepare_reference_breakdown(
         for index, timestamp_ms in enumerate(timestamps):
             keyframe_id = f"kf-{index + 1:03d}"
             filename = f"{keyframe_id}.png"
-            payload = _extract_keyframe(
-                media,
-                timestamp_ms,
-                near_end=timestamp_ms == int(metadata["duration_ms"]) - 1,
-            )
+            payload = _extract_keyframe(media, timestamp_ms)
             (keyframe_dir / filename).write_bytes(payload)
             keyframes.append({
                 "keyframe_id": keyframe_id,
@@ -796,10 +852,14 @@ def prepare_reference_breakdown(
         }
         analyze_request = {
             "analysis_version": _VERSION,
+            "analysis_brief": normalized["analysis_brief"],
             "selected_reference_video": source,
             "video_metadata": metadata,
             "analysis_configuration": {
                 "current_product": current_product,
+                "visual_observation": _visual_observation_request(
+                    keyframes, source_media_sha256=str(source["sha256"])
+                ),
                 "keyframes": keyframes,
                 "timeline": timeline,
                 "bottom_line_formula": formula,
@@ -809,6 +869,7 @@ def prepare_reference_breakdown(
             "draft": True,
             "draft_version": _MODE,
             "analysis_version": _VERSION,
+            "analysis_brief": normalized["analysis_brief"],
             "request_digest": request_digest,
             "method_provenance": {
                 "mode": _MODE,
@@ -819,6 +880,7 @@ def prepare_reference_breakdown(
             },
             "provider_calls": 0,
             "external_upload": False,
+            "visual_observation_status": "REQUIRED",
             "executable": False,
             "source_video": {"media_path": source["media_path"], "sha256": source["sha256"]},
             "policy": policy,

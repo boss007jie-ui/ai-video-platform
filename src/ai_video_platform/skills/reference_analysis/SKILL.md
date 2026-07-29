@@ -1,26 +1,35 @@
 # Reference Analysis
 
-Version: `0.3.0-rc.offline`; schema and algorithm: `1.0.0`.
+Version: `0.4.0-rc.offline`; schema and algorithm: `1.0.0`.
 
-Reference Analysis deterministically analyzes one explicitly selected reference, can publish an evidence-bound reference storyboard analysis, and compares a produced result with a compatible analysis. It does not discover references, download remote media, call a Provider, traverse Research Library, write Product Library, trigger Storyboard/QA, or import Viral Research implementation.
+Reference Analysis deterministically analyzes one explicitly selected reference, publishes source-bound observations and reusable reference mechanisms, and compares a produced result with a compatible analysis. It does not discover references, download remote media, call a Provider, traverse Research Library, write Product Library, adapt mechanisms to a current product, create production Storyboards, trigger QA, or import another Skill's implementation. Product transfer belongs to Storyboard and product facts belong to Product Knowledge.
 
 ## Public commands
 
 - `analyze-reference --input request.json --workspace <task-workspace> --output <relative-json>`
 - `prepare-reference-breakdown --input request.json --workspace <task-workspace>`
-- `analyze-storyboard --input request.json --workspace <task-workspace>`
+- `finalize-reference-analysis --input request.json --workspace <task-workspace>`
+- `analyze-storyboard --input request.json --workspace <task-workspace>` (compatibility alias)
 - `compare-result --input request.json --workspace <task-workspace> --output <relative-json>`
 
 All commands print one machine-readable JSON result and return `0` on success or `2` for a stable redacted error. Hermes calls these commands explicitly and must supply the selected-reference structure; missing input never triggers discovery.
 
-Hermes examples: `python -m ai_video_platform.skills.reference_analysis analyze-reference --input selected.json --workspace task-123 --output reference/analysis.json` and `python -m ai_video_platform.skills.reference_analysis analyze-storyboard --input storyboard-request.json --workspace task-123`. The direct analysis request has exactly `analysis_version` and `selected_reference`; the latter has exactly `reference_id`, `source_uri`, `sha256`, `usage`, `provenance`, and structured `segments`. A synthetic Foundation-shaped mode instead supplies exactly `analysis_version`, `reference_manifest`, and `selected_reference_id`; the manifest must have the registered `ReferenceManifest` required fields and exactly one selected entry with synthetic segments. This mode does not publish or claim a new Contract. Compare requests have exactly `analysis_version`, the unchanged analysis artifact, and a `produced_result` with the direct selected-reference shape.
+Hermes examples: `python -m ai_video_platform.skills.reference_analysis analyze-reference --input selected.json --workspace task-123 --output reference/analysis.json` and `python -m ai_video_platform.skills.reference_analysis finalize-reference-analysis --input reference-analysis-request.json --workspace task-123`. The legacy direct analysis request has exactly `analysis_version` and `selected_reference`; the latter has exactly `reference_id`, `source_uri`, `sha256`, `usage`, `provenance`, and caller-supplied structured `segments`. This legacy path summarizes supplied structure and does not satisfy the local visual-observation workflow or authorize new semantic claims. A synthetic Foundation-shaped mode instead supplies exactly `analysis_version`, `reference_manifest`, and `selected_reference_id`; the manifest must have the registered `ReferenceManifest` required fields and exactly one selected entry with synthetic segments. This mode does not publish or claim a new Contract. Compare requests have exactly `analysis_version`, the unchanged analysis artifact, and a `produced_result` with the direct selected-reference shape.
 
-`analyze-storyboard` accepts the selected local reference video, video metadata, optional `ViralResearchPack`, optional popular comments, and an evidence-bound analysis configuration. It always publishes beneath `reference_analysis/`: the canonical JSON and Markdown, analysis/evidence/replication PNG boards, copied real keyframes, and `analysis_provenance.json`. Its JSON references `ReferenceStoryboardAnalysis`, `ReferenceBeat`, `ReferenceShotEvidence`, `ReplicationPattern`, and `ReferenceAnalysisBoardManifest` at `1.0.0`. Every board and keyframe is non-executable, ineligible as a first frame, and ineligible as a product panel.
+`finalize-reference-analysis` accepts the selected local reference video, video metadata, optional `ViralResearchPack`, optional popular comments, an explicit `analysis_brief`, and an evidence-bound analysis configuration. It always publishes beneath `reference_analysis/`: the canonical JSON and Markdown, analysis/evidence/replication PNG boards, copied real keyframes, and `analysis_provenance.json`. Its JSON references `ReferenceStoryboardAnalysis`, `ReferenceBeat`, `ReferenceShotEvidence`, `ReplicationPattern`, and `ReferenceAnalysisBoardManifest` at `1.0.0`. Every board and keyframe is non-executable, ineligible as a first frame, and ineligible as a product panel.
+
+### Mandatory analysis brief and visual observation gate
+
+Before either local preparation mode, the execution Agent must obtain an explicit `analysis_brief` with exactly `objective`, non-empty `focus`, `depth`, and `hypothesis_policy`. If the user has not explicitly supplied these choices, the Agent must pause and ask; it may not select a focus on the user's behalf. Supported focus values are `EDITING_RHYTHM`, `MOTION`, `NARRATIVE`, `PRODUCT_PROOF`, `SCENE_BLOCKING`, and `AUDIO_VISUAL`. Reference Analysis derives the technical replication profile from this brief; there is no silent Hybrid default, and a caller-supplied conflicting profile is rejected. `DETAILED`, `REPLICATION_REFERENCE`, `STORYBOARD_TRANSFER`, or a motion/narrative/product-proof/scene focus requires the complete fine-segment and replication package. Only an explicit `OVERVIEW` mechanism-extraction brief limited to editing rhythm and/or audiovisual structure may use the compact timeline path; compact preparation rejects a stronger brief immediately instead of producing an unusable draft. `RESULT_COMPARISON` is rejected by preparation/finalization and must use `compare-result`.
+
+The execution Agent **must look at every extracted keyframe with image-understanding before publication**. Preparation writes `analysis_configuration.visual_observation` as a `REQUIRED` checklist bound to the selected media SHA-256 and every keyframe ID/SHA-256. After actually opening and inspecting each image, the Agent must record one or more concrete `visual_facts` for that exact frame. Each fact has `category` (`SCENE`, `SUBJECT`, `ACTION`, `OBJECT_STATE`, `VISIBLE_TEXT`, `CAMERA`, or `FRAME_QUALITY`) and a concrete `description`; `UNAVAILABLE`, `DRAFT:`, and generic “viewed/inspected” attestations are rejected. Only then may the Agent set the checklist to `COMPLETED`, identify itself, set `method=agent_image_understanding`, and mark the frame observed. The Agent must never auto-complete this receipt with a script or test helper. Copying the checklist without viewing the images, or inferring content from filenames, scripts, metadata, prior reports, subtitles alone, or other text is forbidden. If image understanding is unavailable, any image cannot be opened, or any digest/observation/fact is missing, the Agent must stop and report `REFERENCE_ANALYSIS_VISUAL_OBSERVATION_REQUIRED`; it must not invent an analysis.
+
+An all-frame receipt is necessary but not sufficient. Every supplied keyframe is re-decoded from the SHA-verified selected source video at publication time. Any `DRAFT:` placeholder produced during extraction, including `DRAFT: UNAVAILABLE`, is rejected even after the checklist is marked complete. The Agent must replace it with image-grounded observations or exact `UNAVAILABLE`. Audience psychology, conversion function, and viral mechanism are inference fields: `OBSERVED_ONLY` makes them unavailable, while `LABEL_UNVERIFIED` requires the `HYPOTHESIS:` prefix. Target-product transfer suggestions must remain `UNAVAILABLE` because Storyboard owns that work.
 
 ### Local draft preparation
 
 `prepare-reference-breakdown` is the first stage of the local-video workflow. Its request has
-`analysis_version=1.0.0`, `mode=local_draft_v1`, and the same complete
+`analysis_version=1.0.0`, `mode=local_draft_v1`, an explicit `analysis_brief`, and the same complete
 `selected_reference_video` object consumed by `analyze-storyboard`. The media path and every
 generated asset path are workspace-relative and link/traversal paths fail closed. The selected
 video SHA-256 must match before metadata probing or extraction.
@@ -32,24 +41,22 @@ video SHA-256 must match before metadata probing or extraction.
 are blockers, with no cloud or Provider fallback.
 
 The optional policy defaults to `interval_ms=2000` and `max_keyframes=12`. Sampling always
-includes 0 ms and `duration_ms-1`; a requested maximum above 12 or a computed sample count above
-the requested maximum is rejected rather than truncated. `current_product` is optional and a
-non-identity placeholder is used when absent.
+includes 0 ms and a decodable near-end point (`duration_ms-100`); a requested maximum above 12 or a computed sample count above
+the requested maximum is rejected rather than truncated. Current-product context is not required or used; compatibility input is validated but published as `UNAVAILABLE` so adaptation stays in Storyboard.
 
 The fixed `reference_breakdown_draft/` output contains `draft_manifest.json`,
 `keyframes/*.png` plus `keyframes/index.json`, `draft_timeline.json`,
 `draft_bottom_line_formula.json`, and `analyze_storyboard_request.json`. Every timeline
 observation starts with `DRAFT:` and states that visual interpretation is unconfirmed. The
 package is non-executable, never a first frame or production storyboard, records
-`provider_calls=0` and `external_upload=false`, and its request is directly consumable by
-`analyze-storyboard`. Cloud video LLM, Provider, upload, and any mode other than
+`provider_calls=0` and `external_upload=false`, and its request is an observation template, not a publishable analysis. The Agent must view the extracted images, complete the visual receipt, and replace draft placeholders before calling `finalize-reference-analysis`. Cloud video LLM, Provider, upload, and any mode other than
 an explicitly supported local mode are rejected.
 
 ### Fine-segment storyboard preparation
 
 `prepare-reference-breakdown` also accepts `mode=local_fine_segments_v1` through the same
 public command. It first creates content-driven candidate boundaries from local RGB frame
-differences and optional local audio boundaries. An optional owner-local offline analyzer may
+differences and optional local audio boundaries. The default `max_review_interval_ms=8000` guard adds source-video `review` keyframes inside a long semantic segment so the execution Agent cannot skip a long visual interval. It does not create a semantic cut, Beat, or fixed segment count; segmentation remains evidence-driven. An optional owner-local offline analyzer may
 add evidence-bound semantic boundary signals and exact segment annotations. If the policy or
 offline analyzer is absent, conservative local defaults and explicit `UNAVAILABLE` observations
 are used; no network or Provider fallback exists.
@@ -75,9 +82,9 @@ directly consumable by the publication seam.
 
 ### Replication profiles and blueprint
 
-`local_fine_segments_v1` exposes `analysis_profile` with three supported values:
-`MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION`. The default is
-`HYBRID_REPLICATION`; callers may select a profile on the preparation request, and the same
+`local_fine_segments_v1` uses three technical `analysis_profile` values:
+`MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION`. The value is derived
+from `analysis_brief.focus`; callers may repeat it only when it matches the derivation. The same
 value is propagated into the publication request and every replication artifact. Motion and
 narrative profiles use different semantic keyframe criteria. A physical source frame is stored
 once per `(segment_id, timestamp_ms)` even when it carries both action and narrative roles.
@@ -107,6 +114,9 @@ so scene, product/style, and added or omitted action-step variations can share o
 The publication seam validates profile/source consistency, shot and scene ownership, semantic
 roles, duplicate timestamp storage, action-state and transition endpoints, narrative event
 evidence, scene blocking references, coverage-added frames, and blueprint component equality.
+Every requested capability must be `PASS`; missing motion actions, narrative facts, or scene
+blocking is `INCOMPLETE`, never an empty `PASS`, and publication fails with
+`REFERENCE_ANALYSIS_INCOMPLETE`.
 It then re-decodes every keyframe from the selected SHA-verified local video before atomically
 publishing. `ReferenceBlueprint` remains an owner-local payload with
 `formal_contract_identity=null`; no formal Contract identity is added.
@@ -146,7 +156,7 @@ Legacy analyze/compare read scope is limited to the JSON request supplied by the
 
 ## Errors, retries, and operation
 
-Stable errors cover validation, missing evidence, invalid media, forbidden artifact roles, forbidden discovery/Provider/download/Library scope, unsupported version, reference mismatch, forbidden path, output conflict, cancellation, and atomic-write failure. Errors recursively redact bearer and secret-like strings. There is no external retryable operation; callers may replay the same deterministic request/output idempotently.
+Stable errors cover validation, missing evidence, required visual observation, incomplete requested analysis, invalid media, forbidden artifact roles, forbidden discovery/Provider/download/Library scope, unsupported version, reference mismatch, forbidden path, output conflict, cancellation, and atomic-write failure. Errors recursively redact bearer and secret-like strings. There is no external retryable operation; callers may replay the same deterministic request/output idempotently.
 
 Run `$env:PYTHONPATH='src'; python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py"`, then `python tools\run_offline_tests.py`. Rollback is the owning branch commit revert. Provenance is `CLEAN_ROOM_ONLY`; Provider smoke is not applicable; maintainer `codex-02`; authorization `FTG-0-20260720-001`.
 

@@ -35,6 +35,23 @@ STAGES = (
 )
 
 
+def complete_visual_observation(request: dict[str, object], *, observer_id: str = "fixture-vision-agent") -> dict[str, object]:
+    config = request["analysis_configuration"]  # type: ignore[assignment]
+    receipt = config["visual_observation"]  # type: ignore[index]
+    receipt["status"] = "COMPLETED"  # type: ignore[index]
+    receipt["observer_id"] = observer_id  # type: ignore[index]
+    receipt["method"] = "agent_image_understanding"  # type: ignore[index]
+    for frame in receipt["frames"]:  # type: ignore[index]
+        frame["observed"] = True
+        frame["visual_facts"] = [
+            {
+                "category": "FRAME_QUALITY",
+                "description": "A flat red or blue synthetic source-frame color field is visible.",
+            }
+        ]
+    return request
+
+
 def materialize_video(workspace: Path) -> tuple[Path, str]:
     media = workspace / "inputs" / "reference.mp4"
     media.parent.mkdir(parents=True, exist_ok=True)
@@ -46,6 +63,12 @@ def fine_segment_request(media_sha256: str, *, boundaries: Iterable[int]) -> dic
     return {
         "analysis_version": "1.0.0",
         "mode": "local_fine_segments_v1",
+        "analysis_brief": {
+            "objective": "MECHANISM_EXTRACTION",
+            "focus": ["EDITING_RHYTHM"],
+            "depth": "DETAILED",
+            "hypothesis_policy": "LABEL_UNVERIFIED",
+        },
         "selected_reference_video": {
             "reference_id": "fine-reference-001",
             "media_path": "inputs/reference.mp4",
@@ -135,6 +158,16 @@ def replication_request(
     profile: str = "HYBRID_REPLICATION",
 ) -> dict[str, object]:
     request = ten_segment_request(workspace)
+    request["analysis_brief"] = {
+        "objective": "REPLICATION_REFERENCE",
+        "focus": {
+            "MOTION_REPLICATION": ["MOTION", "SCENE_BLOCKING"],
+            "NARRATIVE_REPLICATION": ["NARRATIVE"],
+            "HYBRID_REPLICATION": ["MOTION", "NARRATIVE", "SCENE_BLOCKING"],
+        }[profile],
+        "depth": "DETAILED",
+        "hypothesis_policy": "LABEL_UNVERIFIED",
+    }
     request["analysis_profile"] = profile
     offline = request["offline_analysis"]  # type: ignore[assignment]
     offline["segment_contexts"] = [  # type: ignore[index]

@@ -4,22 +4,30 @@
 
 - Authorization: `FTG-0-20260720-001`
 - Work item: `FT-02-001`
-- Branch: `ft/codex-02-research-reference`
-- Implementation baseline: `e1e3141`
+- Branch: `ft/codex-00-integration`
+- Implementation baseline: `dc6865a`
 - Schema/algorithm version: `1.0.0`
-- Skill version: `0.3.0-rc.offline`
-- Status: `OFFLINE_ACCEPTANCE`
+- Skill version: `0.4.0-rc.offline`
+- Status: `OFFLINE_VERIFIED`
 - Visual final: **not claimed**
 - Provenance: `CLEAN_ROOM_ONLY`; no Legacy source, Provider, upload, or network service was used
 
-The increment preserves the public `prepare-reference-breakdown` and `analyze-storyboard` seams.
-The existing `local_fine_segments_v1` flow now supports motion, narrative, and hybrid replication
-profiles while retaining legacy `local_draft_v1` behavior and all formal Contract identities.
+The increment preserves `prepare-reference-breakdown`, adds the preferred
+`finalize-reference-analysis` name while keeping `analyze-storyboard` as an owner-local alias,
+and leaves all formal Contract identities unchanged.
 
 ## Implemented offline behavior
 
-- explicit `MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION` profiles with Hybrid as the default;
+- mandatory user-supplied Analysis Brief; no silent focus or Hybrid selection;
+- Brief objective/focus/depth routing that requires complete fine/replication evidence for detailed or replication-oriented work;
+- compact preparation limited to explicit overview mechanism extraction; result comparison stays on `compare-result`;
+- explicit `MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION` profiles derived from the Brief;
+- publication blocked until every exact keyframe has a completed Agent image-understanding receipt with concrete categorized visual facts;
+- rejection of boolean-only, `UNAVAILABLE`, `DRAFT:`, and generic viewed/inspected visual attestations;
+- publication-time re-decoding of every keyframe from the SHA-verified selected source video in every local publication path;
+- rejection of every remaining `DRAFT:` placeholder, including `DRAFT: UNAVAILABLE` and embedded markers;
 - content-driven fine segments carrying exact shot/scene ownership and real source-video frames;
+- bounded review-frame density inside long semantic segments without inventing duration-based semantic cuts or Beats;
 - profile-specific semantic keyframes deduplicated by `(segment_id, timestamp_ms)` with independent action and narrative roles;
 - evidenced motion state chains, contact states, adjacent motion transitions, and one bounded Motion Coverage supplementation pass;
 - verified facts, grouped events, causal edges, global story roles, repeated product-proof loops, and one bounded Narrative Coverage pass;
@@ -29,7 +37,6 @@ profiles while retaining legacy `local_draft_v1` behavior and all formal Contrac
 - scene/blocking maps plus `MUST_PRESERVE`, `REPLACEABLE`, and `CONDITIONALLY_REPLACEABLE` constraints;
 - owner-local `ReferenceBlueprint` with `formal_contract_identity=null` and a shared keyframe timeline;
 - publication-time validation of profile/source ownership, semantic roles, transition/event references, coverage additions, and blueprint consistency;
-- publication-time re-decoding of every keyframe from the SHA-verified selected local video;
 - a finite core-Beat storyboard plus a separate source-frame motion atlas grouped by action;
 - atomic publication of all replication JSON, PNG, keyframe, storyboard, and provenance files;
 - unchanged production-storyboard and Provider-execution boundaries with zero external counters.
@@ -38,37 +45,30 @@ profiles while retaining legacy `local_draft_v1` behavior and all formal Contrac
 
 | Command | Result |
 |---|---|
-| `$env:PYTHONPATH='src'; python -m py_compile ...; python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 58 passed, 1 host-capability skip, 0 failures, 386.793s |
-| `python -m unittest tests.contracts.test_storyboard_artifact_chain tests.contracts.test_root_cli_routing tests.architecture.test_clean_room_boundaries -v` | 19 passed; 1 known external worktree-path error |
-| Replication profile group | PASS - 21 passed, 0 failures, 331.076s |
-| Offline CLI prepare plus analyze E2E | PASS - `HYBRID_REPLICATION`, completed locally in `review-03` |
-| Visual inspection of storyboard and motion atlas | PASS - no overlap; labels, timecodes, directions, and action ordering readable |
+| `python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 72 tests, 1 host-capability skip, 0 failures, 552.355s |
+| Analysis Brief / image-observation / incomplete-publication regressions | PASS - included in the 72-test owner run |
+| Three-profile prepare/finalize flow | PASS - Motion, Narrative, and Hybrid included in the owner run |
+| `python -m compileall -q src/ai_video_platform/skills/reference_analysis tests/skills/reference_analysis` | PASS |
 | `git diff --check` and owner-scope inspection | PASS |
+| Two-axis code review | Standards: 0 hard violations; Spec findings fixed before final owner run |
 
 The owned skip is the existing Windows environment case where symlink creation is unavailable.
-The affected-suite error is also pre-existing: `test_adoption_manifest_has_no_unapproved_adoptions`
-derives the control root as a sibling of the current Git worktree and looks for
-`C:\Users\boss0\.codex\worktrees\9352\AI Video Platform Re-architecture Control\08_ADOPTION_MANIFEST.json`,
-which does not exist in this Codex-managed worktree layout. The shared architecture test is
-outside the authorized `reference_analysis` scope and was not modified.
+No shared implementation changed, so no additional repository-wide suite was required by the
+owner-scoped task. The owned skip is the existing Windows environment case where symlink
+creation is unavailable.
 
-## Offline review sample
+## Sample status
 
-- Root: `run/FT-02-001-reference-analysis-replication-review-03/reference_analysis/`
-- Source fixture: versioned synthetic local video, 4000 ms
-- Profile: `HYBRID_REPLICATION`
-- Fine segments: 10
-- Deduplicated source keyframes: 47
-- Core beats: 5
-- Motion actions/transitions: 3 / 14
-- Narrative facts/events/causal edges/proof loops: 10 / 5 / 4 / 2
-- Coverage additions: 7 motion frames, 5 narrative frames
-- Counters: `network_calls=0`, `provider_calls=0`, `external_upload=false`
+`run/FT-02-001-reference-analysis-replication-review-03/` predates the new Analysis Brief and
+visual-fact gate. It remains historical schema/layout evidence only and is **not** claimed as a
+current visually grounded semantic acceptance sample. The synthetic owner fixture uses a test
+image-understanding double to verify deterministic schemas, source re-decoding, layouts, and
+cross-artifact validation; it is not represented as a truthful garment analysis.
 
-The synthetic fixture contains simple red/blue source frames and exists to verify deterministic
-timing, source re-decoding, layouts, and cross-artifact traceability. It is not represented as a
-real garment analysis. The storyboard and atlas remain review candidates pending a rerun with an
-authorized real reference video.
+The user's `run/20260729-viral-breakdown` project was intentionally not overwritten or silently
+reanalyzed. Under the new contract, a real rerun begins only after the user explicitly supplies
+the Analysis Brief, and the execution Agent must then inspect every extracted keyframe. Counters
+remain `network_calls=0`, `provider_calls=0`, and `external_upload=false`.
 
 ## Scope and blockers
 
@@ -76,5 +76,5 @@ All tracked changes remain limited to `src/ai_video_platform/skills/reference_an
 `tests/skills/reference_analysis/**`. No change was made to `storyboard_master_video_planning`,
 the root CLI dispatcher, other Skills, shared Contracts, Hermes state, or Provider authorization.
 
-Implementation blocker: none. Real-video acceptance awaits an authorized local input asset and
-does not block the offline implementation.
+Implementation blocker: none. A new real-video acceptance result awaits the user's explicit
+Analysis Brief and an actual all-frame image-understanding pass; this does not block the code.

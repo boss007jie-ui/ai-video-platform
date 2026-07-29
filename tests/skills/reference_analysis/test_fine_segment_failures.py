@@ -66,8 +66,9 @@ class FineSegmentFailureTests(unittest.TestCase):
 
             def substituted_frame(request: dict[str, object]) -> None:
                 frames = request["analysis_configuration"]["keyframes"]  # type: ignore[index]
-                frames[0]["path"] = frames[18]["path"]
-                frames[0]["sha256"] = frames[18]["sha256"]
+                substitute = next(frame for frame in frames[1:] if frame["sha256"] != frames[0]["sha256"])
+                frames[0]["path"] = substitute["path"]
+                frames[0]["sha256"] = substitute["sha256"]
 
             def unknown_evidence(request: dict[str, object]) -> None:
                 request["analysis_configuration"]["segment_analysis"][0]["observations"]["scene"]["evidence_refs"] = ["frame:unknown"]  # type: ignore[index]

@@ -7,7 +7,11 @@ import unittest
 
 from ai_video_platform.skills.reference_analysis import SkillError, analyze_storyboard, prepare_reference_breakdown
 
-from tests.skills.reference_analysis.fine_segment_fixture import replication_request, ten_segment_request
+from tests.skills.reference_analysis.fine_segment_fixture import (
+    complete_visual_observation,
+    replication_request,
+    ten_segment_request,
+)
 
 
 class ReplicationProfileTests(unittest.TestCase):
@@ -41,8 +45,7 @@ class ReplicationProfileTests(unittest.TestCase):
     def test_profile_is_explicitly_carried_into_the_publication_request(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            request = ten_segment_request(workspace)
-            request["analysis_profile"] = "MOTION_REPLICATION"
+            request = replication_request(workspace, profile="MOTION_REPLICATION")
 
             result = prepare_reference_breakdown(request, workspace=workspace)
 
@@ -65,6 +68,7 @@ class ReplicationProfileTests(unittest.TestCase):
                 publication_request = json.loads(
                     (workspace / prepared.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
                 )
+                complete_visual_observation(publication_request)
 
                 published = analyze_storyboard(publication_request, workspace=workspace)
 

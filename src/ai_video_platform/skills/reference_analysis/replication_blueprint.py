@@ -303,8 +303,10 @@ def plan_keyframe_requests(
     segments: Sequence[Mapping[str, object]],
     profile: str,
     motion_actions: Sequence[Mapping[str, object]],
+    *,
+    max_review_interval_ms: int = 8000,
 ) -> list[dict[str, object]]:
-    """Select base frames and the first-pass motion states before coverage."""
+    """Select source frames without turning review-density guards into semantic cuts."""
     if profile not in ANALYSIS_PROFILES:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "analysis_profile is unsupported")
     requests: dict[tuple[str, int], dict[str, object]] = {}
@@ -316,6 +318,10 @@ def plan_keyframe_requests(
         _add_frame_request(requests, segment, start_ms, frame_role="start")
         _add_frame_request(requests, segment, start_ms + ((end_ms - start_ms) // 2), frame_role="representative")
         _add_frame_request(requests, segment, end_ms - end_margin, frame_role="end")
+        review_timestamp_ms = start_ms + max_review_interval_ms
+        while review_timestamp_ms < end_ms - end_margin:
+            _add_frame_request(requests, segment, review_timestamp_ms, frame_role="review")
+            review_timestamp_ms += max_review_interval_ms
 
     if profile_supports(profile, "motion"):
         initial_states = {"ACTION_START", "ACTION_APEX", "ACTION_END", "FINAL_HOLD"}
@@ -719,6 +725,8 @@ def build_motion_artifacts(
     chains: list[dict[str, object]] = []
     transitions: list[dict[str, object]] = []
     added_frame_ids, unresolved = _resolve_coverage_frames(coverage_candidates, segments, lookup)
+    if not actions:
+        unresolved.append({"reason": "no_verified_motion_action"})
     for action in actions:
         states: list[dict[str, object]] = []
         raw_states = [dict(state) for state in action["states"]]  # type: ignore[union-attr]
@@ -798,12 +806,12 @@ def build_motion_artifacts(
             })
     motion = {
         "analysis_profile": profile,
-        "status": "PASS" if not unresolved else "INCOMPLETE",
+        "status": "PASS" if actions and chains and not unresolved else "INCOMPLETE",
         "action_chains": chains,
     }
     coverage = {
         "motion_coverage": {
-            "status": "PASS" if actions and not unresolved else ("UNAVAILABLE" if not actions else "INCOMPLETE"),
+            "status": "PASS" if actions and chains and not unresolved else "INCOMPLETE",
             "iterations": 1 if actions else 0,
             "initial_keyframe_count": max(
                 0,
@@ -873,6 +881,8 @@ def build_narrative_artifacts(
     normalized_facts: list[dict[str, object]] = []
     added_frame_ids, unresolved = _resolve_coverage_frames(coverage_candidates, segments, lookup)
     unresolved.extend(dict(gap) for gap in coverage_gaps)
+    if not facts:
+        unresolved.append({"reason": "no_verified_narrative_fact"})
     for fact in facts:
         timestamp_ms = int(fact["start_ms"]) + ((int(fact["end_ms"]) - int(fact["start_ms"])) // 2)
         frame = _frame_for_timestamp(segments, lookup, timestamp_ms)
@@ -1045,7 +1055,7 @@ def build_narrative_artifacts(
             })
     graph = {
         "analysis_profile": profile,
-        "status": "PASS" if facts and not unresolved else ("UNAVAILABLE" if not facts else "INCOMPLETE"),
+        "status": "PASS" if facts and normalized_facts and not unresolved else "INCOMPLETE",
         "method": method,
         "facts": normalized_facts,
         "events": events,
@@ -1055,7 +1065,7 @@ def build_narrative_artifacts(
     }
     coverage = {
         "narrative_coverage": {
-            "status": "PASS" if facts and not unresolved else ("UNAVAILABLE" if not facts else "INCOMPLETE"),
+            "status": "PASS" if facts and normalized_facts and not unresolved else "INCOMPLETE",
             "iterations": 1 if facts else 0,
             "initial_keyframe_count": len(events),
             "added_frame_count": len(added_frame_ids),
@@ -1075,6 +1085,7 @@ def build_scene_blocking_and_constraints(
     profile: str,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Preserve spatial mechanics while explicitly allowing identity and decor replacement."""
+    scene_requested = profile_supports(profile, "scene")
     scene_records: list[dict[str, object]] = []
     for scene in scenes:
         scene_id = str(scene["scene_id"])
@@ -1124,7 +1135,7 @@ def build_scene_blocking_and_constraints(
         })
     scene_map = {
         "analysis_profile": profile,
-        "status": "PASS" if scenes else "UNAVAILABLE",
+        "status": "NOT_REQUESTED" if not scene_requested else ("PASS" if scenes else "INCOMPLETE"),
         "scenes": scene_records,
     }
     constraints = {

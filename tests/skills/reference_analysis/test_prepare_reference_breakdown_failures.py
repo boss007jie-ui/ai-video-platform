@@ -23,6 +23,35 @@ def materialize(workspace: Path) -> dict[str, object]:
 
 
 class PrepareReferenceBreakdownFailureTests(unittest.TestCase):
+    def test_compact_prepare_rejects_a_brief_that_requires_fine_replication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = materialize(workspace)
+            request["analysis_brief"] = {
+                "objective": "REPLICATION_REFERENCE",
+                "focus": ["MOTION"],
+                "depth": "DETAILED",
+                "hypothesis_policy": "LABEL_UNVERIFIED",
+            }
+
+            with self.assertRaises(SkillError) as captured:
+                prepare_reference_breakdown(request, workspace=workspace)
+
+            self.assertEqual(captured.exception.code, ErrorCode.ANALYSIS_INCOMPLETE)
+            self.assertFalse((workspace / "reference_breakdown_draft").exists())
+
+    def test_result_comparison_objective_uses_the_compare_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = materialize(workspace)
+            request["analysis_brief"]["objective"] = "RESULT_COMPARISON"
+
+            with self.assertRaises(SkillError) as captured:
+                prepare_reference_breakdown(request, workspace=workspace)
+
+            self.assertEqual(captured.exception.code, ErrorCode.SCOPE_FORBIDDEN)
+            self.assertFalse((workspace / "reference_breakdown_draft").exists())
+
     def test_non_local_modes_cloud_provider_upload_and_bad_hash_are_rejected(self) -> None:
         mutations = (
             ("mode", "cloud_video_llm", ErrorCode.SCOPE_FORBIDDEN),

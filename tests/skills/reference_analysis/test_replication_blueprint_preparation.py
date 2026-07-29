@@ -7,7 +7,7 @@ import unittest
 
 from ai_video_platform.skills.reference_analysis import analyze_storyboard, prepare_reference_breakdown
 
-from tests.skills.reference_analysis.fine_segment_fixture import replication_request
+from tests.skills.reference_analysis.fine_segment_fixture import complete_visual_observation, replication_request
 
 
 class ReplicationBlueprintPreparationTests(unittest.TestCase):
@@ -182,6 +182,7 @@ class ReplicationBlueprintPreparationTests(unittest.TestCase):
             publication_request = json.loads(
                 (workspace / result.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
             )
+            complete_visual_observation(publication_request)
 
             published = analyze_storyboard(publication_request, workspace=workspace)
 

@@ -7,7 +7,7 @@ import unittest
 
 from ai_video_platform.skills.reference_analysis import analyze_storyboard, prepare_reference_breakdown
 
-from tests.skills.reference_analysis.fine_segment_fixture import replication_request
+from tests.skills.reference_analysis.fine_segment_fixture import complete_visual_observation, replication_request
 from tests.skills.reference_analysis.test_fine_segment_publication import png_text_chunks
 
 
@@ -20,6 +20,7 @@ class ReplicationBlueprintPublicationTests(unittest.TestCase):
             request = json.loads(
                 (draft_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
             )
+            complete_visual_observation(request)
 
             result = analyze_storyboard(request, workspace=workspace)
 
@@ -82,12 +83,15 @@ class ReplicationBlueprintPublicationTests(unittest.TestCase):
             fact["end_state"] = fact["start_state"]
             fact["information_revealed"] = "UNAVAILABLE"
             fact["subtitle_text"] = "UNAVAILABLE"
+            next_fact = request["offline_analysis"]["narrative_facts"][2]  # type: ignore[index]
+            next_fact["start_state"] = fact["end_state"]
 
             prepared = prepare_reference_breakdown(request, workspace=workspace)
             draft_root = workspace / prepared.output_root
             publication_request = json.loads(
                 (draft_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
             )
+            complete_visual_observation(publication_request)
             frames = publication_request["analysis_configuration"]["keyframes"]
             fact_frame = next(frame for frame in frames if frame["timestamp_ms"] == 600)
             event = publication_request["analysis_configuration"]["narrative_event_graph"]["events"][0]

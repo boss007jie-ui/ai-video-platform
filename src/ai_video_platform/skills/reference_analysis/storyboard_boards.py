@@ -499,7 +499,7 @@ def render_replication_board(patterns: list[dict[str, object]]) -> bytes:
     canvas = _Canvas(1800, 220 + len(patterns) * 330, _PAPER)
     canvas.rect(0, 0, 1800, 120, _INK)
     canvas.text(48, 35, "REPLICATION PATTERN BOARD", _WHITE, scale=4)
-    columns = ["actual reference behavior", "reusable mechanism", "adaptation to current product"]
+    columns = ["actual reference behavior", "reusable mechanism", "storyboard handoff (not performed)"]
     colors = (_RED, _ACCENT, _GOLD)
     for index, (column, color) in enumerate(zip(columns, colors)):
         x = 36 + index * 576
@@ -510,7 +510,7 @@ def render_replication_board(patterns: list[dict[str, object]]) -> bytes:
         values = (
             pattern["actual_reference_behavior"]["value"],
             pattern["reusable_mechanism"]["value"],
-            pattern["adaptation_to_current_product"]["value"],
+            "UNAVAILABLE - OWNED BY STORYBOARD",
         )
         for column_index, value in enumerate(values):
             x = 36 + column_index * 576
@@ -519,7 +519,7 @@ def render_replication_board(patterns: list[dict[str, object]]) -> bytes:
             canvas.text(x + 24, y + 25, f"{pattern['pattern_id']} / {pattern['interval']['start_ms']}-{pattern['interval']['end_ms']} MS", _MUTED, scale=2)
             canvas.lines(x + 24, y + 78, value, _INK, max_chars=28, scale=3, max_lines=7)
             if column_index == 2:
-                canvas.text(x + 24, y + 258, f"TARGET {pattern['adaptation_target_product_id']}", _ACCENT, scale=2)
+                canvas.text(x + 24, y + 258, "OWNER STORYBOARD", _ACCENT, scale=2)
     return canvas.png({
         "board_role": "replication_board",
         "columns": columns,

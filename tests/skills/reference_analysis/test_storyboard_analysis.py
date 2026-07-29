@@ -6,13 +6,15 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
 import struct
 import tempfile
 import unittest
-import zlib
 
 from ai_video_platform.skills.reference_analysis import analyze_storyboard
 from ai_video_platform.skills.reference_analysis.cli import main
+from ai_video_platform.skills.reference_analysis.local_media import extract_local_png_frame
+from tests.skills.reference_analysis.fine_segment_fixture import FIXTURE
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "storyboard-analysis-v1.json"
@@ -25,32 +27,15 @@ CANONICAL_IDENTITIES = {
 }
 
 
-def _chunk(kind: bytes, data: bytes) -> bytes:
-    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-
-
-def _solid_png(width: int, height: int, rgb: list[int]) -> bytes:
-    row = bytes(rgb) * width
-    pixels = b"".join(b"\x00" + row for _ in range(height))
-    return b"".join(
-        (
-            b"\x89PNG\r\n\x1a\n",
-            _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)),
-            _chunk(b"IDAT", zlib.compress(pixels, 9)),
-            _chunk(b"IEND", b""),
-        )
-    )
-
-
 def materialize_fixture(workspace: Path, *, include_comments: bool = True) -> dict[str, object]:
     fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-    media = bytes.fromhex(fixture["media"]["bytes_hex"])
     media_path = workspace / fixture["media"]["path"]
     media_path.parent.mkdir(parents=True)
-    media_path.write_bytes(media)
+    shutil.copyfile(FIXTURE, media_path)
+    media = media_path.read_bytes()
     replacements = {"$MEDIA_SHA256": hashlib.sha256(media).hexdigest()}
     for keyframe in fixture["keyframes"]:
-        payload = _solid_png(keyframe["width"], keyframe["height"], keyframe["rgb"])
+        payload = extract_local_png_frame(media_path, keyframe["timestamp_ms"])
         path = workspace / keyframe["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
@@ -60,6 +45,46 @@ def materialize_fixture(workspace: Path, *, include_comments: bool = True) -> di
     for marker, digest in replacements.items():
         encoded = encoded.replace(marker, digest)
     request = json.loads(encoded)
+    request["analysis_brief"] = {
+        "objective": "MECHANISM_EXTRACTION",
+        "focus": ["EDITING_RHYTHM"],
+        "depth": "OVERVIEW",
+        "hypothesis_policy": "LABEL_UNVERIFIED",
+    }
+    request["video_metadata"] = {
+        "duration_ms": 4000,
+        "width": 64,
+        "height": 96,
+        "aspect_ratio": "2:3",
+        "media_type": "video/mp4",
+        "codec": "h264",
+    }
+    request["analysis_configuration"]["visual_observation"] = {
+        "status": "COMPLETED",
+        "observer_id": "fixture-vision-agent",
+        "method": "agent_image_understanding",
+        "source_media_sha256": request["selected_reference_video"]["sha256"],
+        "frames": [
+            {
+                "keyframe_id": frame["keyframe_id"],
+                "sha256": frame["sha256"],
+                "observed": True,
+                "visual_facts": [
+                    {
+                        "category": "FRAME_QUALITY",
+                        "description": "A flat red or blue synthetic source-frame color field is visible.",
+                    }
+                ],
+            }
+            for frame in request["analysis_configuration"]["keyframes"]
+        ],
+    }
+    for beat in request["analysis_configuration"]["timeline"]:
+        beat["product_transfer_suggestion"] = {"value": "UNAVAILABLE", "evidence_refs": []}
+        for field in ("audience_psychology", "conversion_function", "viral_mechanism"):
+            value = beat[field]["value"]
+            if value != "UNAVAILABLE" and not value.startswith("HYPOTHESIS: "):
+                beat[field]["value"] = f"HYPOTHESIS: {value}"
     if not include_comments:
         request.pop("popular_comments")
         for beat in request["analysis_configuration"]["timeline"]:
@@ -106,7 +131,7 @@ class StoryboardAnalysisTests(unittest.TestCase):
             self.assertEqual(artifact["timeline"][0]["interval"], {"start_ms": 0, "end_ms": 1500})
             self.assertEqual(artifact["reference_beats"][0]["keyframe_ids"], ["kf-001"])
             self.assertEqual(artifact["shot_evidence"][0]["source_media_sha256"], request["selected_reference_video"]["sha256"])
-            self.assertEqual(artifact["replication_patterns"][0]["adaptation_target_product_id"], "current-product-001")
+            self.assertEqual(artifact["replication_patterns"][0]["adaptation_target_product_id"], "UNAVAILABLE")
 
             root = workspace / "reference_analysis"
             expected_paths = {
@@ -141,7 +166,7 @@ class StoryboardAnalysisTests(unittest.TestCase):
             )
             self.assertEqual(
                 replication_metadata["columns"],
-                ["actual reference behavior", "reusable mechanism", "adaptation to current product"],
+                ["actual reference behavior", "reusable mechanism", "storyboard handoff (not performed)"],
             )
 
     def test_comments_are_optional_and_unavailable_evidence_is_explicit(self) -> None:
@@ -153,6 +178,20 @@ class StoryboardAnalysisTests(unittest.TestCase):
             self.assertEqual(artifact["reference_beats"][0]["comment_evidence"]["value"], "UNAVAILABLE")
             markdown = (workspace / "reference_analysis" / "reference_storyboard_analysis.md").read_text(encoding="utf-8")
             self.assertIn("UNAVAILABLE", markdown)
+
+    def test_target_product_context_is_not_required_or_used_by_reference_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = materialize_fixture(workspace)
+            request["analysis_configuration"].pop("current_product")
+
+            result = analyze_storyboard(request, workspace=workspace)
+
+            artifact = result.to_dict()["artifact"]
+            self.assertEqual(artifact["current_product"]["product_id"], "UNAVAILABLE")
+            self.assertTrue(
+                all(pattern["adaptation_target_product_id"] == "UNAVAILABLE" for pattern in artifact["replication_patterns"])
+            )
 
     def test_repeatability_holds_for_replay_and_independent_workspaces(self) -> None:
         with tempfile.TemporaryDirectory() as first_directory, tempfile.TemporaryDirectory() as second_directory:
@@ -177,14 +216,14 @@ class StoryboardAnalysisTests(unittest.TestCase):
             }
             self.assertEqual(first_files, second_files)
 
-    def test_skill_cli_exposes_analyze_storyboard_without_root_routing(self) -> None:
+    def test_skill_cli_exposes_finalize_reference_analysis_without_root_routing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             request_path = workspace / "storyboard-request.json"
             request_path.write_text(json.dumps(materialize_fixture(workspace)), encoding="utf-8")
             output = io.StringIO()
             with redirect_stdout(output):
-                code = main(["analyze-storyboard", "--input", str(request_path), "--workspace", str(workspace)])
+                code = main(["finalize-reference-analysis", "--input", str(request_path), "--workspace", str(workspace)])
             self.assertEqual(code, 0)
             payload = json.loads(output.getvalue())
             self.assertEqual(payload["status"], "COMPLETED")

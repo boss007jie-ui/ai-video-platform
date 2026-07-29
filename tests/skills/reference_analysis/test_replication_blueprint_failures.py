@@ -8,7 +8,7 @@ import unittest
 
 from ai_video_platform.skills.reference_analysis import ErrorCode, SkillError, analyze_storyboard, prepare_reference_breakdown
 
-from tests.skills.reference_analysis.fine_segment_fixture import replication_request
+from tests.skills.reference_analysis.fine_segment_fixture import complete_visual_observation, replication_request
 
 
 class ReplicationBlueprintFailureTests(unittest.TestCase):
@@ -20,6 +20,7 @@ class ReplicationBlueprintFailureTests(unittest.TestCase):
         cls.request = json.loads(
             (cls.workspace / prepared.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
         )
+        complete_visual_observation(cls.request)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -32,6 +33,7 @@ class ReplicationBlueprintFailureTests(unittest.TestCase):
 
     def test_rejects_profile_mismatch(self) -> None:
         request = copy.deepcopy(self.request)
+        request["analysis_brief"]["focus"] = ["MOTION", "SCENE_BLOCKING"]
         request["analysis_profile"] = "MOTION_REPLICATION"
 
         self.assert_rejected(request, ErrorCode.REFERENCE_MISMATCH)

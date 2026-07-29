@@ -8,14 +8,15 @@ import unittest
 
 from ai_video_platform.skills.reference_analysis import analyze_storyboard, prepare_reference_breakdown
 
-from tests.skills.reference_analysis.fine_segment_fixture import ten_segment_request
+from tests.skills.reference_analysis.fine_segment_fixture import complete_visual_observation, replication_request
 
 
 def prepare_request(workspace: Path) -> dict[str, object]:
-    result = prepare_reference_breakdown(ten_segment_request(workspace), workspace=workspace)
-    return json.loads(
+    result = prepare_reference_breakdown(replication_request(workspace), workspace=workspace)
+    request = json.loads(
         (workspace / result.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
     )
+    return complete_visual_observation(request)
 
 
 def png_text_chunks(payload: bytes) -> dict[str, str]:

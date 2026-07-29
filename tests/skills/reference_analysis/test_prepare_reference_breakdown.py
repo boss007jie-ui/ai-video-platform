@@ -19,6 +19,12 @@ def prepare_request(media_sha256: str) -> dict[str, object]:
     return {
         "analysis_version": "1.0.0",
         "mode": "local_draft_v1",
+        "analysis_brief": {
+            "objective": "MECHANISM_EXTRACTION",
+            "focus": ["EDITING_RHYTHM"],
+            "depth": "OVERVIEW",
+            "hypothesis_policy": "LABEL_UNVERIFIED",
+        },
         "selected_reference_video": {
             "reference_id": "local-draft-reference-001",
             "media_path": "inputs/reference.mp4",
@@ -72,7 +78,7 @@ class PrepareReferenceBreakdownTests(unittest.TestCase):
             self.assertEqual(manifest["provider_calls"], 0)
             self.assertIs(manifest["external_upload"], False)
             keyframes = manifest["keyframes"]
-            self.assertEqual([item["timestamp_ms"] for item in keyframes], [0, 2000, 3999])
+            self.assertEqual([item["timestamp_ms"] for item in keyframes], [0, 2000, 3900])
             for item in keyframes:
                 payload = (workspace / item["path"]).read_bytes()
                 self.assertEqual(payload[:8], b"\x89PNG\r\n\x1a\n")

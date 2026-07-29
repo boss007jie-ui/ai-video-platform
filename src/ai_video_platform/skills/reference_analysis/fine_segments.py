@@ -193,4 +193,8 @@ def build_fine_segments(
     return segments
 
 
-__all__ = ["build_fine_segments", "detect_boundary_signals", "scan_visual_change_evidence"]
+__all__ = [
+    "build_fine_segments",
+    "detect_boundary_signals",
+    "scan_visual_change_evidence",
+]

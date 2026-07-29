@@ -62,16 +62,33 @@ class StoryboardAnalysisFailureTests(unittest.TestCase):
             self.assertEqual(captured.exception.code, ErrorCode.EVIDENCE_MISSING)
             self.assertFalse((workspace / "reference_analysis").exists())
 
-    def test_reference_identity_cannot_be_copied_into_product_adaptation(self) -> None:
+    def test_target_product_adaptation_is_owned_by_storyboard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             request = materialize_fixture(workspace)
             request["analysis_configuration"]["timeline"][0]["product_transfer_suggestion"]["value"] = (
-                "Make the current product look exactly like ExampleCo Example Organizer"
+                "Adapt this category-level mechanism to the current product"
             )
+            request["analysis_configuration"]["timeline"][0]["product_transfer_suggestion"]["evidence_refs"] = [
+                "keyframe:kf-001"
+            ]
             with self.assertRaises(SkillError) as captured:
                 analyze_storyboard(request, workspace=workspace)
             self.assertEqual(captured.exception.code, ErrorCode.ARTIFACT_ROLE_FORBIDDEN)
+            self.assertFalse((workspace / "reference_analysis").exists())
+
+    def test_inferred_audience_claim_must_be_labeled_as_a_hypothesis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = materialize_fixture(workspace)
+            request["analysis_configuration"]["timeline"][0]["audience_psychology"]["value"] = (
+                "The audience will definitely buy after seeing this frame"
+            )
+
+            with self.assertRaises(SkillError) as captured:
+                analyze_storyboard(request, workspace=workspace)
+
+            self.assertEqual(captured.exception.code, ErrorCode.EVIDENCE_MISSING)
             self.assertFalse((workspace / "reference_analysis").exists())
 
     def test_production_artifact_or_execution_roles_are_rejected(self) -> None:

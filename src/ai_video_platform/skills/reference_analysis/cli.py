@@ -17,7 +17,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="reference-analysis")
     parser.add_argument(
         "command",
-        choices=("analyze-reference", "compare-result", "analyze-storyboard", "prepare-reference-breakdown"),
+        choices=(
+            "analyze-reference",
+            "compare-result",
+            "finalize-reference-analysis",
+            "analyze-storyboard",
+            "prepare-reference-breakdown",
+        ),
     )
     parser.add_argument("--input", required=True)
     parser.add_argument("--workspace", required=True)
@@ -25,14 +31,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         request = json.loads(Path(arguments.input).read_text(encoding="utf-8"))
-        if arguments.command in {"analyze-storyboard", "prepare-reference-breakdown"}:
+        if arguments.command in {
+            "finalize-reference-analysis", "analyze-storyboard", "prepare-reference-breakdown",
+        }:
             if arguments.output is not None:
                 raise SkillError(
                     ErrorCode.VALIDATION_FAILED,
                     f"{arguments.command} always publishes to its fixed output root",
                     field_paths=("output",),
                 )
-            operation = analyze_storyboard if arguments.command == "analyze-storyboard" else prepare_reference_breakdown
+            operation = (
+                prepare_reference_breakdown
+                if arguments.command == "prepare-reference-breakdown"
+                else analyze_storyboard
+            )
             result = operation(request, workspace=Path(arguments.workspace))
         else:
             if not arguments.output:

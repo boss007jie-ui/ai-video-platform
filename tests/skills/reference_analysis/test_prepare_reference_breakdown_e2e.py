@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 from ai_video_platform.skills.reference_analysis.cli import main
+from tests.skills.reference_analysis.fine_segment_fixture import complete_visual_observation
 from tests.skills.reference_analysis.test_prepare_reference_breakdown import FIXTURE, prepare_request
 
 
@@ -32,7 +33,7 @@ OBSERVATION_FIELDS = (
 
 
 class PrepareReferenceBreakdownE2ETests(unittest.TestCase):
-    def test_prepare_output_is_consumed_by_analyze_storyboard_in_the_same_workspace(self) -> None:
+    def test_unreviewed_prepare_placeholders_cannot_be_published_after_receipt_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             media = workspace / "inputs" / "reference.mp4"
@@ -61,8 +62,15 @@ class PrepareReferenceBreakdownE2ETests(unittest.TestCase):
             for beat in timeline:
                 self.assertEqual(set(OBSERVATION_FIELDS), set(beat).intersection(OBSERVATION_FIELDS))
                 for name in OBSERVATION_FIELDS:
-                    self.assertTrue(beat[name]["value"].startswith("DRAFT:"), (name, beat[name]))
+                    if name == "product_transfer_suggestion":
+                        self.assertEqual(beat[name]["value"], "UNAVAILABLE")
+                    elif name in {"audience_psychology", "conversion_function", "viral_mechanism"}:
+                        self.assertTrue(beat[name]["value"].startswith("HYPOTHESIS: DRAFT:"), (name, beat[name]))
+                    else:
+                        self.assertTrue(beat[name]["value"].startswith("DRAFT:"), (name, beat[name]))
                 self.assertEqual(beat["comment_evidence"]["evidence_refs"], [])
+            complete_visual_observation(analyze_request)
+            request_path.write_text(json.dumps(analyze_request), encoding="utf-8")
 
             analyze_stdout = io.StringIO()
             with redirect_stdout(analyze_stdout):
@@ -71,16 +79,11 @@ class PrepareReferenceBreakdownE2ETests(unittest.TestCase):
                     "--input", str(request_path),
                     "--workspace", str(workspace),
                 ])
-            self.assertEqual(analyze_code, 0, analyze_stdout.getvalue())
+            self.assertEqual(analyze_code, 2, analyze_stdout.getvalue())
             result = json.loads(analyze_stdout.getvalue())
-            self.assertEqual(result["status"], "COMPLETED")
-            self.assertEqual(result["output_root"], "reference_analysis")
-            artifact = json.loads(
-                (workspace / "reference_analysis" / "reference_storyboard_analysis.json").read_text(encoding="utf-8")
-            )
-            self.assertIs(artifact["artifact_role_restrictions"]["provider_execution_input"], False)
-            self.assertIs(artifact["artifact_role_restrictions"]["first_frame_eligible"], False)
-            self.assertIs(artifact["artifact_role_restrictions"]["production_storyboard"], False)
+            self.assertEqual(result["status"], "ERROR")
+            self.assertEqual(result["error"]["code"], "REFERENCE_ANALYSIS_INCOMPLETE")
+            self.assertFalse((workspace / "reference_analysis").exists())
 
 
 if __name__ == "__main__":

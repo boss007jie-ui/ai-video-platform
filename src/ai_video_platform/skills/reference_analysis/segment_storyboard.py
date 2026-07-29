@@ -51,6 +51,7 @@ def build_segment_analysis(
     *,
     analyzer_id: str,
     audio_available: bool,
+    hypothesis_policy: str,
 ) -> list[dict[str, object]]:
     """Bind offline observations to real representative frames in exact source intervals."""
     segment_intervals = {(int(item["start_ms"]), int(item["end_ms"])) for item in segments}
@@ -100,11 +101,21 @@ def build_segment_analysis(
                 raw_value is None
                 or raw_value == "UNAVAILABLE"
                 or (field == "speech_music_sound_effect" and not audio_available)
+                or (
+                    field in {"audience_psychology", "viral_mechanism", "conversion_function"}
+                    and hypothesis_policy == "OBSERVED_ONLY"
+                )
             ):
                 observations[field] = {"value": "UNAVAILABLE", "evidence_refs": []}
             else:
+                observed_value = _text(raw_value, f"segment_analysis.{segment_id}.{field}")
+                if (
+                    field in {"audience_psychology", "viral_mechanism", "conversion_function"}
+                    and not observed_value.startswith("HYPOTHESIS: ")
+                ):
+                    observed_value = f"HYPOTHESIS: {observed_value}"
                 observations[field] = {
-                    "value": _text(raw_value, f"segment_analysis.{segment_id}.{field}"),
+                    "value": observed_value,
                     "evidence_refs": (
                         [f"audio:{segment_id}"]
                         if field == "speech_music_sound_effect"

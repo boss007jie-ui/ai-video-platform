@@ -12,10 +12,15 @@ import shutil
 import tempfile
 import zlib
 
+from .analysis_brief import (
+    derive_analysis_profile,
+    requires_replication_package,
+    validate_analysis_brief,
+)
 from .errors import ErrorCode, SkillError
 from .local_media import extract_local_png_frame, probe_local_audio_available
 from .models import StoryboardAnalysisResult
-from .replication_blueprint import ACTION_STATES, ANALYSIS_PROFILES, DEFAULT_ANALYSIS_PROFILE, NARRATIVE_ROLES
+from .replication_blueprint import ACTION_STATES, ANALYSIS_PROFILES, NARRATIVE_ROLES
 from .segment_storyboard import OBSERVATION_FIELDS as _FINE_OBSERVATION_FIELDS
 from .storyboard_boards import (
     decode_png,
@@ -29,9 +34,12 @@ from .storyboard_boards import (
 _VERSION = "1.0.0"
 _OUTPUT_ROOT = "reference_analysis"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_TOP_LEVEL_REQUIRED = {"analysis_version", "selected_reference_video", "video_metadata", "analysis_configuration"}
+_TOP_LEVEL_REQUIRED = {
+    "analysis_version", "analysis_brief", "selected_reference_video", "video_metadata", "analysis_configuration",
+}
 _TOP_LEVEL_ALLOWED = _TOP_LEVEL_REQUIRED | {"analysis_profile", "viral_research_pack", "popular_comments"}
-_CONFIG_KEYS = {"current_product", "keyframes", "timeline", "bottom_line_formula"}
+_CONFIG_KEYS = {"visual_observation", "keyframes", "timeline", "bottom_line_formula"}
+_CONFIG_ALLOWED = _CONFIG_KEYS | {"current_product"}
 _FINE_CONFIG_KEYS = {"fine_segments", "segment_analysis", "core_beats"}
 _REPLICATION_CONFIG_KEYS = {
     "motion_keyframes",
@@ -58,6 +66,27 @@ _OBSERVATION_FIELDS = (
     "reusable_pattern",
     "product_transfer_suggestion",
 )
+_VISUAL_FACT_CATEGORIES = {
+    "SCENE",
+    "SUBJECT",
+    "ACTION",
+    "OBJECT_STATE",
+    "VISIBLE_TEXT",
+    "CAMERA",
+    "FRAME_QUALITY",
+}
+_NON_FACT_DESCRIPTIONS = {
+    "UNAVAILABLE",
+    "UNKNOWN",
+    "N/A",
+    "NONE",
+    "INSPECTED",
+    "OBSERVED",
+    "VIEWED",
+    "IMAGE VIEWED",
+    "FRAME VIEWED",
+}
+_ATTESTATION_MARKERS = ("inspect", "viewed", "observed", "opened", "looked at")
 _TIMELINE_KEYS = {"beat_id", "start_ms", "end_ms", "stage_title", "keyframe_ids", *_OBSERVATION_FIELDS}
 _FORBIDDEN_ROLE_KEYS = {
     "production_storyboard_plan",
@@ -302,7 +331,7 @@ def _validate_keyframes(
             record["source_video_id"] = _text(record.get("source_video_id"), f"{field}.source_video_id")
             record["segment_id"] = _text(record.get("segment_id"), f"{field}.segment_id")
             role = _text(record.get("frame_role"), f"{field}.frame_role")
-            if role not in {"start", "representative", "end", "semantic", "action_peak", "product_state_change", "subtitle_change"}:
+            if role not in {"start", "representative", "end", "review", "semantic", "action_peak", "product_state_change", "subtitle_change"}:
                 raise SkillError(ErrorCode.VALIDATION_FAILED, "Fine keyframe role is invalid", field_paths=(f"{field}.frame_role",))
             record["frame_role"] = role
             storage_key = (str(record["segment_id"]), timestamp)
@@ -334,8 +363,129 @@ def _validate_keyframes(
         records[keyframe_id] = record
         payloads[keyframe_id] = payload
     return records, payloads, images
+
+
+def _validate_visual_observation(
+    value: object,
+    *,
+    keyframes: Mapping[str, Mapping[str, object]],
+    source_media_sha256: str,
+) -> dict[str, object]:
+    field = "analysis_configuration.visual_observation"
+    observation = _mapping(value, field)
+    required = {"status", "observer_id", "method", "source_media_sha256", "frames"}
+    _strict_keys(observation, required, required, field)
+    if observation.get("source_media_sha256") != source_media_sha256:
+        raise SkillError(
+            ErrorCode.REFERENCE_MISMATCH,
+            "Visual observation is not bound to the selected source media",
+            field_paths=(f"{field}.source_media_sha256",),
+        )
+    raw_frames = observation.get("frames")
+    if not isinstance(raw_frames, Sequence) or isinstance(raw_frames, (str, bytes, bytearray)):
+        raise SkillError(
+            ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+            "Every declared keyframe must be inspected with image understanding",
+            field_paths=(f"{field}.frames",),
+        )
+    normalized_frames: list[dict[str, object]] = []
+    observed_ids: set[str] = set()
+    for index, raw in enumerate(raw_frames):
+        frame_field = f"{field}.frames[{index}]"
+        frame = _mapping(raw, frame_field)
+        keys = {"keyframe_id", "sha256", "observed", "visual_facts"}
+        _strict_keys(frame, keys, keys, frame_field)
+        keyframe_id = _text(frame.get("keyframe_id"), f"{frame_field}.keyframe_id")
+        expected = keyframes.get(keyframe_id)
+        if expected is None or keyframe_id in observed_ids:
+            raise SkillError(
+                ErrorCode.EVIDENCE_MISSING,
+                "Visual observation contains an unknown or duplicate keyframe",
+                field_paths=(f"{frame_field}.keyframe_id",),
+            )
+        if frame.get("sha256") != expected["sha256"]:
+            raise SkillError(
+                ErrorCode.REFERENCE_MISMATCH,
+                "Visual observation keyframe digest does not match the decoded source frame",
+                field_paths=(f"{frame_field}.sha256",),
+            )
+        observed = frame.get("observed")
+        if not isinstance(observed, bool):
+            raise SkillError(
+                ErrorCode.VALIDATION_FAILED,
+                "Visual observation flags must be booleans",
+                field_paths=(f"{frame_field}.observed",),
+            )
+        raw_visual_facts = frame.get("visual_facts")
+        if not isinstance(raw_visual_facts, list):
+            raise SkillError(
+                ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+                "Every inspected keyframe requires explicit image-grounded visual facts",
+                field_paths=(f"{frame_field}.visual_facts",),
+            )
+        visual_facts: list[dict[str, str]] = []
+        fact_keys: set[tuple[str, str]] = set()
+        for fact_index, raw_fact in enumerate(raw_visual_facts):
+            fact_field = f"{frame_field}.visual_facts[{fact_index}]"
+            fact = _mapping(raw_fact, fact_field)
+            _strict_keys(fact, {"category", "description"}, {"category", "description"}, fact_field)
+            category = _text(fact.get("category"), f"{fact_field}.category")
+            description = _text(fact.get("description"), f"{fact_field}.description")
+            normalized_description = description.strip().upper()
+            if (
+                category not in _VISUAL_FACT_CATEGORIES
+                or "DRAFT:" in description
+                or normalized_description in _NON_FACT_DESCRIPTIONS
+                or any(marker in description.casefold() for marker in _ATTESTATION_MARKERS)
+                or len(description.strip()) < 12
+                or (category, description) in fact_keys
+            ):
+                raise SkillError(
+                    ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+                    "Visual facts must describe concrete visible content rather than an attestation or placeholder",
+                    field_paths=(fact_field,),
+                )
+            fact_keys.add((category, description))
+            visual_facts.append({"category": category, "description": description})
+        observed_ids.add(keyframe_id)
+        normalized_frames.append({
+            "keyframe_id": keyframe_id,
+            "sha256": frame["sha256"],
+            "observed": observed,
+            "visual_facts": visual_facts,
+        })
+    missing = sorted(set(keyframes) - observed_ids)
+    incomplete = [
+        str(frame["keyframe_id"])
+        for frame in normalized_frames
+        if frame["observed"] is not True or not frame["visual_facts"]
+    ]
+    if (
+        observation.get("status") != "COMPLETED"
+        or observation.get("method") != "agent_image_understanding"
+        or not isinstance(observation.get("observer_id"), str)
+        or not str(observation.get("observer_id")).strip()
+        or str(observation.get("observer_id")).strip() == "UNAVAILABLE"
+        or missing
+        or incomplete
+    ):
+        raise SkillError(
+            ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+            "Reference Analysis cannot publish semantic claims until the execution Agent has inspected every keyframe",
+            field_paths=(field,),
+            details={"missing_frame_ids": missing, "unobserved_frame_ids": incomplete},
+        )
+    return {
+        "status": "COMPLETED",
+        "observer_id": str(observation["observer_id"]).strip(),
+        "method": "agent_image_understanding",
+        "source_media_sha256": source_media_sha256,
+        "frames": normalized_frames,
+    }
+
+
 def _is_unavailable_observation(value: str) -> bool:
-    return value == "UNAVAILABLE" or value.startswith("DRAFT: UNAVAILABLE")
+    return value == "UNAVAILABLE"
 
 
 
@@ -344,6 +494,12 @@ def _observation(value: object, field: str, allowed_refs: set[str]) -> dict[str,
     observation = _mapping(value, field)
     _strict_keys(observation, {"value", "evidence_refs"}, {"value", "evidence_refs"}, field)
     observed = _text(observation.get("value"), f"{field}.value")
+    if "DRAFT:" in observed:
+        raise SkillError(
+            ErrorCode.ANALYSIS_INCOMPLETE,
+            "Unreviewed draft placeholders cannot be published as Reference Analysis",
+            field_paths=(f"{field}.value",),
+        )
     refs = observation.get("evidence_refs")
     if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref for ref in refs):
         raise SkillError(ErrorCode.VALIDATION_FAILED, "evidence_refs must be an array", field_paths=(f"{field}.evidence_refs",))
@@ -360,7 +516,7 @@ def _validate_timeline(
     duration_ms: int,
     keyframes: dict[str, dict[str, object]],
     allowed_refs: set[str],
-    reference_identities: tuple[str, ...],
+    hypothesis_policy: str,
 ) -> tuple[list[dict[str, object]], set[str]]:
     if not isinstance(value, list) or not value:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "timeline must be a non-empty array", field_paths=("analysis_configuration.timeline",))
@@ -392,14 +548,39 @@ def _validate_timeline(
             if keyframe_id in used_keyframes:
                 raise SkillError(ErrorCode.EVIDENCE_MISSING, "A keyframe may bind to only one exact beat interval", field_paths=(f"{field}.keyframe_ids",))
             used_keyframes.add(keyframe_id)
+        stage_title = _text(beat.get("stage_title"), f"{field}.stage_title")
+        if "DRAFT:" in stage_title:
+            raise SkillError(
+                ErrorCode.ANALYSIS_INCOMPLETE,
+                "Unreviewed draft placeholders cannot be published as Reference Analysis",
+                field_paths=(f"{field}.stage_title",),
+            )
         normalized: dict[str, object] = {
             "beat_id": beat_id,
             "interval": {"start_ms": start, "end_ms": end},
-            "stage_title": _text(beat.get("stage_title"), f"{field}.stage_title"),
+            "stage_title": stage_title,
             "keyframe_ids": list(ids),
         }
         for name in _OBSERVATION_FIELDS:
             normalized[name] = _observation(beat.get(name), f"{field}.{name}", allowed_refs)
+            value_text = str(normalized[name]["value"])  # type: ignore[index]
+            if not _is_unavailable_observation(value_text) and "DRAFT:" in value_text:
+                raise SkillError(
+                    ErrorCode.ANALYSIS_INCOMPLETE,
+                    "Unreviewed draft placeholders cannot be published as Reference Analysis",
+                    field_paths=(f"{field}.{name}.value",),
+                )
+        for name in ("audience_psychology", "conversion_function", "viral_mechanism"):
+            hypothesis = normalized[name]
+            value_text = str(hypothesis["value"])  # type: ignore[index]
+            if _is_unavailable_observation(value_text):
+                continue
+            if hypothesis_policy == "OBSERVED_ONLY" or not value_text.startswith("HYPOTHESIS: "):
+                raise SkillError(
+                    ErrorCode.EVIDENCE_MISSING,
+                    "Audience, conversion, and viral claims must be explicitly labeled as unverified hypotheses",
+                    field_paths=(f"{field}.{name}.value",),
+                )
         comment_evidence = normalized["comment_evidence"]
         if (
             not _is_unavailable_observation(str(comment_evidence["value"]))  # type: ignore[index]
@@ -410,11 +591,11 @@ def _validate_timeline(
                 "Comment evidence must cite an available comment record",
                 field_paths=(f"{field}.comment_evidence.evidence_refs",),
             )
-        transfer = str(normalized["product_transfer_suggestion"]["value"]).casefold()  # type: ignore[index]
-        if transfer != "unavailable" and any(identity.casefold() in transfer for identity in reference_identities if len(identity.strip()) >= 4):
+        transfer = str(normalized["product_transfer_suggestion"]["value"])  # type: ignore[index]
+        if not _is_unavailable_observation(transfer):
             raise SkillError(
                 ErrorCode.ARTIFACT_ROLE_FORBIDDEN,
-                "Product adaptation cannot copy reference brand, product, or person identity",
+                "Target-product adaptation belongs to Storyboard; Reference Analysis may publish only source-neutral mechanisms",
                 field_paths=(f"{field}.product_transfer_suggestion.value",),
             )
         beats.append(normalized)
@@ -962,10 +1143,21 @@ def _validate_replication_package(
     }
     if any(blueprint.get(name) != expected for name, expected in component_pairs.items()):
         raise SkillError(ErrorCode.REFERENCE_MISMATCH, "ReferenceBlueprint components disagree with published artifacts", field_paths=(blueprint_field,))
+    if coverage.get("status") != "PASS":
+        raise SkillError(
+            ErrorCode.ANALYSIS_INCOMPLETE,
+            "Requested Reference Analysis capabilities do not have complete visual evidence",
+            field_paths=(coverage_field,),
+            details={
+                "motion_status": _mapping(coverage.get("motion_coverage"), coverage_field).get("status"),
+                "narrative_status": _mapping(coverage.get("narrative_coverage"), coverage_field).get("status"),
+                "scene_status": scene_map.get("status"),
+            },
+        )
     return package
 
 
-def _verify_fine_keyframes_from_source(
+def _verify_keyframes_from_source(
     workspace: Path,
     source: Mapping[str, object],
     keyframes: Mapping[str, Mapping[str, object]],
@@ -976,7 +1168,7 @@ def _verify_fine_keyframes_from_source(
         if _digest(decoded) != frame["sha256"]:
             raise SkillError(
                 ErrorCode.REFERENCE_MISMATCH,
-                "Fine keyframe does not match the selected source video at its timestamp",
+                "Keyframe does not match the selected source video at its timestamp",
                 field_paths=(f"analysis_configuration.keyframes.{frame_id}",),
             )
 
@@ -1171,9 +1363,24 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
     _strict_keys(normalized_request, _TOP_LEVEL_REQUIRED, _TOP_LEVEL_ALLOWED, "request")
     if normalized_request.get("analysis_version") != _VERSION:
         raise SkillError(ErrorCode.VERSION_UNSUPPORTED, "Only storyboard analysis version 1.0.0 is supported", field_paths=("analysis_version",))
-    profile = normalized_request.get("analysis_profile", DEFAULT_ANALYSIS_PROFILE)
+    analysis_brief = validate_analysis_brief(normalized_request.get("analysis_brief"))
+    normalized_request["analysis_brief"] = analysis_brief
+    if analysis_brief["objective"] == "RESULT_COMPARISON":
+        raise SkillError(
+            ErrorCode.SCOPE_FORBIDDEN,
+            "RESULT_COMPARISON belongs to the compare-result command",
+            field_paths=("analysis_brief.objective",),
+        )
+    derived_profile = derive_analysis_profile(analysis_brief)
+    profile = normalized_request.get("analysis_profile", derived_profile)
     if not isinstance(profile, str) or profile not in ANALYSIS_PROFILES:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "analysis_profile is unsupported", field_paths=("analysis_profile",))
+    if profile != derived_profile:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "analysis_profile conflicts with analysis_brief.focus",
+            field_paths=("analysis_profile", "analysis_brief.focus"),
+        )
     normalized_request["analysis_profile"] = profile
     root = _workspace(workspace)
     source, _ = _validate_source(normalized_request, root)
@@ -1181,7 +1388,7 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
     comments, comment_ids = _validate_comments(normalized_request.get("popular_comments"))
     viral_pack = _validate_viral_pack(normalized_request.get("viral_research_pack"))
     config = _mapping(normalized_request.get("analysis_configuration"), "analysis_configuration")
-    _strict_keys(config, _CONFIG_KEYS, _CONFIG_KEYS | _FINE_CONFIG_KEYS | _REPLICATION_CONFIG_KEYS, "analysis_configuration")
+    _strict_keys(config, _CONFIG_KEYS, _CONFIG_ALLOWED | _FINE_CONFIG_KEYS | _REPLICATION_CONFIG_KEYS, "analysis_configuration")
     present_fine_keys = set(config) & _FINE_CONFIG_KEYS
     if present_fine_keys and present_fine_keys != _FINE_CONFIG_KEYS:
         raise SkillError(
@@ -1199,34 +1406,55 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
                 for name in sorted(_REPLICATION_CONFIG_KEYS - present_replication_keys)
             ),
         )
-    current_product = _mapping(config.get("current_product"), "analysis_configuration.current_product")
+    if requires_replication_package(analysis_brief) and (
+        present_fine_keys != _FINE_CONFIG_KEYS
+        or present_replication_keys != _REPLICATION_CONFIG_KEYS
+    ):
+        missing = (_FINE_CONFIG_KEYS - present_fine_keys) | (
+            _REPLICATION_CONFIG_KEYS - present_replication_keys
+        )
+        raise SkillError(
+            ErrorCode.ANALYSIS_INCOMPLETE,
+            "The requested analysis objective, focus, or depth requires complete fine and replication evidence",
+            field_paths=tuple(f"analysis_configuration.{name}" for name in sorted(missing)),
+        )
     product_keys = {"product_id", "category", "display_name"}
-    _strict_keys(current_product, product_keys, product_keys, "analysis_configuration.current_product")
-    for field in product_keys:
-        current_product[field] = _text(current_product.get(field), f"analysis_configuration.current_product.{field}")
+    if "current_product" in config:
+        supplied_product = _mapping(config.get("current_product"), "analysis_configuration.current_product")
+        _strict_keys(supplied_product, product_keys, product_keys, "analysis_configuration.current_product")
+        for field in product_keys:
+            _text(supplied_product.get(field), f"analysis_configuration.current_product.{field}")
+    current_product = {"product_id": "UNAVAILABLE", "category": "UNAVAILABLE", "display_name": "UNAVAILABLE"}
     keyframes, keyframe_payloads, keyframe_images = _validate_keyframes(
         config.get("keyframes"), root, int(metadata["duration_ms"]),
     )
+    visual_observation = _validate_visual_observation(
+        config.get("visual_observation"),
+        keyframes=keyframes,
+        source_media_sha256=str(source["sha256"]),
+    )
+    _verify_keyframes_from_source(root, source, keyframes)
     allowed_refs = {"media:selected-reference", "metadata:video", *(f"keyframe:{key}" for key in keyframes), *(f"comment:{key}" for key in comment_ids)}
     if viral_pack is not None:
         allowed_refs.add(f"viral-research-pack:{viral_pack['artifact_ref']}")
-    reference_identities = (
-        str(source["reference_brand"]),
-        str(source["reference_product"]),
-        *(str(person) for person in source["reference_people"]),  # type: ignore[union-attr]
-    )
     beats, _ = _validate_timeline(
         config.get("timeline"),
         duration_ms=int(metadata["duration_ms"]),
         keyframes=keyframes,
         allowed_refs=allowed_refs,
-        reference_identities=reference_identities,
+        hypothesis_policy=str(analysis_brief["hypothesis_policy"]),
     )
     formula = _observation(
         config.get("bottom_line_formula"),
         "analysis_configuration.bottom_line_formula",
         allowed_refs,
     )
+    if "DRAFT:" in str(formula["value"]):
+        raise SkillError(
+            ErrorCode.ANALYSIS_INCOMPLETE,
+            "Unreviewed draft formula cannot be published as Reference Analysis",
+            field_paths=("analysis_configuration.bottom_line_formula.value",),
+        )
     fine_segments: list[dict[str, object]] = []
     segment_analysis: list[dict[str, object]] = []
     core_beats: list[dict[str, object]] = []
@@ -1243,7 +1471,6 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
             formula=formula,
             audio_available=audio_available,
         )
-        _verify_fine_keyframes_from_source(root, source, keyframes)
         if audio_available:
             allowed_refs.update(f"audio:{segment['segment_id']}" for segment in fine_segments)
     if present_replication_keys:
@@ -1268,7 +1495,7 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
         if core_beats
         else _reference_beats(beats)
     )
-    patterns = _replication_patterns(beats, str(current_product["product_id"]))
+    patterns = _replication_patterns(beats, "UNAVAILABLE")
     analysis_board = render_analysis_board(
         source,
         metadata,
@@ -1357,6 +1584,8 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
         "contract_version": _VERSION,
         "analysis_id": f"reference-storyboard-analysis-{_digest(_canonical(normalized_request))[:20]}",
         "analysis_profile": profile,
+        "analysis_brief": analysis_brief,
+        "visual_observation": visual_observation,
         "artifact_refs": artifact_refs,
         "selected_reference_video": source,
         "viral_research_pack": viral_pack if viral_pack is not None else {"status": "UNAVAILABLE"},
@@ -1387,6 +1616,8 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
         "request_digest": _digest(_canonical(normalized_request)),
         "selected_media_sha256": source["sha256"],
         "selected_media_provenance": source["provenance"],
+        "analysis_brief": analysis_brief,
+        "visual_observation": visual_observation,
         "evidence_index": sorted(allowed_refs),
         "artifact_refs": artifact_refs,
         "provider_calls": 0,

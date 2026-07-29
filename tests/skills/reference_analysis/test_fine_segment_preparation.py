@@ -104,6 +104,35 @@ class PrepareFineSegmentTests(unittest.TestCase):
             self.assertEqual(manifest["provider_calls"], 0)
             self.assertIs(manifest["external_upload"], False)
 
+    def test_long_visual_interval_adds_review_frames_without_fake_semantic_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = ten_segment_request(workspace)
+            request["offline_analysis"]["boundary_signals"] = []
+            request["offline_analysis"]["segment_annotations"] = []
+            request["segmentation_policy"]["max_review_interval_ms"] = 1000
+
+            result = prepare_reference_breakdown(request, workspace=workspace)
+
+            segments = json.loads(
+                (workspace / result.output_root / "fine_segments.json").read_text(encoding="utf-8")
+            )
+            frames = json.loads(
+                (workspace / result.output_root / "keyframes" / "index.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(segments), 1)
+            self.assertFalse(
+                any(
+                    reason["reason"] in {"adaptive_visual_review_boundary", "duration_review_boundary"}
+                    for segment in segments
+                    for reason in segment["segmentation_reasons"]
+                )
+            )
+            review_frames = [frame for frame in frames if frame["frame_role"] == "review"]
+            self.assertTrue(review_frames)
+            timestamps = sorted(frame["timestamp_ms"] for frame in frames)
+            self.assertTrue(all(after - before <= 1000 for before, after in zip(timestamps, timestamps[1:])))
+
 
 if __name__ == "__main__":
     unittest.main()
