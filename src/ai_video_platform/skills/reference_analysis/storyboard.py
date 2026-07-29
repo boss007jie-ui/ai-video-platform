@@ -15,7 +15,7 @@ import zlib
 from .errors import ErrorCode, SkillError
 from .local_media import extract_local_png_frame, probe_local_audio_available
 from .models import StoryboardAnalysisResult
-from .replication_blueprint import ACTION_STATES, ANALYSIS_PROFILES, NARRATIVE_ROLES
+from .replication_blueprint import ACTION_STATES, ANALYSIS_PROFILES, DEFAULT_ANALYSIS_PROFILE, NARRATIVE_ROLES
 from .segment_storyboard import OBSERVATION_FIELDS as _FINE_OBSERVATION_FIELDS
 from .storyboard_boards import (
     decode_png,
@@ -774,24 +774,21 @@ def _validate_replication_package(
     _text(narrative.get("method"), f"{narrative_field}.method")
     facts = _object_list(narrative.get("facts"), f"{narrative_field}.facts")
     fact_ids: set[str] = set()
-    fact_event_ids: set[str] = set()
+    fact_frame_ids: set[str] = set()
     for index, fact in enumerate(facts):
         field = f"{narrative_field}.facts[{index}]"
         fact_id = _text(fact.get("fact_id"), f"{field}.fact_id")
-        event_id = _text(fact.get("event_id"), f"{field}.event_id")
-        role = _text(fact.get("narrative_role"), f"{field}.narrative_role")
-        if fact_id in fact_ids or role not in NARRATIVE_ROLES:
-            raise SkillError(ErrorCode.VALIDATION_FAILED, "Narrative fact identity or role is invalid", field_paths=(field,))
+        if fact_id in fact_ids or any(name in fact for name in ("narrative_role", "proof_loop_id", "repeated_structure_id")):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Narrative fact must contain observations rather than derived story labels", field_paths=(field,))
         fact_ids.add(fact_id)
-        fact_event_ids.add(event_id)
         source_frames = _string_list(fact.get("source_frames"), f"{field}.source_frames", allow_empty=False)
+        fact_frame_ids.update(source_frames)
         source_segments = _string_list(fact.get("source_segments"), f"{field}.source_segments", allow_empty=False)
         if any(frame_id not in keyframes for frame_id in source_frames):
             raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative fact references an unknown source frame", field_paths=(f"{field}.source_frames",))
         derived_segments = list(dict.fromkeys(str(keyframes[frame_id]["segment_id"]) for frame_id in source_frames))
         if source_segments != derived_segments or any(
             keyframes[frame_id].get("source_video_id") != source_video_id
-            or role not in keyframes[frame_id].get("narrative_roles", [])
             for frame_id in source_frames
         ):
             raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Narrative fact evidence crossed its source ownership", field_paths=(field,))
@@ -804,18 +801,27 @@ def _validate_replication_package(
 
     events = _object_list(narrative.get("events"), f"{narrative_field}.events")
     event_ids: set[str] = set()
+    event_frame_ids: set[str] = set()
     for index, event in enumerate(events):
         field = f"{narrative_field}.events[{index}]"
         event_id = _text(event.get("event_id"), f"{field}.event_id")
-        if event_id in event_ids or event_id not in fact_event_ids:
+        if event_id in event_ids:
             raise SkillError(ErrorCode.VALIDATION_FAILED, "Narrative event identity is invalid", field_paths=(f"{field}.event_id",))
         event_ids.add(event_id)
         source_frames = _string_list(event.get("source_frames"), f"{field}.source_frames", allow_empty=False)
+        event_frame_ids.update(source_frames)
         source_segments = _string_list(event.get("source_segments"), f"{field}.source_segments", allow_empty=False)
+        roles = _string_list(event.get("narrative_roles"), f"{field}.narrative_roles", allow_empty=False)
+        if any(role not in NARRATIVE_ROLES for role in roles):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Narrative event role is invalid", field_paths=(f"{field}.narrative_roles",))
         if any(frame_id not in keyframes for frame_id in source_frames):
             raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative event references an unknown source frame", field_paths=(f"{field}.source_frames",))
         derived_segments = list(dict.fromkeys(str(keyframes[frame_id]["segment_id"]) for frame_id in source_frames))
-        if source_segments != derived_segments or any(keyframes[frame_id].get("source_video_id") != source_video_id for frame_id in source_frames):
+        if source_segments != derived_segments or any(
+            keyframes[frame_id].get("source_video_id") != source_video_id
+            or not set(roles).intersection(keyframes[frame_id].get("narrative_roles", []))
+            for frame_id in source_frames
+        ):
             raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Narrative event evidence crossed its source ownership", field_paths=(field,))
         audio_refs = _string_list(event.get("audio_evidence"), f"{field}.audio_evidence")
         subtitle_refs = _string_list(event.get("subtitle_evidence"), f"{field}.subtitle_evidence")
@@ -823,7 +829,7 @@ def _validate_replication_package(
             ref not in {f"frame:{frame_id}" for frame_id in source_frames} for ref in subtitle_refs
         ):
             raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative event audiovisual evidence crossed its source", field_paths=(field,))
-    if event_ids != fact_event_ids:
+    if event_frame_ids != fact_frame_ids:
         raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative events do not cover all facts", field_paths=(f"{narrative_field}.events",))
     for index, edge in enumerate(_object_list(narrative.get("causal_edges"), f"{narrative_field}.causal_edges")):
         field = f"{narrative_field}.causal_edges[{index}]"
@@ -898,6 +904,10 @@ def _validate_replication_package(
             raise SkillError(ErrorCode.EVIDENCE_MISSING, "Coverage-added frames are not valid semantic evidence", field_paths=(f"{coverage_field}.{coverage_name}.added_frame_ids",))
         if not isinstance(coverage_item.get("unresolved_gaps"), list):
             raise SkillError(ErrorCode.VALIDATION_FAILED, "Coverage unresolved_gaps must be an array", field_paths=(f"{coverage_field}.{coverage_name}.unresolved_gaps",))
+        if not isinstance(coverage_item.get("checks"), list) or any(
+            not isinstance(check, Mapping) for check in coverage_item["checks"]
+        ):
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Coverage checks must be structured records", field_paths=(f"{coverage_field}.{coverage_name}.checks",))
     transition_summary = _mapping(coverage.get("motion_transitions"), f"{coverage_field}.motion_transitions")
     if transition_summary.get("transition_count") != len(transitions):
         raise SkillError(ErrorCode.REFERENCE_MISMATCH, "Motion transition coverage count is inconsistent", field_paths=(f"{coverage_field}.motion_transitions",))
@@ -1134,7 +1144,7 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
     _strict_keys(normalized_request, _TOP_LEVEL_REQUIRED, _TOP_LEVEL_ALLOWED, "request")
     if normalized_request.get("analysis_version") != _VERSION:
         raise SkillError(ErrorCode.VERSION_UNSUPPORTED, "Only storyboard analysis version 1.0.0 is supported", field_paths=("analysis_version",))
-    profile = normalized_request.get("analysis_profile", "HYBRID_REPLICATION")
+    profile = normalized_request.get("analysis_profile", DEFAULT_ANALYSIS_PROFILE)
     if not isinstance(profile, str) or profile not in ANALYSIS_PROFILES:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "analysis_profile is unsupported", field_paths=("analysis_profile",))
     normalized_request["analysis_profile"] = profile

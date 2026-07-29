@@ -156,26 +156,45 @@ def derive_core_beats(
     segments: Sequence[Mapping[str, object]],
     analyses: Sequence[Mapping[str, object]],
     keyframes: Sequence[Mapping[str, object]],
+    *,
+    narrative_events: Sequence[Mapping[str, object]] = (),
 ) -> list[dict[str, object]]:
-    """Merge only adjacent segments with the same available semantic purpose."""
+    """Derive finite beats from narrative events, or fall back to adjacent semantic merging."""
     by_segment = {str(item["segment_id"]): item for item in analyses}
     frames_by_segment: dict[str, list[Mapping[str, object]]] = {}
     for frame in keyframes:
         frames_by_segment.setdefault(str(frame["segment_id"]), []).append(frame)
 
     groups: list[list[Mapping[str, object]]] = []
-    prior_signature: tuple[str, ...] | None = None
-    for segment in segments:
-        segment_id = str(segment["segment_id"])
-        analysis = by_segment.get(segment_id)
-        if analysis is None:
-            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Every fine segment requires analysis")
-        signature = _merge_signature(analysis)
-        if groups and signature is not None and signature == prior_signature:
-            groups[-1].append(segment)
-        else:
-            groups.append([segment])
-        prior_signature = signature
+    event_by_first_segment: dict[str, Mapping[str, object]] = {}
+    if narrative_events:
+        cursor = 0
+        for event in narrative_events:
+            source_ids = event.get("source_segments")
+            if not isinstance(source_ids, list) or not source_ids:
+                raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative event source segments are missing")
+            expected = [str(item["segment_id"]) for item in segments[cursor:cursor + len(source_ids)]]
+            if source_ids != expected:
+                raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative events must partition adjacent fine segments")
+            group = list(segments[cursor:cursor + len(source_ids)])
+            groups.append(group)
+            event_by_first_segment[str(group[0]["segment_id"])] = event
+            cursor += len(source_ids)
+        if cursor != len(segments):
+            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative events must cover every fine segment")
+    else:
+        prior_signature: tuple[str, ...] | None = None
+        for segment in segments:
+            segment_id = str(segment["segment_id"])
+            analysis = by_segment.get(segment_id)
+            if analysis is None:
+                raise SkillError(ErrorCode.EVIDENCE_MISSING, "Every fine segment requires analysis")
+            signature = _merge_signature(analysis)
+            if groups and signature is not None and signature == prior_signature:
+                groups[-1].append(segment)
+            else:
+                groups.append([segment])
+            prior_signature = signature
 
     beats: list[dict[str, object]] = []
     for index, group in enumerate(groups):
@@ -183,6 +202,7 @@ def derive_core_beats(
         last = group[-1]
         first_id = str(first["segment_id"])
         analysis = by_segment[first_id]
+        event = event_by_first_segment.get(first_id)
         source_segment_ids = [str(item["segment_id"]) for item in group]
         source_frames = [frame for segment_id in source_segment_ids for frame in frames_by_segment.get(segment_id, [])]
         representative = next(
@@ -200,11 +220,13 @@ def derive_core_beats(
             "end_ms": int(last["end_ms"]),
             "representative_frame_id": representative,
             "merge_reason": (
-                "Adjacent segments share scene/event continuity, narrative purpose, audience psychology, mechanism, action, and product/prop state."
+                "Adjacent source facts were constructed into one verified narrative event."
+                if event is not None
+                else "Adjacent segments share scene/event continuity, narrative purpose, audience psychology, mechanism, action, and product/prop state."
                 if len(group) > 1
                 else "Segment retains a distinct evidence-bound semantic purpose."
             ),
-            "stage_title": str(analysis["stage_title"]),
+            "stage_title": str(event["stage_title"] if event is not None else analysis["stage_title"]),
             "visual_summary": _observation_value(analysis, "scene"),
             "key_action": _observation_value(analysis, "primary_subject_action"),
             "audience_psychology": _observation_value(analysis, "audience_psychology"),

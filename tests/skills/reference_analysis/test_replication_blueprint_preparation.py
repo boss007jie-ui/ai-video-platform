@@ -67,20 +67,41 @@ class ReplicationBlueprintPreparationTests(unittest.TestCase):
             graph = json.loads((root / "narrative_event_graph.json").read_text(encoding="utf-8"))
             coverage = json.loads((root / "coverage_report.json").read_text(encoding="utf-8"))
             self.assertEqual(len(graph["facts"]), 10)
+            self.assertTrue(
+                all(
+                    "narrative_role" not in fact
+                    and "proof_loop_id" not in fact
+                    and "repeated_structure_id" not in fact
+                    for fact in graph["facts"]
+                )
+            )
             self.assertEqual(len(graph["events"]), 5)
             self.assertEqual(len(graph["causal_edges"]), 4)
-            self.assertEqual(
-                {node["role"] for node in graph["global_story"]},
-                {"SETUP", "INCITING_EVENT", "INFORMATION_CHANGE", "PRODUCT_PROOF", "REACTION", "ESCALATION", "REVEAL", "NATURAL_CLOSE"},
-            )
+            self.assertTrue({"SETUP", "REVEAL", "PRODUCT_PROOF", "NATURAL_CLOSE"}.issubset(
+                {node["role"] for node in graph["global_story"]}
+            ))
             self.assertEqual(len(graph["repeated_product_proof_loops"]), 2)
-            self.assertEqual(
-                {loop["repeated_structure_id"] for loop in graph["repeated_product_proof_loops"]},
-                {"proof-structure-001"},
-            )
+            self.assertEqual(len({loop["repeated_structure_id"] for loop in graph["repeated_product_proof_loops"]}), 1)
             self.assertEqual(coverage["narrative_coverage"]["status"], "PASS")
             self.assertGreater(coverage["narrative_coverage"]["added_frame_count"], 0)
+            self.assertTrue(all(isinstance(check, dict) for check in coverage["narrative_coverage"]["checks"]))
             self.assertEqual(coverage["narrative_coverage"]["unresolved_gaps"], [])
+
+    def test_narrative_does_not_force_causality_or_product_proof_repetition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
+            facts = request["offline_analysis"]["narrative_facts"]  # type: ignore[index]
+            facts[2]["start_state"] = "unconnected-state"
+            facts[5]["action"] = "perform a distinct nonrepeated action"
+
+            result = prepare_reference_breakdown(request, workspace=workspace)
+
+            graph = json.loads(
+                (workspace / result.output_root / "narrative_event_graph.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(graph["causal_edges"]), 3)
+            self.assertEqual(graph["repeated_product_proof_loops"], [])
 
     def test_motion_blueprint_captures_contact_states_transitions_and_coverage_additions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -140,6 +161,7 @@ class ReplicationBlueprintPreparationTests(unittest.TestCase):
             self.assertEqual(coverage["motion_coverage"]["status"], "PASS")
             self.assertEqual(coverage["motion_coverage"]["iterations"], 1)
             self.assertGreater(coverage["motion_coverage"]["added_frame_count"], 0)
+            self.assertTrue(coverage["motion_coverage"]["checks"])
             self.assertEqual(coverage["motion_coverage"]["unresolved_gaps"], [])
 
 

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import hashlib
 
 from .errors import ErrorCode, SkillError
 
 
-ANALYSIS_PROFILES = {
-    "MOTION_REPLICATION",
-    "NARRATIVE_REPLICATION",
-    "HYBRID_REPLICATION",
+PROFILE_CAPABILITIES = {
+    "MOTION_REPLICATION": frozenset({"motion", "scene"}),
+    "NARRATIVE_REPLICATION": frozenset({"narrative"}),
+    "HYBRID_REPLICATION": frozenset({"motion", "narrative", "scene"}),
 }
+ANALYSIS_PROFILES = frozenset(PROFILE_CAPABILITIES)
+DEFAULT_ANALYSIS_PROFILE = "HYBRID_REPLICATION"
 
 ACTION_STATES = {
     "ACTION_START",
@@ -72,7 +75,6 @@ _ACTION_KEYS = {
 _STATE_KEYS = {"state", "timestamp_ms", "contact_state"}
 _FACT_KEYS = {
     "fact_id",
-    "event_id",
     "start_ms",
     "end_ms",
     "actor",
@@ -86,10 +88,6 @@ _FACT_KEYS = {
     "information_revealed",
     "spoken_text",
     "subtitle_text",
-    "narrative_role",
-    "repeated_structure_id",
-    "proof_loop_id",
-    "variation_type",
 }
 _CONTEXT_KEYS = {"start_ms", "end_ms", "shot_id", "scene_id"}
 SCENE_FIELDS = (
@@ -109,6 +107,10 @@ SCENE_FIELDS = (
     "major_spatial_relationships",
 )
 _SCENE_KEYS = {"scene_id", "start_ms", "end_ms", *SCENE_FIELDS}
+
+
+def profile_supports(profile: str, capability: str) -> bool:
+    return capability in PROFILE_CAPABILITIES.get(profile, frozenset())
 
 
 def _mapping(value: object, field: str) -> dict[str, object]:
@@ -209,11 +211,10 @@ def normalize_replication_inputs(value: Mapping[str, object], duration_ms: int) 
         fact = _mapping(raw, field)
         _exact_keys(fact, _FACT_KEYS, field)
         fact_id = _text(fact["fact_id"], f"{field}.fact_id")
-        role = _text(fact["narrative_role"], f"{field}.narrative_role")
         start_ms = _integer(fact["start_ms"], f"{field}.start_ms")
         end_ms = _integer(fact["end_ms"], f"{field}.end_ms", minimum=1)
-        if fact_id in seen_facts or role not in NARRATIVE_ROLES or end_ms <= start_ms or end_ms > duration_ms:
-            raise SkillError(ErrorCode.VALIDATION_FAILED, "Narrative fact identity, role, or interval is invalid", field_paths=(field,))
+        if fact_id in seen_facts or end_ms <= start_ms or end_ms > duration_ms:
+            raise SkillError(ErrorCode.VALIDATION_FAILED, "Narrative fact identity or interval is invalid", field_paths=(field,))
         seen_facts.add(fact_id)
         result["narrative_facts"].append({
             **{key: _text(fact[key], f"{field}.{key}") for key in _FACT_KEYS - {"start_ms", "end_ms"}},
@@ -271,83 +272,239 @@ def _owning_segment(segments: Sequence[Mapping[str, object]], timestamp_ms: int)
     raise SkillError(ErrorCode.EVIDENCE_MISSING, "Semantic keyframe timestamp has no owning fine segment")
 
 
+def _add_frame_request(
+    requests: dict[tuple[str, int], dict[str, object]],
+    segment: Mapping[str, object],
+    timestamp_ms: int,
+    *,
+    frame_role: str = "semantic",
+    action_roles: Sequence[str] = (),
+    narrative_roles: Sequence[str] = (),
+) -> None:
+    key = (str(segment["segment_id"]), timestamp_ms)
+    request = requests.setdefault(key, {
+        "segment_id": segment["segment_id"],
+        "shot_id": segment["shot_id"],
+        "scene_id": segment["scene_id"],
+        "timestamp_ms": timestamp_ms,
+        "frame_role": frame_role,
+        "action_roles": [],
+        "narrative_roles": [],
+    })
+    if request["frame_role"] == "semantic" and frame_role != "semantic":
+        request["frame_role"] = frame_role
+    for name, roles in (("action_roles", action_roles), ("narrative_roles", narrative_roles)):
+        for role in roles:
+            if role not in request[name]:  # type: ignore[operator]
+                request[name].append(role)  # type: ignore[union-attr]
+
+
 def plan_keyframe_requests(
     segments: Sequence[Mapping[str, object]],
     profile: str,
     motion_actions: Sequence[Mapping[str, object]],
-    narrative_facts: Sequence[Mapping[str, object]],
-) -> tuple[list[dict[str, object]], dict[str, list[dict[str, object]]]]:
-    """Select profile-specific evidence points and add one bounded coverage pass."""
+) -> list[dict[str, object]]:
+    """Select base frames and the first-pass motion states before coverage."""
     if profile not in ANALYSIS_PROFILES:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "analysis_profile is unsupported")
     requests: dict[tuple[str, int], dict[str, object]] = {}
-
-    def add(
-        segment: Mapping[str, object],
-        timestamp_ms: int,
-        *,
-        frame_role: str = "semantic",
-        action_role: str | None = None,
-        narrative_role: str | None = None,
-    ) -> None:
-        key = (str(segment["segment_id"]), timestamp_ms)
-        request = requests.setdefault(key, {
-            "segment_id": segment["segment_id"],
-            "shot_id": segment["shot_id"],
-            "scene_id": segment["scene_id"],
-            "timestamp_ms": timestamp_ms,
-            "frame_role": frame_role,
-            "action_roles": [],
-            "narrative_roles": [],
-        })
-        if request["frame_role"] == "semantic" and frame_role != "semantic":
-            request["frame_role"] = frame_role
-        if action_role is not None and action_role not in request["action_roles"]:  # type: ignore[operator]
-            request["action_roles"].append(action_role)  # type: ignore[union-attr]
-        if narrative_role is not None and narrative_role not in request["narrative_roles"]:  # type: ignore[operator]
-            request["narrative_roles"].append(narrative_role)  # type: ignore[union-attr]
 
     for segment in segments:
         start_ms = int(segment["start_ms"])
         end_ms = int(segment["end_ms"])
         end_margin = min(100, max(1, (end_ms - start_ms) // 4))
-        add(segment, start_ms, frame_role="start")
-        add(segment, start_ms + ((end_ms - start_ms) // 2), frame_role="representative")
-        add(segment, end_ms - end_margin, frame_role="end")
+        _add_frame_request(requests, segment, start_ms, frame_role="start")
+        _add_frame_request(requests, segment, start_ms + ((end_ms - start_ms) // 2), frame_role="representative")
+        _add_frame_request(requests, segment, end_ms - end_margin, frame_role="end")
 
-    motion_added: list[dict[str, object]] = []
-    if profile in {"MOTION_REPLICATION", "HYBRID_REPLICATION"}:
+    if profile_supports(profile, "motion"):
         initial_states = {"ACTION_START", "ACTION_APEX", "ACTION_END", "FINAL_HOLD"}
         for action in motion_actions:
-            for state in action["states"]:  # type: ignore[union-attr]
+            states = action["states"]  # type: ignore[assignment]
+            for state_index, state in enumerate(states):
                 timestamp_ms = int(state["timestamp_ms"])
                 role = str(state["state"])
-                add(_owning_segment(segments, timestamp_ms), timestamp_ms, action_role=role)
-                if role not in initial_states:
+                if role in initial_states or state_index in {0, len(states) - 1}:
+                    _add_frame_request(
+                        requests,
+                        _owning_segment(segments, timestamp_ms),
+                        timestamp_ms,
+                        action_roles=(role,),
+                    )
+
+    ordered = sorted(requests.values(), key=lambda item: (int(item["timestamp_ms"]), str(item["segment_id"])))
+    return ordered
+
+
+def _narrative_groups(
+    facts: Sequence[Mapping[str, object]],
+    segments: Sequence[Mapping[str, object]],
+    analyses: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    analysis_by_segment = {str(item["segment_id"]): item for item in analyses}
+    groups: list[dict[str, object]] = []
+    for fact in sorted(facts, key=lambda item: (int(item["start_ms"]), str(item["fact_id"]))):
+        midpoint = int(fact["start_ms"]) + ((int(fact["end_ms"]) - int(fact["start_ms"])) // 2)
+        segment = _owning_segment(segments, midpoint)
+        segment_id = str(segment["segment_id"])
+        analysis = analysis_by_segment.get(segment_id)
+        if analysis is None:
+            raise SkillError(ErrorCode.EVIDENCE_MISSING, "Narrative fact has no analyzed source segment")
+        stage_title = str(analysis["stage_title"])
+        if not groups or groups[-1]["stage_title"] != stage_title:
+            groups.append({
+                "event_id": f"event-{len(groups) + 1:03d}",
+                "stage_title": stage_title,
+                "facts": [],
+                "source_segments": [],
+            })
+        groups[-1]["facts"].append(fact)  # type: ignore[union-attr]
+        if segment_id not in groups[-1]["source_segments"]:  # type: ignore[operator]
+            groups[-1]["source_segments"].append(segment_id)  # type: ignore[union-attr]
+    return groups
+
+
+def _derived_event_roles(group: Mapping[str, object], index: int, count: int) -> list[str]:
+    facts = group["facts"]  # type: ignore[assignment]
+    title = str(group["stage_title"]).casefold()
+    roles: list[str] = []
+    if index == 0:
+        roles.append("SETUP")
+    elif index == 1:
+        roles.append("INCITING_EVENT")
+    elif index < count - 1:
+        roles.append("ESCALATION")
+    if any(str(fact["information_revealed"]) != "UNAVAILABLE" for fact in facts):
+        roles.extend(("INFORMATION_CHANGE", "REVEAL"))
+    if any(token in title for token in ("demo", "proof", "result", "reveal")):
+        roles.append("PRODUCT_PROOF")
+    if index == count - 1:
+        roles.append("NATURAL_CLOSE")
+    return list(dict.fromkeys(roles or ["INFORMATION_CHANGE"]))
+
+
+def plan_coverage_keyframe_requests(
+    segments: Sequence[Mapping[str, object]],
+    profile: str,
+    motion_actions: Sequence[Mapping[str, object]],
+    narrative_facts: Sequence[Mapping[str, object]],
+    segment_analysis: Sequence[Mapping[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, list[dict[str, object]]]]:
+    """Check adjacent first-pass evidence and request one bounded supplementation pass."""
+    requests: dict[tuple[str, int], dict[str, object]] = {}
+
+    def add(timestamp_ms: int, *, action_roles: Sequence[str] = (), narrative_roles: Sequence[str] = ()) -> None:
+        segment = _owning_segment(segments, timestamp_ms)
+        _add_frame_request(
+            requests,
+            segment,
+            timestamp_ms,
+            action_roles=action_roles,
+            narrative_roles=narrative_roles,
+        )
+
+    motion_added: list[dict[str, object]] = []
+    motion_checks: list[dict[str, object]] = []
+    if profile_supports(profile, "motion"):
+        initial_states = {"ACTION_START", "ACTION_APEX", "ACTION_END", "FINAL_HOLD"}
+        for action in motion_actions:
+            states = action["states"]  # type: ignore[assignment]
+            selected_indices = [
+                index for index, state in enumerate(states)
+                if state["state"] in initial_states or index in {0, len(states) - 1}
+            ]
+            for before_index, after_index in zip(selected_indices, selected_indices[1:]):
+                before = states[before_index]
+                after = states[after_index]
+                missing = states[before_index + 1:after_index]
+                check = {
+                    "action_id": action["action_id"],
+                    "from_state": before["state"],
+                    "to_state": after["state"],
+                    "start_ms": before["timestamp_ms"],
+                    "end_ms": after["timestamp_ms"],
+                    "contact_state_changed": before["contact_state"] != after["contact_state"],
+                    "missing_states": [state["state"] for state in missing],
+                    "supplemented": bool(missing),
+                }
+                motion_checks.append(check)
+                for state in missing:
+                    timestamp_ms = int(state["timestamp_ms"])
+                    add(timestamp_ms, action_roles=(str(state["state"]),))
                     motion_added.append({
                         "action_id": action["action_id"],
-                        "state": role,
+                        "state": state["state"],
                         "timestamp_ms": timestamp_ms,
-                        "reason": "motion_state_gap_between_initial_keyframes",
+                        "gap_start_ms": before["timestamp_ms"],
+                        "gap_end_ms": after["timestamp_ms"],
+                        "reason": "adjacent_motion_keyframes_skip_an_evidenced_state",
                     })
 
     narrative_added: list[dict[str, object]] = []
-    if profile in {"NARRATIVE_REPLICATION", "HYBRID_REPLICATION"}:
-        initial_roles = {"SETUP", "REVEAL", "PRODUCT_PROOF", "RESOLUTION", "CTA", "NATURAL_CLOSE"}
-        for fact in narrative_facts:
-            timestamp_ms = int(fact["start_ms"]) + ((int(fact["end_ms"]) - int(fact["start_ms"])) // 2)
-            role = str(fact["narrative_role"])
-            add(_owning_segment(segments, timestamp_ms), timestamp_ms, narrative_role=role)
-            if role not in initial_roles:
-                narrative_added.append({
-                    "fact_id": fact["fact_id"],
-                    "narrative_role": role,
-                    "timestamp_ms": timestamp_ms,
-                    "reason": "narrative_state_gap_between_initial_keyframes",
+    narrative_checks: list[dict[str, object]] = []
+    narrative_gaps: list[dict[str, object]] = []
+    if profile_supports(profile, "narrative"):
+        groups = _narrative_groups(narrative_facts, segments, segment_analysis)
+        for event_index, group in enumerate(groups):
+            roles = _derived_event_roles(group, event_index, len(groups))
+            facts = group["facts"]  # type: ignore[assignment]
+            if not facts:
+                continue
+            first = facts[0]
+            first_timestamp = int(first["start_ms"]) + ((int(first["end_ms"]) - int(first["start_ms"])) // 2)
+            add(first_timestamp, narrative_roles=roles)
+            for before, after in zip(facts, facts[1:]):
+                state_continuity = before["end_state"] == after["start_state"]
+                important_change = (
+                    before["end_state"] != after["end_state"]
+                    or after["information_revealed"] != "UNAVAILABLE"
+                    or after["subtitle_text"] != "UNAVAILABLE"
+                )
+                timestamp_ms = int(after["start_ms"]) + ((int(after["end_ms"]) - int(after["start_ms"])) // 2)
+                narrative_checks.append({
+                    "event_id": group["event_id"],
+                    "from_fact_id": before["fact_id"],
+                    "to_fact_id": after["fact_id"],
+                    "state_continuity": state_continuity,
+                    "important_change": important_change,
+                    "supplemented": important_change,
+                })
+                if important_change:
+                    add(timestamp_ms, narrative_roles=roles)
+                    narrative_added.append({
+                        "event_id": group["event_id"],
+                        "fact_id": after["fact_id"],
+                        "narrative_roles": roles,
+                        "timestamp_ms": timestamp_ms,
+                        "reason": "adjacent_narrative_evidence_skips_an_evidenced_state_change",
+                    })
+        for before_group, after_group in zip(groups, groups[1:]):
+            before = before_group["facts"][-1]  # type: ignore[index]
+            after = after_group["facts"][0]  # type: ignore[index]
+            state_continuity = before["end_state"] == after["start_state"]
+            narrative_checks.append({
+                "from_event_id": before_group["event_id"],
+                "to_event_id": after_group["event_id"],
+                "from_fact_id": before["fact_id"],
+                "to_fact_id": after["fact_id"],
+                "state_continuity": state_continuity,
+                "supplemented": False,
+            })
+            if not state_continuity:
+                narrative_gaps.append({
+                    "from_event_id": before_group["event_id"],
+                    "to_event_id": after_group["event_id"],
+                    "reason": "no_source_fact_explains_the_inter_event_state_jump",
                 })
 
     ordered = sorted(requests.values(), key=lambda item: (int(item["timestamp_ms"]), str(item["segment_id"])))
-    return ordered, {"motion_added": motion_added, "narrative_added": narrative_added}
+    return ordered, {
+        "motion_added": motion_added,
+        "motion_checks": motion_checks,
+        "narrative_added": narrative_added,
+        "narrative_checks": narrative_checks,
+        "narrative_gaps": narrative_gaps,
+    }
 
 
 def _frame_lookup(keyframes: Sequence[Mapping[str, object]]) -> dict[tuple[str, int], Mapping[str, object]]:
@@ -365,31 +522,41 @@ def _frame_for_timestamp(
     return None
 
 
-def build_motion_artifacts(
-    actions: Sequence[Mapping[str, object]],
+def _resolve_coverage_frames(
+    candidates: Sequence[Mapping[str, object]],
     segments: Sequence[Mapping[str, object]],
-    keyframes: Sequence[Mapping[str, object]],
-    coverage_candidates: Sequence[Mapping[str, object]],
-    *,
-    profile: str,
-) -> tuple[dict[str, object], dict[str, object]]:
-    """Create action state chains, transitions, and one bounded motion coverage result."""
-    if profile not in {"MOTION_REPLICATION", "HYBRID_REPLICATION"}:
-        return (
-            {"analysis_profile": profile, "status": "NOT_REQUESTED", "action_chains": []},
-            {"motion_coverage": {"status": "NOT_REQUESTED", "iterations": 0, "added_frame_count": 0, "added_frame_ids": [], "unresolved_gaps": []}},
-        )
-    lookup = _frame_lookup(keyframes)
-    chains: list[dict[str, object]] = []
-    transitions: list[dict[str, object]] = []
-    unresolved: list[dict[str, object]] = []
+    lookup: Mapping[tuple[str, int], Mapping[str, object]],
+) -> tuple[list[str], list[dict[str, object]]]:
     added_frame_ids: list[str] = []
-    for candidate in coverage_candidates:
+    unresolved: list[dict[str, object]] = []
+    for candidate in candidates:
         frame = _frame_for_timestamp(segments, lookup, int(candidate["timestamp_ms"]))
         if frame is None:
             unresolved.append(dict(candidate))
         elif str(frame["frame_id"]) not in added_frame_ids:
             added_frame_ids.append(str(frame["frame_id"]))
+    return added_frame_ids, unresolved
+
+
+def build_motion_artifacts(
+    actions: Sequence[Mapping[str, object]],
+    segments: Sequence[Mapping[str, object]],
+    keyframes: Sequence[Mapping[str, object]],
+    coverage_candidates: Sequence[Mapping[str, object]],
+    coverage_checks: Sequence[Mapping[str, object]],
+    *,
+    profile: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Create action state chains, transitions, and one bounded motion coverage result."""
+    if not profile_supports(profile, "motion"):
+        return (
+            {"analysis_profile": profile, "status": "NOT_REQUESTED", "action_chains": [], "transitions": []},
+            {"motion_coverage": {"status": "NOT_REQUESTED", "iterations": 0, "initial_keyframe_count": 0, "added_frame_count": 0, "added_frame_ids": [], "checks": [], "unresolved_gaps": []}, "motion_transitions": {"transition_count": 0}},
+        )
+    lookup = _frame_lookup(keyframes)
+    chains: list[dict[str, object]] = []
+    transitions: list[dict[str, object]] = []
+    added_frame_ids, unresolved = _resolve_coverage_frames(coverage_candidates, segments, lookup)
     for action in actions:
         states: list[dict[str, object]] = []
         for raw_state in action["states"]:  # type: ignore[union-attr]
@@ -461,6 +628,7 @@ def build_motion_artifacts(
             "initial_keyframe_count": max(0, sum(len(action["states"]) for action in actions) - len(added_frame_ids)),
             "added_frame_count": len(added_frame_ids),
             "added_frame_ids": added_frame_ids,
+            "checks": [dict(check) for check in coverage_checks],
             "unresolved_gaps": unresolved,
         },
         "motion_transitions": {"transition_count": len(transitions)},
@@ -473,27 +641,25 @@ def build_narrative_artifacts(
     facts: Sequence[Mapping[str, object]],
     segments: Sequence[Mapping[str, object]],
     keyframes: Sequence[Mapping[str, object]],
+    segment_analysis: Sequence[Mapping[str, object]],
     coverage_candidates: Sequence[Mapping[str, object]],
+    coverage_checks: Sequence[Mapping[str, object]],
+    coverage_gaps: Sequence[Mapping[str, object]],
     *,
     profile: str,
     audio_available: bool,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Build verified facts into events, causal order, global roles, and proof loops."""
-    if profile not in {"NARRATIVE_REPLICATION", "HYBRID_REPLICATION"}:
+    method = "FACTS_TO_EVENTS_TO_VERIFIED_CAUSAL_GRAPH_TO_GLOBAL_STORY"
+    if not profile_supports(profile, "narrative"):
         return (
-            {"analysis_profile": profile, "status": "NOT_REQUESTED", "facts": [], "events": [], "causal_edges": [], "global_story": [], "repeated_product_proof_loops": []},
-            {"narrative_coverage": {"status": "NOT_REQUESTED", "iterations": 0, "added_frame_count": 0, "added_frame_ids": [], "unresolved_gaps": []}},
+            {"analysis_profile": profile, "status": "NOT_REQUESTED", "method": method, "facts": [], "events": [], "causal_edges": [], "global_story": [], "repeated_product_proof_loops": []},
+            {"narrative_coverage": {"status": "NOT_REQUESTED", "iterations": 0, "initial_keyframe_count": 0, "added_frame_count": 0, "added_frame_ids": [], "checks": [], "unresolved_gaps": []}},
         )
     lookup = _frame_lookup(keyframes)
     normalized_facts: list[dict[str, object]] = []
-    unresolved: list[dict[str, object]] = []
-    added_frame_ids: list[str] = []
-    for candidate in coverage_candidates:
-        frame = _frame_for_timestamp(segments, lookup, int(candidate["timestamp_ms"]))
-        if frame is None:
-            unresolved.append(dict(candidate))
-        elif str(frame["frame_id"]) not in added_frame_ids:
-            added_frame_ids.append(str(frame["frame_id"]))
+    added_frame_ids, unresolved = _resolve_coverage_frames(coverage_candidates, segments, lookup)
+    unresolved.extend(dict(gap) for gap in coverage_gaps)
     for fact in facts:
         timestamp_ms = int(fact["start_ms"]) + ((int(fact["end_ms"]) - int(fact["start_ms"])) // 2)
         frame = _frame_for_timestamp(segments, lookup, timestamp_ms)
@@ -513,16 +679,29 @@ def build_narrative_artifacts(
                 [f"frame:{frame['frame_id']}"] if fact["subtitle_text"] != "UNAVAILABLE" else []
             ),
         })
+    covered_segment_ids = {
+        str(segment_id)
+        for fact in normalized_facts
+        for segment_id in fact["source_segments"]  # type: ignore[union-attr]
+    }
+    for segment in segments:
+        if str(segment["segment_id"]) not in covered_segment_ids:
+            unresolved.append({
+                "segment_id": segment["segment_id"],
+                "reason": "no_verified_narrative_fact_for_source_segment",
+            })
 
-    event_groups: dict[str, list[dict[str, object]]] = {}
-    for fact in normalized_facts:
-        event_groups.setdefault(str(fact["event_id"]), []).append(fact)
+    event_groups = _narrative_groups(normalized_facts, segments, segment_analysis)
     events: list[dict[str, object]] = []
-    for event_id, event_facts in event_groups.items():
+    for event_index, group in enumerate(event_groups):
+        event_id = str(group["event_id"])
+        event_facts = group["facts"]  # type: ignore[assignment]
         event_facts.sort(key=lambda item: int(item["start_ms"]))
         first, last = event_facts[0], event_facts[-1]
+        roles = _derived_event_roles(group, event_index, len(event_groups))
         events.append({
             "event_id": event_id,
+            "stage_title": group["stage_title"],
             "actor": first["actor"],
             "action": " -> ".join(str(item["action"]) for item in event_facts),
             "object": first["object"],
@@ -538,51 +717,68 @@ def build_narrative_artifacts(
             ],
             "start_ms": first["start_ms"],
             "end_ms": last["end_ms"],
-            "narrative_roles": list(dict.fromkeys(str(item["narrative_role"]) for item in event_facts)),
+            "narrative_roles": roles,
             "source_segments": list(dict.fromkeys(segment for item in event_facts for segment in item["source_segments"])),
             "source_frames": list(dict.fromkeys(frame for item in event_facts for frame in item["source_frames"])),
             "audio_evidence": list(dict.fromkeys(ref for item in event_facts for ref in item["audio_evidence"])),
             "subtitle_evidence": list(dict.fromkeys(ref for item in event_facts for ref in item["subtitle_evidence"])),
         })
-    events.sort(key=lambda item: int(item["start_ms"]))
-    causal_edges = [
-        {
-            "from_event_id": before["event_id"],
-            "to_event_id": after["event_id"],
-            "relation": "TEMPORAL_AND_STATE_CONTINUITY",
-            "evidence_frames": [before["source_frames"][-1], after["source_frames"][0]],  # type: ignore[index]
-        }
-        for before, after in zip(events, events[1:])
-    ]
-    global_story = [
-        {
-            "node_id": f"story-node-{index + 1:03d}",
-            "role": fact["narrative_role"],
-            "event_id": fact["event_id"],
-            "source_frames": fact["source_frames"],
-        }
-        for index, fact in enumerate(normalized_facts)
-    ]
+    causal_edges: list[dict[str, object]] = []
+    for before, after in zip(events, events[1:]):
+        if before["end_state"] == after["start_state"]:
+            causal_edges.append({
+                "from_event_id": before["event_id"],
+                "to_event_id": after["event_id"],
+                "relation": "VERIFIED_STATE_CONTINUITY",
+                "evidence_frames": [before["source_frames"][-1], after["source_frames"][0]],  # type: ignore[index]
+            })
+    global_story: list[dict[str, object]] = []
+    for event in events:
+        for role in event["narrative_roles"]:  # type: ignore[union-attr]
+            global_story.append({
+                "node_id": f"story-node-{len(global_story) + 1:03d}",
+                "role": role,
+                "event_id": event["event_id"],
+                "source_frames": event["source_frames"],
+            })
 
-    proof_groups: dict[str, list[dict[str, object]]] = {}
+    frame_by_id = {str(frame["frame_id"]): frame for frame in keyframes}
+    facts_by_scene: dict[str, list[dict[str, object]]] = {}
     for fact in normalized_facts:
-        proof_groups.setdefault(str(fact["proof_loop_id"]), []).append(fact)
-    proof_loops = [
-        {
-            "proof_loop_id": proof_loop_id,
-            "repeated_structure_id": loop_facts[0]["repeated_structure_id"],
-            "variation_type": loop_facts[0]["variation_type"],
+        frame_id = str(fact["source_frames"][0])  # type: ignore[index]
+        scene_id = str(frame_by_id[frame_id]["scene_id"])
+        facts_by_scene.setdefault(scene_id, []).append(fact)
+    candidates: list[tuple[str, list[dict[str, object]], tuple[str, ...]]] = []
+    for scene_id, scene_facts in facts_by_scene.items():
+        scene_facts.sort(key=lambda item: int(item["start_ms"]))
+        signature = tuple(str(item["action"]).casefold() for item in scene_facts)
+        if len(signature) >= 2:
+            candidates.append((scene_id, scene_facts, signature))
+    repeated_signatures = {
+        signature for _, _, signature in candidates
+        if sum(1 for _, _, other in candidates if other == signature) >= 2
+    }
+    structure_ids = {
+        signature: f"proof-structure-{hashlib.sha256('|'.join(signature).encode('utf-8')).hexdigest()[:12]}"
+        for signature in repeated_signatures
+    }
+    proof_loops: list[dict[str, object]] = []
+    for scene_id, loop_facts, signature in candidates:
+        if signature not in repeated_signatures:
+            continue
+        proof_loops.append({
+            "proof_loop_id": f"proof-loop-{len(proof_loops) + 1:03d}",
+            "repeated_structure_id": structure_ids[signature],
+            "variation_type": "SCENE_VARIATION",
             "retained_action_structure": [str(item["action"]) for item in loop_facts],
-            "changed_product_or_scene_elements": list(dict.fromkeys(str(item["location"]) for item in loop_facts)),
+            "changed_product_or_scene_elements": [scene_id, *list(dict.fromkeys(str(item["location"]) for item in loop_facts))],
             "source_segments": list(dict.fromkeys(segment for item in loop_facts for segment in item["source_segments"])),
             "source_frames": list(dict.fromkeys(frame for item in loop_facts for frame in item["source_frames"])),
-        }
-        for proof_loop_id, loop_facts in proof_groups.items()
-    ]
+        })
     graph = {
         "analysis_profile": profile,
         "status": "PASS" if facts and not unresolved else ("UNAVAILABLE" if not facts else "INCOMPLETE"),
-        "method": "FACTS_TO_EVENTS_TO_CAUSAL_GRAPH_TO_GLOBAL_STORY",
+        "method": method,
         "facts": normalized_facts,
         "events": events,
         "causal_edges": causal_edges,
@@ -593,18 +789,10 @@ def build_narrative_artifacts(
         "narrative_coverage": {
             "status": "PASS" if facts and not unresolved else ("UNAVAILABLE" if not facts else "INCOMPLETE"),
             "iterations": 1 if facts else 0,
+            "initial_keyframe_count": len(events),
             "added_frame_count": len(added_frame_ids),
             "added_frame_ids": added_frame_ids,
-            "checks": [
-                "adjacent_story_jump",
-                "product_state_change",
-                "information_reveal",
-                "important_reaction",
-                "audio_subtitle_alignment",
-                "beat_causality",
-                "repeated_product_proof",
-                "turning_point_and_result",
-            ],
+            "checks": [dict(check) for check in coverage_checks],
             "unresolved_gaps": unresolved,
         }
     }
@@ -739,7 +927,9 @@ __all__ = [
     "ACTION_STATES",
     "ANALYSIS_PROFILES",
     "CONTACT_STATES",
+    "DEFAULT_ANALYSIS_PROFILE",
     "NARRATIVE_ROLES",
+    "PROFILE_CAPABILITIES",
     "SCENE_FIELDS",
     "apply_segment_contexts",
     "build_motion_artifacts",
@@ -747,5 +937,7 @@ __all__ = [
     "build_scene_blocking_and_constraints",
     "enrich_segment_analysis",
     "normalize_replication_inputs",
+    "plan_coverage_keyframe_requests",
     "plan_keyframe_requests",
+    "profile_supports",
 ]

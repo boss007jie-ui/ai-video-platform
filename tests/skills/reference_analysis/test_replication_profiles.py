@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ai_video_platform.skills.reference_analysis import SkillError, prepare_reference_breakdown
+from ai_video_platform.skills.reference_analysis import SkillError, analyze_storyboard, prepare_reference_breakdown
 
 from tests.skills.reference_analysis.fine_segment_fixture import replication_request, ten_segment_request
 
@@ -53,6 +53,23 @@ class ReplicationProfileTests(unittest.TestCase):
             )
             self.assertEqual(manifest["analysis_profile"], "MOTION_REPLICATION")
             self.assertEqual(publication["analysis_profile"], "MOTION_REPLICATION")
+
+    def test_every_profile_completes_the_public_prepare_and_publish_flow(self) -> None:
+        for profile in ("MOTION_REPLICATION", "NARRATIVE_REPLICATION", "HYBRID_REPLICATION"):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                prepared = prepare_reference_breakdown(
+                    replication_request(workspace, profile=profile),
+                    workspace=workspace,
+                )
+                publication_request = json.loads(
+                    (workspace / prepared.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+                )
+
+                published = analyze_storyboard(publication_request, workspace=workspace)
+
+                self.assertEqual(published.status, "COMPLETED")
+                self.assertEqual(published.artifact["analysis_profile"], profile)
 
     def test_unknown_profile_fails_before_media_processing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

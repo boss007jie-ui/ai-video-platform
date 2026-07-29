@@ -216,26 +216,20 @@ def replication_request(
             ],
         },
     ]
-    narrative_roles = (
-        "SETUP",
-        "INCITING_EVENT",
-        "INFORMATION_CHANGE",
-        "PRODUCT_PROOF",
-        "REACTION",
-        "SETUP",
-        "ESCALATION",
-        "REVEAL",
-        "PRODUCT_PROOF",
-        "NATURAL_CLOSE",
+    repeated_actions = (
+        "establish wearing state",
+        "adjust garment structure",
+        "show front silhouette",
+        "reveal construction detail",
+        "turn body to show back",
     )
     offline["narrative_facts"] = [  # type: ignore[index]
         {
             "fact_id": f"fact-{index + 1:03d}",
-            "event_id": f"event-{index // 2 + 1:03d}",
             "start_ms": index * 400,
             "end_ms": (index + 1) * 400,
             "actor": "subject-001",
-            "action": f"verified demonstration step {index + 1}",
+            "action": repeated_actions[index % len(repeated_actions)],
             "object": "garment",
             "location": "bed surface" if index < 5 else "living-room surface",
             "start_state": f"state-{index:02d}",
@@ -245,10 +239,6 @@ def replication_request(
             "information_revealed": "garment construction detail" if index in {3, 7} else "UNAVAILABLE",
             "spoken_text": "UNAVAILABLE",
             "subtitle_text": f"Proof step {index + 1}",
-            "narrative_role": narrative_roles[index],
-            "repeated_structure_id": "proof-structure-001",
-            "proof_loop_id": "proof-loop-001" if index < 5 else "proof-loop-002",
-            "variation_type": "BASE" if index < 5 else "SCENE_AND_STYLE_VARIATION",
         }
         for index in range(10)
     ]

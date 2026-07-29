@@ -22,12 +22,15 @@ from .local_media import (
 )
 from .models import ReferenceBreakdownDraftResult
 from .replication_blueprint import (
+    ANALYSIS_PROFILES,
+    DEFAULT_ANALYSIS_PROFILE,
     apply_segment_contexts,
     build_motion_artifacts,
     build_narrative_artifacts,
     build_scene_blocking_and_constraints,
     enrich_segment_analysis,
     normalize_replication_inputs,
+    plan_coverage_keyframe_requests,
     plan_keyframe_requests,
 )
 from .segment_storyboard import build_segment_analysis, derive_core_beats, derive_formula
@@ -42,11 +45,6 @@ _REQUEST_REQUIRED = {"analysis_version", "mode", "selected_reference_video"}
 _REQUEST_ALLOWED = _REQUEST_REQUIRED | {"video_metadata", "current_product", "policy"}
 _FINE_ALLOWED = _REQUEST_REQUIRED | {
     "analysis_profile", "video_metadata", "current_product", "segmentation_policy", "offline_analysis",
-}
-_ANALYSIS_PROFILES = {
-    "MOTION_REPLICATION",
-    "NARRATIVE_REPLICATION",
-    "HYBRID_REPLICATION",
 }
 _POLICY_KEYS = {"interval_ms", "max_keyframes"}
 _PRODUCT_KEYS = {"product_id", "category", "display_name"}
@@ -79,9 +77,9 @@ def _number(value: object, field: str, *, minimum: float, maximum: float) -> flo
 
 def _analysis_profile(value: object) -> str:
     if value is None:
-        return "HYBRID_REPLICATION"
+        return DEFAULT_ANALYSIS_PROFILE
     profile = _text(value, "analysis_profile")
-    if profile not in _ANALYSIS_PROFILES:
+    if profile not in ANALYSIS_PROFILES:
         raise SkillError(
             ErrorCode.VALIDATION_FAILED,
             "analysis_profile is unsupported",
@@ -423,11 +421,10 @@ def _prepare_fine_breakdown(
     )
     replication_inputs = normalize_replication_inputs(offline, int(metadata["duration_ms"]))
     segments = apply_segment_contexts(segments, replication_inputs["segment_contexts"])
-    keyframe_requests, coverage_candidates = plan_keyframe_requests(
+    keyframe_requests = plan_keyframe_requests(
         segments,
         str(normalized["analysis_profile"]),
         replication_inputs["motion_actions"],
-        replication_inputs["narrative_facts"],
     )
     stage = Path(tempfile.mkdtemp(prefix=f".{_OUTPUT_ROOT}-stage-", dir=root))
     target = root / _OUTPUT_ROOT
@@ -435,10 +432,20 @@ def _prepare_fine_breakdown(
     keyframe_dir = stage / "keyframes"
     keyframe_dir.mkdir()
     semantic_counters: dict[str, int] = {}
-    for request in keyframe_requests:
+    keyframe_by_source_point: dict[tuple[str, int], dict[str, object]] = {}
+
+    def store_keyframe(request: Mapping[str, object]) -> None:
         segment_id = str(request["segment_id"])
         role = str(request["frame_role"])
         timestamp_ms = int(request["timestamp_ms"])
+        source_point = (segment_id, timestamp_ms)
+        existing = keyframe_by_source_point.get(source_point)
+        if existing is not None:
+            for name in ("action_roles", "narrative_roles"):
+                for semantic_role in request[name]:  # type: ignore[index]
+                    if semantic_role not in existing[name]:  # type: ignore[operator]
+                        existing[name].append(semantic_role)  # type: ignore[union-attr]
+            return
         if role in {"start", "representative", "end"}:
             frame_id = f"{segment_id}-{role}"
         else:
@@ -447,7 +454,7 @@ def _prepare_fine_breakdown(
         filename = f"{frame_id}.png"
         payload = _extract_keyframe(media, timestamp_ms, near_end=False)
         (keyframe_dir / filename).write_bytes(payload)
-        keyframes.append({
+        record = {
             "frame_id": frame_id,
             "source_video_id": source["source_id"],
             "shot_id": request["shot_id"],
@@ -459,7 +466,12 @@ def _prepare_fine_breakdown(
             "narrative_roles": list(request["narrative_roles"]),
             "asset_path": f"{_OUTPUT_ROOT}/keyframes/{filename}",
             "sha256": _digest(payload),
-        })
+        }
+        keyframes.append(record)
+        keyframe_by_source_point[source_point] = record
+
+    for request in keyframe_requests:
+        store_keyframe(request)
     segment_analysis = build_segment_analysis(
         segments,
         keyframes,
@@ -467,18 +479,32 @@ def _prepare_fine_breakdown(
         analyzer_id=str(offline["analyzer_id"]),
         audio_available=audio_available,
     )
+    coverage_requests, coverage_candidates = plan_coverage_keyframe_requests(
+        segments,
+        str(normalized["analysis_profile"]),
+        replication_inputs["motion_actions"],
+        replication_inputs["narrative_facts"],
+        segment_analysis,
+    )
+    for request in coverage_requests:
+        store_keyframe(request)
+    keyframes.sort(key=lambda item: (int(item["timestamp_ms"]), str(item["segment_id"]), str(item["frame_id"])))
     motion_artifacts, coverage_report = build_motion_artifacts(
         replication_inputs["motion_actions"],
         segments,
         keyframes,
         coverage_candidates["motion_added"],
+        coverage_candidates["motion_checks"],
         profile=str(normalized["analysis_profile"]),
     )
     narrative_graph, narrative_coverage = build_narrative_artifacts(
         replication_inputs["narrative_facts"],
         segments,
         keyframes,
+        segment_analysis,
         coverage_candidates["narrative_added"],
+        coverage_candidates["narrative_checks"],
+        coverage_candidates["narrative_gaps"],
         profile=str(normalized["analysis_profile"]),
         audio_available=audio_available,
     )
@@ -507,7 +533,23 @@ def _prepare_fine_breakdown(
         "replication_constraints": replication_constraints,
         "coverage": coverage_report,
     }
-    core_beats = derive_core_beats(segments, segment_analysis, keyframes)
+    narrative_events = narrative_graph.get("events", [])
+    event_segment_ids = [
+        str(segment_id)
+        for event in narrative_events  # type: ignore[union-attr]
+        for segment_id in event["source_segments"]
+    ]
+    complete_narrative_events = (
+        narrative_events
+        if event_segment_ids == [str(segment["segment_id"]) for segment in segments]
+        else []
+    )
+    core_beats = derive_core_beats(
+        segments,
+        segment_analysis,
+        keyframes,
+        narrative_events=complete_narrative_events,  # type: ignore[arg-type]
+    )
     formula = derive_formula(core_beats)
     analysis_by_segment = {str(item["segment_id"]): item for item in segment_analysis}
     timeline: list[dict[str, object]] = []

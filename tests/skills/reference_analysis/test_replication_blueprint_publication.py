@@ -50,6 +50,10 @@ class ReplicationBlueprintPublicationTests(unittest.TestCase):
             self.assertIsNone(blueprint["formal_contract_identity"])
             self.assertEqual(len(artifact["reference_beats"]), 5)
             self.assertEqual(
+                [beat["source_segment_ids"] for beat in artifact["reference_beats"]],
+                [event["source_segments"] for event in blueprint["narrative"]["events"]],
+            )
+            self.assertEqual(
                 len(frames),
                 len({(frame["segment_id"], frame["timestamp_ms"]) for frame in frames}),
             )
