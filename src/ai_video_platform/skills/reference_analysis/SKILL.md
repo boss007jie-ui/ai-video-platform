@@ -1,6 +1,6 @@
 # Reference Analysis
 
-Version: `0.2.0-rc.offline`; schema and algorithm: `1.0.0`.
+Version: `0.3.0-rc.offline`; schema and algorithm: `1.0.0`.
 
 Reference Analysis deterministically analyzes one explicitly selected reference, can publish an evidence-bound reference storyboard analysis, and compares a produced result with a compatible analysis. It does not discover references, download remote media, call a Provider, traverse Research Library, write Product Library, trigger Storyboard/QA, or import Viral Research implementation.
 
@@ -73,6 +73,31 @@ The draft additionally publishes `fine_segments.json`, `keyframes/index.json`,
 `segment_analysis.json`, `draft_core_beats.json`, and an `analyze_storyboard_request.json`
 directly consumable by the publication seam.
 
+### Replication profiles and blueprint
+
+`local_fine_segments_v1` exposes `analysis_profile` with three supported values:
+`MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION`. The default is
+`HYBRID_REPLICATION`; callers may select a profile on the preparation request, and the same
+value is propagated into the publication request and every replication artifact. Motion and
+narrative profiles use different semantic keyframe criteria. A physical source frame is stored
+once per `(segment_id, timestamp_ms)` even when it carries both action and narrative roles.
+
+The offline analyzer may supply exact `segment_contexts`, evidenced `motion_actions`,
+`narrative_facts`, and `scene_annotations`. Fine segmentation and semantic frame counts remain
+content-driven: the review fixture's 10 fine segments, 30 base frames, and 5 core beats are an
+example, not a fixed ratio or quota. Motion analysis preserves evidenced state chains from
+action start through contact, control, apex, release/end, and final hold as applicable. Narrative
+analysis proceeds from facts to events, causal edges, global story roles, and repeated product
+proof loops. Each coverage mode performs at most one bounded source-evidence supplementation
+pass and never invents a missing frame or story event.
+
+The publication seam validates profile/source consistency, shot and scene ownership, semantic
+roles, duplicate timestamp storage, action-state and transition endpoints, narrative event
+evidence, scene blocking references, coverage-added frames, and blueprint component equality.
+It then re-decodes every keyframe from the selected SHA-verified local video before atomically
+publishing. `ReferenceBlueprint` remains an owner-local payload with
+`formal_contract_identity=null`; no formal Contract identity is added.
+
 
 ## Invariants and outputs
 
@@ -89,10 +114,20 @@ black/orange horizontal core-beat layout headed `分镜故事板 / Storyboard`; 
 its source-video representative frame and concise stage, action, audience, and function copy.
 The first generated board is a review candidate, not a final visual approval.
 
+When a complete replication package is supplied, the same output also includes
+`motion_keyframes.json`, `motion_transitions.json`, `motion_keyframe_atlas.png`,
+`narrative_event_graph.json`, `scene_blocking_map.json`, `replication_constraints.json`,
+`coverage_report.json`, and `reference_blueprint.json`. The motion atlas groups source-video
+frames by action in timestamp order and labels action state, timestamp, and direction. Detailed
+motion evidence stays in these dedicated artifacts while the human storyboard remains a finite
+set of merged core beats.
+
 Fine publication rejects gaps, overlaps, bad adjacency links, cross-segment frames or evidence,
 partial analysis packages, non-adjacent or incomplete beat partitions, representative-frame
 mismatches, and formulas not derived from the ordered beats. Provenance records
-`network_calls=0`, `provider_calls=0`, and `external_upload=false`.
+`network_calls=0`, `provider_calls=0`, and `external_upload=false`. Reference blueprints and
+boards are analysis evidence only: they are not production storyboard plans, first frames, or
+Provider execution inputs.
 
 Legacy analyze/compare read scope is limited to the JSON request supplied by the caller; `source_uri` is provenance only and is never opened. Storyboard analysis reads only the explicitly named workspace-relative selected video and keyframe PNGs, verifies every supplied hash, and never dereferences the source URL. Absolute paths, link paths, and traversal are rejected. Unsupported/missing versions, malformed/tampered analysis, source identity or digest mismatch, missing evidence, forbidden nested discovery/Provider/download/Library directives, bad timelines, unsafe paths, and output collision are blockers.
 

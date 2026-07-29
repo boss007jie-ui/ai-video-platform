@@ -375,6 +375,85 @@ def render_analysis_board(
     })
 
 
+def render_motion_keyframe_atlas(
+    motion: dict[str, object],
+    keyframes: dict[str, tuple[int, int, bytes]],
+) -> bytes:
+    action_chains = motion.get("action_chains", [])
+    if not isinstance(action_chains, list):
+        raise ValueError("motion action_chains must be an array")
+    row_height = 500
+    canvas = _Canvas(3000, 175 + max(1, len(action_chains)) * row_height, _BLACK)
+    canvas.rect(0, 0, 3000, 12, _ORANGE)
+    canvas.text(60, 42, "MOTION KEYFRAME ATLAS", _PALE, scale=4)
+    canvas.text(60, 104, "SOURCE VIDEO ACTION STATE CHAINS", _ORANGE, scale=2)
+    groups: list[dict[str, object]] = []
+    for action_index, raw_chain in enumerate(action_chains):
+        if not isinstance(raw_chain, dict):
+            raise ValueError("motion action chain must be an object")
+        states = raw_chain.get("states", [])
+        if not isinstance(states, list) or not states:
+            continue
+        y = 155 + action_index * row_height
+        canvas.rect(40, y, 2920, row_height - 24, _CARD)
+        canvas.rect(40, y, 12, row_height - 24, _ORANGE)
+        canvas.text(72, y + 24, raw_chain["action_id"], _ORANGE, scale=3)
+        canvas.lines(
+            72,
+            y + 62,
+            f"{raw_chain['body_part']} / {raw_chain['motion_direction']}",
+            _PALE,
+            max_chars=115,
+            scale=2,
+            max_lines=1,
+        )
+        gap = 14
+        left = 72
+        available = 2856
+        card_width = (available - gap * max(0, len(states) - 1)) // len(states)
+        sequence: list[dict[str, object]] = []
+        for state_index, raw_state in enumerate(states):
+            if not isinstance(raw_state, dict):
+                raise ValueError("motion state must be an object")
+            frame_id = str(raw_state["frame_id"])
+            if frame_id not in keyframes:
+                raise ValueError("motion state frame is unavailable")
+            x = left + state_index * (card_width + gap)
+            canvas.rect(x, y + 108, card_width, 334, _BLACK)
+            canvas.rect(x, y + 108, card_width, 7, _ORANGE)
+            image_width = card_width - 16
+            canvas.blit(keyframes[frame_id], x + 8, y + 123, image_width, 220)
+            canvas.lines(
+                x + 8,
+                y + 356,
+                raw_state["action_state"],
+                _PALE,
+                max_chars=max(8, (card_width - 16) // 12),
+                scale=2,
+                max_lines=2,
+            )
+            canvas.text(x + 8, y + 414, f"{raw_state['timestamp_ms']} MS", _ORANGE, scale=2)
+            sequence.append({
+                "sequence": state_index + 1,
+                "frame_id": frame_id,
+                "action_state": raw_state["action_state"],
+                "timestamp_ms": raw_state["timestamp_ms"],
+                "direction": raw_chain["motion_direction"],
+            })
+        groups.append({
+            "action_id": raw_chain["action_id"],
+            "actor": raw_chain["actor"],
+            "body_part": raw_chain["body_part"],
+            "direction": raw_chain["motion_direction"],
+            "frame_sequence": sequence,
+        })
+    return canvas.png({
+        "board_role": "motion_keyframe_atlas",
+        "layout": "action-grouped-left-to-right-state-chains",
+        "action_groups": groups,
+    })
+
+
 def render_shot_evidence_board(shots: list[dict[str, object]], keyframes: dict[str, tuple[int, int, bytes]]) -> bytes:
     columns = 3
     rows = (len(shots) + columns - 1) // columns
@@ -451,4 +530,10 @@ def render_replication_board(patterns: list[dict[str, object]]) -> bytes:
     })
 
 
-__all__ = ["decode_png", "render_analysis_board", "render_replication_board", "render_shot_evidence_board"]
+__all__ = [
+    "decode_png",
+    "render_analysis_board",
+    "render_motion_keyframe_atlas",
+    "render_replication_board",
+    "render_shot_evidence_board",
+]

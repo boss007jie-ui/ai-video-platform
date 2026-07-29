@@ -21,6 +21,15 @@ from .local_media import (
     run_local_media,
 )
 from .models import ReferenceBreakdownDraftResult
+from .replication_blueprint import (
+    apply_segment_contexts,
+    build_motion_artifacts,
+    build_narrative_artifacts,
+    build_scene_blocking_and_constraints,
+    enrich_segment_analysis,
+    normalize_replication_inputs,
+    plan_keyframe_requests,
+)
 from .segment_storyboard import build_segment_analysis, derive_core_beats, derive_formula
 from .storyboard import _mapping, _strict_keys, _text, _validate_metadata, _validate_source, _workspace
 
@@ -32,7 +41,12 @@ _OUTPUT_ROOT = "reference_breakdown_draft"
 _REQUEST_REQUIRED = {"analysis_version", "mode", "selected_reference_video"}
 _REQUEST_ALLOWED = _REQUEST_REQUIRED | {"video_metadata", "current_product", "policy"}
 _FINE_ALLOWED = _REQUEST_REQUIRED | {
-    "video_metadata", "current_product", "segmentation_policy", "offline_analysis",
+    "analysis_profile", "video_metadata", "current_product", "segmentation_policy", "offline_analysis",
+}
+_ANALYSIS_PROFILES = {
+    "MOTION_REPLICATION",
+    "NARRATIVE_REPLICATION",
+    "HYBRID_REPLICATION",
 }
 _POLICY_KEYS = {"interval_ms", "max_keyframes"}
 _PRODUCT_KEYS = {"product_id", "category", "display_name"}
@@ -61,6 +75,19 @@ def _number(value: object, field: str, *, minimum: float, maximum: float) -> flo
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not minimum <= float(value) <= maximum:
         raise SkillError(ErrorCode.VALIDATION_FAILED, "Required number is invalid", field_paths=(field,))
     return float(value)
+
+
+def _analysis_profile(value: object) -> str:
+    if value is None:
+        return "HYBRID_REPLICATION"
+    profile = _text(value, "analysis_profile")
+    if profile not in _ANALYSIS_PROFILES:
+        raise SkillError(
+            ErrorCode.VALIDATION_FAILED,
+            "analysis_profile is unsupported",
+            field_paths=("analysis_profile",),
+        )
+    return profile
 
 
 def _fine_policy(value: object) -> dict[str, object]:
@@ -102,10 +129,15 @@ def _offline_analysis(value: object) -> dict[str, object]:
             "analyzer_id": "UNAVAILABLE",
             "boundary_signals": [],
             "segment_annotations": [],
+            "segment_contexts": [],
+            "motion_actions": [],
+            "narrative_facts": [],
+            "scene_annotations": [],
         }
     analysis = _mapping(value, "offline_analysis")
-    keys = {"analyzer_id", "boundary_signals", "segment_annotations"}
-    _strict_keys(analysis, keys, keys, "offline_analysis")
+    required = {"analyzer_id", "boundary_signals", "segment_annotations"}
+    allowed = required | {"segment_contexts", "motion_actions", "narrative_facts", "scene_annotations"}
+    _strict_keys(analysis, required, allowed, "offline_analysis")
     analyzer_id = _text(analysis.get("analyzer_id"), "offline_analysis.analyzer_id")
     signals = analysis.get("boundary_signals")
     annotations = analysis.get("segment_annotations")
@@ -130,7 +162,15 @@ def _offline_analysis(value: object) -> dict[str, object]:
             "reasons": list(reasons),
             "evidence": signal.get("evidence"),
         })
-    return {"analyzer_id": analyzer_id, "boundary_signals": normalized_signals, "segment_annotations": annotations}
+    return {
+        "analyzer_id": analyzer_id,
+        "boundary_signals": normalized_signals,
+        "segment_annotations": annotations,
+        "segment_contexts": analysis.get("segment_contexts", []),
+        "motion_actions": analysis.get("motion_actions", []),
+        "narrative_facts": analysis.get("narrative_facts", []),
+        "scene_annotations": analysis.get("scene_annotations", []),
+    }
 
 
 def _canonical(value: object) -> bytes:
@@ -381,38 +421,45 @@ def _prepare_fine_breakdown(
         signals,
         int(policy["min_segment_ms"]),
     )
+    replication_inputs = normalize_replication_inputs(offline, int(metadata["duration_ms"]))
+    segments = apply_segment_contexts(segments, replication_inputs["segment_contexts"])
+    keyframe_requests, coverage_candidates = plan_keyframe_requests(
+        segments,
+        str(normalized["analysis_profile"]),
+        replication_inputs["motion_actions"],
+        replication_inputs["narrative_facts"],
+    )
     stage = Path(tempfile.mkdtemp(prefix=f".{_OUTPUT_ROOT}-stage-", dir=root))
     target = root / _OUTPUT_ROOT
     keyframes: list[dict[str, object]] = []
     keyframe_dir = stage / "keyframes"
     keyframe_dir.mkdir()
-    for segment in segments:
-        start_ms = int(segment["start_ms"])
-        end_ms = int(segment["end_ms"])
-        end_margin_ms = min(100, max(1, (end_ms - start_ms) // 4))
-        timestamps = {
-            "start": start_ms,
-            "representative": start_ms + ((end_ms - start_ms) // 2),
-            "end": end_ms - end_margin_ms,
-        }
-        for role, timestamp_ms in timestamps.items():
-            frame_id = f"{segment['segment_id']}-{role}"
-            filename = f"{frame_id}.png"
-            payload = _extract_keyframe(
-                media,
-                timestamp_ms,
-                near_end=False,
-            )
-            (keyframe_dir / filename).write_bytes(payload)
-            keyframes.append({
-                "frame_id": frame_id,
-                "source_video_id": source["source_id"],
-                "segment_id": segment["segment_id"],
-                "timestamp_ms": timestamp_ms,
-                "frame_role": role,
-                "asset_path": f"{_OUTPUT_ROOT}/keyframes/{filename}",
-                "sha256": _digest(payload),
-            })
+    semantic_counters: dict[str, int] = {}
+    for request in keyframe_requests:
+        segment_id = str(request["segment_id"])
+        role = str(request["frame_role"])
+        timestamp_ms = int(request["timestamp_ms"])
+        if role in {"start", "representative", "end"}:
+            frame_id = f"{segment_id}-{role}"
+        else:
+            semantic_counters[segment_id] = semantic_counters.get(segment_id, 0) + 1
+            frame_id = f"{segment_id}-semantic-{semantic_counters[segment_id]:03d}"
+        filename = f"{frame_id}.png"
+        payload = _extract_keyframe(media, timestamp_ms, near_end=False)
+        (keyframe_dir / filename).write_bytes(payload)
+        keyframes.append({
+            "frame_id": frame_id,
+            "source_video_id": source["source_id"],
+            "shot_id": request["shot_id"],
+            "scene_id": request["scene_id"],
+            "segment_id": segment_id,
+            "timestamp_ms": timestamp_ms,
+            "frame_role": role,
+            "action_roles": list(request["action_roles"]),
+            "narrative_roles": list(request["narrative_roles"]),
+            "asset_path": f"{_OUTPUT_ROOT}/keyframes/{filename}",
+            "sha256": _digest(payload),
+        })
     segment_analysis = build_segment_analysis(
         segments,
         keyframes,
@@ -420,6 +467,46 @@ def _prepare_fine_breakdown(
         analyzer_id=str(offline["analyzer_id"]),
         audio_available=audio_available,
     )
+    motion_artifacts, coverage_report = build_motion_artifacts(
+        replication_inputs["motion_actions"],
+        segments,
+        keyframes,
+        coverage_candidates["motion_added"],
+        profile=str(normalized["analysis_profile"]),
+    )
+    narrative_graph, narrative_coverage = build_narrative_artifacts(
+        replication_inputs["narrative_facts"],
+        segments,
+        keyframes,
+        coverage_candidates["narrative_added"],
+        profile=str(normalized["analysis_profile"]),
+        audio_available=audio_available,
+    )
+    coverage_report.update(narrative_coverage)
+    coverage_report["analysis_profile"] = normalized["analysis_profile"]
+    segment_analysis = enrich_segment_analysis(segment_analysis, motion_artifacts, narrative_graph)
+    scene_blocking_map, replication_constraints = build_scene_blocking_and_constraints(
+        replication_inputs["scene_annotations"],
+        segments,
+        keyframes,
+        profile=str(normalized["analysis_profile"]),
+    )
+    reference_blueprint = {
+        "artifact_semantics": "ReferenceBlueprint",
+        "formal_contract_identity": None,
+        "owner_local_payload_version": _VERSION,
+        "analysis_profile": normalized["analysis_profile"],
+        "source_video_id": source["source_id"],
+        "shared_timeline": {
+            "fine_segment_ids": [segment["segment_id"] for segment in segments],
+            "keyframe_ids": [frame["frame_id"] for frame in keyframes],
+        },
+        "motion": motion_artifacts,
+        "narrative": narrative_graph,
+        "scene_blocking": scene_blocking_map,
+        "replication_constraints": replication_constraints,
+        "coverage": coverage_report,
+    }
     core_beats = derive_core_beats(segments, segment_analysis, keyframes)
     formula = derive_formula(core_beats)
     analysis_by_segment = {str(item["segment_id"]): item for item in segment_analysis}
@@ -473,6 +560,7 @@ def _prepare_fine_breakdown(
     current_product = _current_product(normalized.get("current_product"))
     analyze_request = {
         "analysis_version": _VERSION,
+        "analysis_profile": normalized["analysis_profile"],
         "selected_reference_video": source,
         "video_metadata": metadata,
         "analysis_configuration": {
@@ -481,9 +569,13 @@ def _prepare_fine_breakdown(
                 {
                     "keyframe_id": frame["frame_id"],
                     "source_video_id": frame["source_video_id"],
+                    "shot_id": frame["shot_id"],
+                    "scene_id": frame["scene_id"],
                     "segment_id": frame["segment_id"],
                     "timestamp_ms": frame["timestamp_ms"],
                     "frame_role": frame["frame_role"],
+                    "action_roles": frame["action_roles"],
+                    "narrative_roles": frame["narrative_roles"],
                     "path": frame["asset_path"],
                     "sha256": frame["sha256"],
                 }
@@ -494,18 +586,27 @@ def _prepare_fine_breakdown(
             "fine_segments": segments,
             "segment_analysis": segment_analysis,
             "core_beats": core_beats,
+            "motion_keyframes": motion_artifacts,
+            "motion_transitions": {"analysis_profile": normalized["analysis_profile"], "transitions": motion_artifacts.get("transitions", [])},
+            "narrative_event_graph": narrative_graph,
+            "scene_blocking_map": scene_blocking_map,
+            "replication_constraints": replication_constraints,
+            "reference_blueprint": reference_blueprint,
+            "coverage_report": coverage_report,
         },
     }
     manifest = {
         "draft": True,
         "draft_version": _FINE_MODE,
         "analysis_version": _VERSION,
+        "analysis_profile": normalized["analysis_profile"],
         "request_digest": request_digest,
         "method_provenance": {
             "mode": _FINE_MODE,
             "metadata_strategy": metadata_source,
             "boundary_detector": "local_ffmpeg_plus_offline_signals",
             "offline_analyzer_id": offline["analyzer_id"],
+            "analysis_profile": normalized["analysis_profile"],
             "visual_confirmation": "OFFLINE_EVIDENCE_ONLY",
         },
         "network_calls": 0,
@@ -524,6 +625,13 @@ def _prepare_fine_breakdown(
             "draft_core_beats.json",
             "draft_timeline.json",
             "draft_bottom_line_formula.json",
+            "motion_keyframes.json",
+            "motion_transitions.json",
+            "narrative_event_graph.json",
+            "scene_blocking_map.json",
+            "replication_constraints.json",
+            "reference_blueprint.json",
+            "coverage_report.json",
             "analyze_storyboard_request.json",
         ],
     }
@@ -534,6 +642,13 @@ def _prepare_fine_breakdown(
         (stage / "draft_core_beats.json").write_bytes(_pretty(core_beats))
         (stage / "draft_timeline.json").write_bytes(_pretty(timeline))
         (stage / "draft_bottom_line_formula.json").write_bytes(_pretty(formula))
+        (stage / "motion_keyframes.json").write_bytes(_pretty(motion_artifacts))
+        (stage / "motion_transitions.json").write_bytes(_pretty({"analysis_profile": normalized["analysis_profile"], "transitions": motion_artifacts.get("transitions", [])}))
+        (stage / "narrative_event_graph.json").write_bytes(_pretty(narrative_graph))
+        (stage / "scene_blocking_map.json").write_bytes(_pretty(scene_blocking_map))
+        (stage / "replication_constraints.json").write_bytes(_pretty(replication_constraints))
+        (stage / "reference_blueprint.json").write_bytes(_pretty(reference_blueprint))
+        (stage / "coverage_report.json").write_bytes(_pretty(coverage_report))
         (stage / "analyze_storyboard_request.json").write_bytes(_pretty(analyze_request))
         (stage / "draft_manifest.json").write_bytes(_pretty(manifest))
         try:
@@ -573,6 +688,8 @@ def prepare_reference_breakdown(
             field_paths=("analysis_version",),
         )
     root = _workspace(workspace)
+    if mode == _FINE_MODE:
+        normalized["analysis_profile"] = _analysis_profile(normalized.get("analysis_profile"))
     request_digest = _digest(_canonical(normalized))
     if mode == _FINE_MODE:
         return _prepare_fine_breakdown(normalized, root=root, request_digest=request_digest)

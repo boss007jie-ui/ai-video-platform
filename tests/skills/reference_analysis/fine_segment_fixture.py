@@ -127,3 +127,169 @@ def ten_segment_request(workspace: Path) -> dict[str, object]:
         })
     request["offline_analysis"]["segment_annotations"] = annotations  # type: ignore[index]
     return request
+
+
+def replication_request(
+    workspace: Path,
+    *,
+    profile: str = "HYBRID_REPLICATION",
+) -> dict[str, object]:
+    request = ten_segment_request(workspace)
+    request["analysis_profile"] = profile
+    offline = request["offline_analysis"]  # type: ignore[assignment]
+    offline["segment_contexts"] = [  # type: ignore[index]
+        {
+            "start_ms": index * 400,
+            "end_ms": (index + 1) * 400,
+            "shot_id": f"shot-{index + 1:03d}",
+            "scene_id": "scene-001" if index < 5 else "scene-002",
+        }
+        for index in range(10)
+    ]
+    offline["motion_actions"] = [  # type: ignore[index]
+        {
+            "action_id": "action-001",
+            "actor": "subject-001",
+            "body_part": "right_hand",
+            "start_pose": "hand beside torso",
+            "end_pose": "hand holding garment",
+            "motion_direction": "lower-right to center-up",
+            "motion_path": "curved reach then lift",
+            "motion_speed": "accelerate then decelerate",
+            "joint_or_limb_change": "elbow flexes while shoulder lifts",
+            "hand_state": "open to gripping",
+            "object_state_before": "garment resting on surface",
+            "object_state_after": "garment lifted and held",
+            "camera_motion": "static",
+            "states": [
+                {"state": "ACTION_START", "timestamp_ms": 80, "contact_state": "NO_CONTACT"},
+                {"state": "ACTION_ONSET", "timestamp_ms": 280, "contact_state": "APPROACHING"},
+                {"state": "PRE_CONTACT", "timestamp_ms": 520, "contact_state": "PRE_CONTACT"},
+                {"state": "FIRST_CONTACT", "timestamp_ms": 720, "contact_state": "FIRST_CONTACT"},
+                {"state": "CONTROL_OR_GRIP", "timestamp_ms": 920, "contact_state": "GRIPPING"},
+                {"state": "ACTION_APEX", "timestamp_ms": 1240, "contact_state": "HOLDING"},
+                {"state": "ACTION_END", "timestamp_ms": 1480, "contact_state": "HOLDING"},
+                {"state": "FINAL_HOLD", "timestamp_ms": 1560, "contact_state": "HOLDING"},
+            ],
+        },
+        {
+            "action_id": "action-002",
+            "actor": "subject-001",
+            "body_part": "whole_body",
+            "start_pose": "front-facing recline",
+            "end_pose": "side-facing recline",
+            "motion_direction": "roll toward camera-right",
+            "motion_path": "torso rotation around body axis",
+            "motion_speed": "slow continuous turn",
+            "joint_or_limb_change": "hips and shoulders rotate together",
+            "hand_state": "relaxed",
+            "object_state_before": "garment front visible",
+            "object_state_after": "garment back visible",
+            "camera_motion": "static",
+            "states": [
+                {"state": "ACTION_START", "timestamp_ms": 1680, "contact_state": "NO_CONTACT"},
+                {"state": "ACTION_ONSET", "timestamp_ms": 1920, "contact_state": "NO_CONTACT"},
+                {"state": "ACTION_APEX", "timestamp_ms": 2240, "contact_state": "NO_CONTACT"},
+                {"state": "ACTION_END", "timestamp_ms": 2640, "contact_state": "NO_CONTACT"},
+            ],
+        },
+        {
+            "action_id": "action-003",
+            "actor": "subject-001",
+            "body_part": "left_hand",
+            "start_pose": "hand above garment hem",
+            "end_pose": "hem held in reveal position",
+            "motion_direction": "bottom to top",
+            "motion_path": "short vertical pull",
+            "motion_speed": "quick pull then hold",
+            "joint_or_limb_change": "wrist closes and elbow lifts",
+            "hand_state": "open to pinching",
+            "object_state_before": "garment hem lowered",
+            "object_state_after": "garment detail fully revealed",
+            "camera_motion": "short controlled move",
+            "states": [
+                {"state": "ACTION_START", "timestamp_ms": 2880, "contact_state": "APPROACHING"},
+                {"state": "FIRST_CONTACT", "timestamp_ms": 3080, "contact_state": "FIRST_CONTACT"},
+                {"state": "CONTROL_OR_GRIP", "timestamp_ms": 3240, "contact_state": "GRIPPING"},
+                {"state": "ACTION_APEX", "timestamp_ms": 3440, "contact_state": "MANIPULATING"},
+                {"state": "FINAL_HOLD", "timestamp_ms": 3560, "contact_state": "HOLDING"},
+            ],
+        },
+    ]
+    narrative_roles = (
+        "SETUP",
+        "INCITING_EVENT",
+        "INFORMATION_CHANGE",
+        "PRODUCT_PROOF",
+        "REACTION",
+        "SETUP",
+        "ESCALATION",
+        "REVEAL",
+        "PRODUCT_PROOF",
+        "NATURAL_CLOSE",
+    )
+    offline["narrative_facts"] = [  # type: ignore[index]
+        {
+            "fact_id": f"fact-{index + 1:03d}",
+            "event_id": f"event-{index // 2 + 1:03d}",
+            "start_ms": index * 400,
+            "end_ms": (index + 1) * 400,
+            "actor": "subject-001",
+            "action": f"verified demonstration step {index + 1}",
+            "object": "garment",
+            "location": "bed surface" if index < 5 else "living-room surface",
+            "start_state": f"state-{index:02d}",
+            "end_state": f"state-{index + 1:02d}",
+            "trigger": "prior verified step" if index else "video start",
+            "result": f"visible result {index + 1}",
+            "information_revealed": "garment construction detail" if index in {3, 7} else "UNAVAILABLE",
+            "spoken_text": "UNAVAILABLE",
+            "subtitle_text": f"Proof step {index + 1}",
+            "narrative_role": narrative_roles[index],
+            "repeated_structure_id": "proof-structure-001",
+            "proof_loop_id": "proof-loop-001" if index < 5 else "proof-loop-002",
+            "variation_type": "BASE" if index < 5 else "SCENE_AND_STYLE_VARIATION",
+        }
+        for index in range(10)
+    ]
+    offline["scene_annotations"] = [  # type: ignore[index]
+        {
+            "scene_id": "scene-001",
+            "start_ms": 0,
+            "end_ms": 2000,
+            "scene_type": "bed demonstration",
+            "camera_position": "foot-side centered",
+            "camera_height": "slightly elevated",
+            "camera_direction": "toward subject center",
+            "framing": "medium full body",
+            "large_object_layout": "bed fills lower frame",
+            "subject_position": "center",
+            "subject_scale_in_frame": "0.62 frame height",
+            "subject_orientation": "front-facing",
+            "entry_direction": "UNAVAILABLE",
+            "exit_direction": "UNAVAILABLE",
+            "movement_route": "center roll toward camera-right",
+            "light_direction": "upper-left",
+            "major_spatial_relationships": "subject centered on bed; garment follows torso",
+        },
+        {
+            "scene_id": "scene-002",
+            "start_ms": 2000,
+            "end_ms": 4000,
+            "scene_type": "living-room demonstration",
+            "camera_position": "front centered",
+            "camera_height": "eye-level to seated subject",
+            "camera_direction": "toward subject center",
+            "framing": "medium",
+            "large_object_layout": "sofa behind subject",
+            "subject_position": "center",
+            "subject_scale_in_frame": "0.58 frame height",
+            "subject_orientation": "side then front-facing",
+            "entry_direction": "UNAVAILABLE",
+            "exit_direction": "UNAVAILABLE",
+            "movement_route": "small center-zone movement",
+            "light_direction": "camera-left",
+            "major_spatial_relationships": "subject remains in front of sofa; garment stays foreground",
+        },
+    ]
+    return request
