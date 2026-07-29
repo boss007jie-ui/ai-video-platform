@@ -60,6 +60,7 @@ _FONT = {
     ")": "01000/00100/00010/00010/00010/00100/01000",
     "'": "00100/00100/00000/00000/00000/00000/00000",
     "=": "00000/11111/00000/11111/00000/00000/00000",
+    ">": "10000/01000/00100/00010/00100/01000/10000",
 }
 
 
@@ -206,6 +207,58 @@ _WHITE = (255, 255, 255)
 _ACCENT = (30, 116, 102)
 _RED = (185, 62, 68)
 _GOLD = (205, 151, 46)
+_BLACK = (12, 12, 12)
+_CARD = (28, 28, 28)
+_ORANGE = (244, 117, 33)
+_PALE = (245, 238, 226)
+
+_CJK_TITLE_FONT = {
+    "分": (
+        "000010000100", "000100001000", "001000010000", "010000100000",
+        "100001000000", "000000000000", "111111111110", "000100010000",
+        "000100010000", "001000010000", "010000010000", "100000100000",
+    ),
+    "镜": (
+        "010001111100", "111010010000", "010011111100", "010010010000",
+        "111011111100", "010000000000", "010011111100", "010010010100",
+        "010011111100", "010000100000", "010001001000", "100010000100",
+    ),
+    "故": (
+        "010001001000", "010001001000", "111101111100", "010010010000",
+        "011110010000", "010101111100", "010101001000", "010101001000",
+        "011001010000", "010001010000", "010010001000", "010100000100",
+    ),
+    "事": (
+        "000010000000", "111111111100", "000010000000", "011111111000",
+        "000010001000", "011111111000", "000010000000", "111111111100",
+        "000010001000", "011111111000", "000010000000", "000100000000",
+    ),
+    "板": (
+        "001000111100", "001000100000", "111110100000", "001000111100",
+        "011000100100", "101000100100", "001001001000", "001001001000",
+        "001010010000", "001010010000", "001100001000", "001000000100",
+    ),
+}
+
+
+def _cjk_text(
+    canvas: _Canvas,
+    x: int,
+    y: int,
+    value: str,
+    color: tuple[int, int, int],
+    *,
+    scale: int,
+) -> int:
+    cursor = x
+    for character in value:
+        glyph = _CJK_TITLE_FONT[character]
+        for gy, row in enumerate(glyph):
+            for gx, bit in enumerate(row):
+                if bit == "1":
+                    canvas.rect(cursor + gx * scale, y + gy * scale, scale, scale, color)
+        cursor += 14 * scale
+    return cursor
 
 
 def _label(canvas: _Canvas, x: int, y: int, label: str, value: object, *, width: int = 58) -> int:
@@ -214,61 +267,190 @@ def _label(canvas: _Canvas, x: int, y: int, label: str, value: object, *, width:
 
 
 def render_analysis_board(
-    source: dict[str, object], metadata: dict[str, object], beats: list[dict[str, object]], keyframes: dict[str, tuple[int, int, bytes]], formula: dict[str, object],
+    source: dict[str, object],
+    metadata: dict[str, object],
+    beats: list[dict[str, object]],
+    keyframes: dict[str, tuple[int, int, bytes]],
+    formula: dict[str, object],
+    *,
+    core_beats: list[dict[str, object]] | None = None,
 ) -> bytes:
-    height = 360 + len(beats) * 590 + 150
-    canvas = _Canvas(1800, height, _PAPER)
-    canvas.rect(0, 0, 1800, 120, _INK)
-    canvas.text(48, 35, "REFERENCE STORYBOARD ANALYSIS", _WHITE, scale=4)
-    header = [
-        ("SOURCE", f"{source['source_platform']} / {source['source_id']} / {source['source_url']}"),
-        ("TIMES", f"PUBLISHED {source['published_at']} / COLLECTED {source['collected_at']}"),
-        ("MEDIA", f"{metadata['duration_ms']} MS / {metadata['aspect_ratio']} / {metadata['width']} X {metadata['height']}"),
-        ("CATEGORY PRODUCT", f"{source['category']} / {source['reference_product']}"),
+    display_beats = core_beats or [
+        {
+            "beat_id": beat["beat_id"],
+            "start_ms": beat["interval"]["start_ms"],
+            "end_ms": beat["interval"]["end_ms"],
+            "representative_frame_id": beat["keyframe_ids"][0],
+            "stage_title": beat["stage_title"],
+            "visual_summary": beat["scene"]["value"],
+            "key_action": beat["character_action"]["value"],
+            "audience_psychology": beat["audience_psychology"]["value"],
+            "viral_or_conversion_function": beat["conversion_function"]["value"],
+            "function_label": beat["viral_mechanism"]["value"],
+        }
+        for beat in beats
     ]
-    y = 145
-    for label, value in header:
-        canvas.text(48, y, label, _ACCENT, scale=2)
-        canvas.lines(310, y, value, _INK, max_chars=115, scale=2, max_lines=2)
-        y += 48
-    field_names = (
-        "scene", "shot_scale", "camera_motion", "character_action", "product_action", "product_state", "emotion",
-        "audience_psychology", "conversion_function", "viral_mechanism", "comment_evidence", "reusable_pattern", "product_transfer_suggestion",
+    count = len(display_beats)
+    canvas = _Canvas(3000, 1500, _BLACK)
+    canvas.rect(0, 0, 3000, 12, _ORANGE)
+    title_end = _cjk_text(canvas, 60, 38, "分镜故事板", _ORANGE, scale=3)
+    canvas.text(title_end + 14, 54, "/ STORYBOARD", _PALE, scale=4)
+    canvas.text(60, 126, "REFERENCE VIDEO ANALYSIS", _ORANGE, scale=2)
+    canvas.lines(
+        60,
+        158,
+        f"TOPIC {source['category']}   PLATFORM {source['source_platform']}   FORMAT {metadata['aspect_ratio']}   DURATION {metadata['duration_ms']} MS",
+        _PALE,
+        max_chars=145,
+        scale=2,
+        max_lines=1,
     )
-    for index, beat in enumerate(beats):
-        top = 350 + index * 590
-        canvas.rect(36, top, 1728, 556, _WHITE)
-        canvas.rect(36, top, 14, 556, (_RED, _GOLD)[index % 2])
-        interval = beat["interval"]
-        canvas.text(72, top + 28, f"{beat['beat_id']} / {interval['start_ms']}-{interval['end_ms']} MS / {beat['stage_title']}", _INK, scale=3)
-        left_y = right_y = top + 90
-        for field_index, field in enumerate(field_names):
-            x = 72 if field_index < 7 else 820
-            current_y = left_y if field_index < 7 else right_y
-            next_y = current_y + _label(canvas, x, current_y, field.replace("_", " "), beat[field]["value"], width=56)
-            if field_index < 7:
-                left_y = next_y
-            else:
-                right_y = next_y
-        keyframe_id = beat["keyframe_ids"][0]
-        image = keyframes[keyframe_id]
-        canvas.rect(1510, top + 88, 210, 328, _INK)
-        canvas.blit(image, 1518, top + 96, 194, 312)
-        canvas.text(1518, top + 430, keyframe_id, _MUTED, scale=2)
-    formula_y = 380 + len(beats) * 590
-    canvas.rect(36, formula_y, 1728, 104, _INK)
-    canvas.text(66, formula_y + 20, "BOTTOM LINE FORMULA", _GOLD, scale=2)
-    canvas.lines(66, formula_y + 53, formula["value"], _WHITE, max_chars=120, scale=2, max_lines=2)
+
+    gap = 24
+    left = 60
+    available = 2880
+    card_width = (available - gap * max(0, count - 1)) // max(1, count)
+    card_top = 225
+    card_height = 1000
+    for index, beat in enumerate(display_beats):
+        x = left + index * (card_width + gap)
+        canvas.rect(x, card_top, card_width, card_height, _CARD)
+        canvas.rect(x, card_top, card_width, 10, _ORANGE)
+        canvas.text(x + 20, card_top + 28, f"{index + 1:02d}", _ORANGE, scale=4)
+        canvas.text(
+            x + min(130, card_width // 3),
+            card_top + 36,
+            f"{beat['start_ms']}-{beat['end_ms']} MS",
+            _PALE,
+            scale=2,
+        )
+        image_x = x + 20
+        image_y = card_top + 95
+        image_width = card_width - 40
+        canvas.rect(image_x - 4, image_y - 4, image_width + 8, 408, _ORANGE)
+        canvas.blit(keyframes[str(beat["representative_frame_id"])], image_x, image_y, image_width, 400)
+        text_width = max(12, (card_width - 40) // 18)
+        y = card_top + 535
+        canvas.lines(x + 20, y, beat["stage_title"], _PALE, max_chars=text_width, scale=3, max_lines=2)
+        y += 76
+        details = (
+            ("VISUAL", beat["visual_summary"]),
+            ("ACTION", beat["key_action"]),
+            ("PSYCHOLOGY", beat["audience_psychology"]),
+            ("ROLE", beat["viral_or_conversion_function"]),
+        )
+        for label, value in details:
+            canvas.text(x + 20, y, label, _ORANGE, scale=2)
+            y += 25
+            y += canvas.lines(x + 20, y, value, _PALE, max_chars=text_width, scale=2, max_lines=2) + 22
+        canvas.rect(x + 20, card_top + 934, card_width - 40, 44, _ORANGE)
+        canvas.lines(
+            x + 32,
+            card_top + 946,
+            beat["function_label"],
+            _BLACK,
+            max_chars=max(10, text_width - 2),
+            scale=2,
+            max_lines=1,
+        )
+
+    footer_y = 1280
+    canvas.rect(60, footer_y, 2880, 150, _CARD)
+    canvas.rect(60, footer_y, 12, 150, _ORANGE)
+    canvas.text(96, footer_y + 28, "CORE FORMULA", _ORANGE, scale=3)
+    canvas.lines(96, footer_y + 78, formula["value"], _PALE, max_chars=145, scale=3, max_lines=2)
     return canvas.png({
         "board_role": "reference_storyboard_analysis_board",
+        "title": "分镜故事板 / Storyboard",
+        "theme": "black-orange",
+        "layout": "horizontal-core-beat-cards",
         "source": source,
         "video_metadata": metadata,
-        "required_fields": ["exact intervals", "real keyframes", "stage title", *field_names, "bottom-line formula"],
-        "beats": beats,
+        "required_fields": ["exact intervals", "real representative frames", "stage title", "visual", "action", "audience psychology", "function", "bottom-line formula"],
+        "beats": display_beats,
         "bottom_line_formula": formula,
         "provider_execution_input": False,
         "first_frame_eligible": False,
         "product_panel_eligible": False,
+    })
+
+
+def render_motion_keyframe_atlas(
+    motion: dict[str, object],
+    keyframes: dict[str, tuple[int, int, bytes]],
+) -> bytes:
+    action_chains = motion.get("action_chains", [])
+    if not isinstance(action_chains, list):
+        raise ValueError("motion action_chains must be an array")
+    row_height = 500
+    canvas = _Canvas(3000, 175 + max(1, len(action_chains)) * row_height, _BLACK)
+    canvas.rect(0, 0, 3000, 12, _ORANGE)
+    canvas.text(60, 42, "MOTION KEYFRAME ATLAS", _PALE, scale=4)
+    canvas.text(60, 104, "SOURCE VIDEO ACTION STATE CHAINS", _ORANGE, scale=2)
+    groups: list[dict[str, object]] = []
+    for action_index, raw_chain in enumerate(action_chains):
+        if not isinstance(raw_chain, dict):
+            raise ValueError("motion action chain must be an object")
+        states = raw_chain.get("states", [])
+        if not isinstance(states, list) or not states:
+            continue
+        y = 155 + action_index * row_height
+        canvas.rect(40, y, 2920, row_height - 24, _CARD)
+        canvas.rect(40, y, 12, row_height - 24, _ORANGE)
+        canvas.text(72, y + 24, raw_chain["action_id"], _ORANGE, scale=3)
+        canvas.lines(
+            72,
+            y + 62,
+            f"{raw_chain['body_part']} / {raw_chain['motion_direction']}",
+            _PALE,
+            max_chars=115,
+            scale=2,
+            max_lines=1,
+        )
+        gap = 14
+        left = 72
+        available = 2856
+        card_width = (available - gap * max(0, len(states) - 1)) // len(states)
+        sequence: list[dict[str, object]] = []
+        for state_index, raw_state in enumerate(states):
+            if not isinstance(raw_state, dict):
+                raise ValueError("motion state must be an object")
+            frame_id = str(raw_state["frame_id"])
+            if frame_id not in keyframes:
+                raise ValueError("motion state frame is unavailable")
+            x = left + state_index * (card_width + gap)
+            canvas.rect(x, y + 108, card_width, 334, _BLACK)
+            canvas.rect(x, y + 108, card_width, 7, _ORANGE)
+            image_width = card_width - 16
+            canvas.blit(keyframes[frame_id], x + 8, y + 123, image_width, 220)
+            canvas.lines(
+                x + 8,
+                y + 356,
+                raw_state["action_state"],
+                _PALE,
+                max_chars=max(8, (card_width - 16) // 12),
+                scale=2,
+                max_lines=2,
+            )
+            canvas.text(x + 8, y + 414, f"{raw_state['timestamp_ms']} MS", _ORANGE, scale=2)
+            sequence.append({
+                "sequence": state_index + 1,
+                "frame_id": frame_id,
+                "action_state": raw_state["action_state"],
+                "timestamp_ms": raw_state["timestamp_ms"],
+                "direction": raw_chain["motion_direction"],
+            })
+        groups.append({
+            "action_id": raw_chain["action_id"],
+            "actor": raw_chain["actor"],
+            "body_part": raw_chain["body_part"],
+            "direction": raw_chain["motion_direction"],
+            "frame_sequence": sequence,
+        })
+    return canvas.png({
+        "board_role": "motion_keyframe_atlas",
+        "layout": "action-grouped-left-to-right-state-chains",
+        "action_groups": groups,
     })
 
 
@@ -348,4 +530,10 @@ def render_replication_board(patterns: list[dict[str, object]]) -> bytes:
     })
 
 
-__all__ = ["decode_png", "render_analysis_board", "render_replication_board", "render_shot_evidence_board"]
+__all__ = [
+    "decode_png",
+    "render_analysis_board",
+    "render_motion_keyframe_atlas",
+    "render_replication_board",
+    "render_shot_evidence_board",
+]

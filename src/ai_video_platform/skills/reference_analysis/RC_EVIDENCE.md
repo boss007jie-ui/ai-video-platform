@@ -1,55 +1,80 @@
-# Reference Analysis - Offline RC Evidence
+# Reference Analysis - Replication Blueprint Offline Evidence
 
 ## Identity and status
 
 - Authorization: `FTG-0-20260720-001`
 - Work item: `FT-02-001`
 - Branch: `ft/codex-02-research-reference`
-- Implementation evidence head: `e6b7375`
+- Implementation baseline: `e1e3141`
 - Schema/algorithm version: `1.0.0`
-- Status: `RC_OFFLINE`
-- Production Ready: **not claimed**
-- Provenance: `CLEAN_ROOM_ONLY`; no Legacy source was read, copied, tested or adopted
+- Skill version: `0.3.0-rc.offline`
+- Status: `OFFLINE_ACCEPTANCE`
+- Visual final: **not claimed**
+- Provenance: `CLEAN_ROOM_ONLY`; no Legacy source, Provider, upload, or network service was used
 
-The public interfaces are `analyze_reference` and `compare_result`. They accept an already selected structured reference or a synthetic Foundation `ReferenceManifest`-shaped fixture. They do not discover, search, download, call Providers, access Libraries, or write Product Library.
+The increment preserves the public `prepare-reference-breakdown` and `analyze-storyboard` seams.
+The existing `local_fine_segments_v1` flow now supports motion, narrative, and hybrid replication
+profiles while retaining legacy `local_draft_v1` behavior and all formal Contract identities.
 
 ## Implemented offline behavior
 
-- deterministic versioned analysis and comparison artifacts with canonical digests;
-- immutable source ID/SHA/provenance linkage and strict input/artifact schemas;
-- duration, pacing, shot, emotion, motif, hook and CTA metrics;
-- ordered scalar, shot and emotion comparison gaps;
-- cancellation before analysis, stable errors and recursive redaction;
-- atomic no-clobber output, collision handling and temporary-file cleanup;
-- traversal, absolute path and symlink output rejection where the host supports link creation;
-- recursive selected-reference-only enforcement for Provider/discovery/download/Library/Legacy directives and location-like values without blocking benign provenance prose;
-- independent CLI and `SKILL.md`, with no private import from Viral Research.
+- explicit `MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION` profiles with Hybrid as the default;
+- content-driven fine segments carrying exact shot/scene ownership and real source-video frames;
+- profile-specific semantic keyframes deduplicated by `(segment_id, timestamp_ms)` with independent action and narrative roles;
+- evidenced motion state chains, contact states, adjacent motion transitions, and one bounded Motion Coverage supplementation pass;
+- verified facts, grouped events, causal edges, global story roles, repeated product-proof loops, and one bounded Narrative Coverage pass;
+- local RGB transition rescans that can recover an unannotated intermediate motion state while keeping unresolved narrative semantics explicit;
+- evidence-derived narrative roles with stable role-free supporting frames accepted inside traceable events;
+- repeated proof-loop matching across scene, product/style, and added or omitted action-step variations;
+- scene/blocking maps plus `MUST_PRESERVE`, `REPLACEABLE`, and `CONDITIONALLY_REPLACEABLE` constraints;
+- owner-local `ReferenceBlueprint` with `formal_contract_identity=null` and a shared keyframe timeline;
+- publication-time validation of profile/source ownership, semantic roles, transition/event references, coverage additions, and blueprint consistency;
+- publication-time re-decoding of every keyframe from the SHA-verified selected local video;
+- a finite core-Beat storyboard plus a separate source-frame motion atlas grouped by action;
+- atomic publication of all replication JSON, PNG, keyframe, storyboard, and provenance files;
+- unchanged production-storyboard and Provider-execution boundaries with zero external counters.
 
-## Fresh verification at implementation evidence head
+## Fresh verification
 
 | Command | Result |
 |---|---|
-| `python -m unittest -v tests.skills.reference_analysis.test_reference_analysis_interface` | PASS - 6/6, 0.083s |
-| `python -m unittest -v tests.skills.reference_analysis.test_reference_analysis_failures` | PASS - 5 passed, 1 host-capability skip, 0.058s |
-| `python tools\run_offline_tests.py` | BLOCKED SHARED BASELINE - 88 passed, 3 host-capability skips, 1 stale placeholder-only assertion; 92 total, 0.819s |
+| `$env:PYTHONPATH='src'; python -m py_compile ...; python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 58 passed, 1 host-capability skip, 0 failures, 386.793s |
+| `python -m unittest tests.contracts.test_storyboard_artifact_chain tests.contracts.test_root_cli_routing tests.architecture.test_clean_room_boundaries -v` | 19 passed; 1 known external worktree-path error |
+| Replication profile group | PASS - 21 passed, 0 failures, 331.076s |
+| Offline CLI prepare plus analyze E2E | PASS - `HYBRID_REPLICATION`, completed locally in `review-03` |
+| Visual inspection of storyboard and motion atlas | PASS - no overlap; labels, timecodes, directions, and action ordering readable |
+| `git diff --check` and owner-scope inspection | PASS |
 
-The Reference skip is a Windows environment where symlink creation is unavailable; the test fails closed when link creation is supported. No line-coverage tool or new dependency was introduced, so a coverage percentage is not claimed. The focused Reference acceptance surface contains 12 tests.
+The owned skip is the existing Windows environment case where symlink creation is unavailable.
+The affected-suite error is also pre-existing: `test_adoption_manifest_has_no_unapproved_adoptions`
+derives the control root as a sibling of the current Git worktree and looks for
+`C:\Users\boss0\.codex\worktrees\9352\AI Video Platform Re-architecture Control\08_ADOPTION_MANIFEST.json`,
+which does not exist in this Codex-managed worktree layout. The shared architecture test is
+outside the authorized `reference_analysis` scope and was not modified.
 
-## Security, dependency and operations evidence
+## Offline review sample
 
-- Real Provider, network, media and download smoke: outside this Skill and `NOT_AUTHORIZED`.
-- Credential values: not read, displayed, copied or tested.
-- Runtime dependencies in this Skill: Python standard library and local Skill modules only; no package/lock change.
-- Repository secret scan, Legacy-root guard and network/subprocess guards pass in the complete suite.
-- Performance evidence is bounded offline unit execution only; no production throughput/SLA claim.
-- Independent review after the final scope-validation fix found no Critical, Important or Minor issue.
-- Rollback: Codex-00 can omit or revert commits `cfee0e1`, `75d3952`, `ae0d5e5`, `75d5f3a`, and `c6505f8`; no production artifact migration exists.
+- Root: `run/FT-02-001-reference-analysis-replication-review-03/reference_analysis/`
+- Source fixture: versioned synthetic local video, 4000 ms
+- Profile: `HYBRID_REPLICATION`
+- Fine segments: 10
+- Deduplicated source keyframes: 47
+- Core beats: 5
+- Motion actions/transitions: 3 / 14
+- Narrative facts/events/causal edges/proof loops: 10 / 5 / 4 / 2
+- Coverage additions: 7 motion frames, 5 narrative frames
+- Counters: `network_calls=0`, `provider_calls=0`, `external_upload=false`
 
-## Open gates
+The synthetic fixture contains simple red/blue source frames and exists to verify deterministic
+timing, source re-decoding, layouts, and cross-artifact traceability. It is not represented as a
+real garment analysis. The storyboard and atlas remain review candidates pending a rerun with an
+authorized real reference video.
 
-1. Codex-00 update of the shared placeholder-only architecture test.
-2. Shared contract decision for the Reference Collection Manifest handoff; synthetic fixtures keep this RC independent meanwhile.
-3. Windows/link-capable CI execution of the skipped symlink case.
-4. Integration/Golden testing by the authorized integration owner.
+## Scope and blockers
 
-Next gate requested: `FTG-2` for shared handoff and integration-boundary review.
+All tracked changes remain limited to `src/ai_video_platform/skills/reference_analysis/**` and
+`tests/skills/reference_analysis/**`. No change was made to `storyboard_master_video_planning`,
+the root CLI dispatcher, other Skills, shared Contracts, Hermes state, or Provider authorization.
+
+Implementation blocker: none. Real-video acceptance awaits an authorized local input asset and
+does not block the offline implementation.

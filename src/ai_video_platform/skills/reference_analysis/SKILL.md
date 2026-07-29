@@ -1,6 +1,6 @@
 # Reference Analysis
 
-Version: `0.1.0-rc.offline`; schema and algorithm: `1.0.0`.
+Version: `0.3.0-rc.offline`; schema and algorithm: `1.0.0`.
 
 Reference Analysis deterministically analyzes one explicitly selected reference, can publish an evidence-bound reference storyboard analysis, and compares a produced result with a compatible analysis. It does not discover references, download remote media, call a Provider, traverse Research Library, write Product Library, trigger Storyboard/QA, or import Viral Research implementation.
 
@@ -43,7 +43,73 @@ observation starts with `DRAFT:` and states that visual interpretation is unconf
 package is non-executable, never a first frame or production storyboard, records
 `provider_calls=0` and `external_upload=false`, and its request is directly consumable by
 `analyze-storyboard`. Cloud video LLM, Provider, upload, and any mode other than
-`local_draft_v1` are rejected.
+an explicitly supported local mode are rejected.
+
+### Fine-segment storyboard preparation
+
+`prepare-reference-breakdown` also accepts `mode=local_fine_segments_v1` through the same
+public command. It first creates content-driven candidate boundaries from local RGB frame
+differences and optional local audio boundaries. An optional owner-local offline analyzer may
+add evidence-bound semantic boundary signals and exact segment annotations. If the policy or
+offline analyzer is absent, conservative local defaults and explicit `UNAVAILABLE` observations
+are used; no network or Provider fallback exists.
+
+Fine segments are ordered, contiguous half-open source intervals with exact previous/next links
+and evidence-bearing segmentation reasons. Every segment receives real `start`,
+`representative`, and `end` PNG frames decoded from the selected source video. Every frame
+records its source video, segment, timestamp, role, workspace-relative asset path, and SHA-256.
+Supplied offline observations cover scene, shot/camera position, camera and subject motion,
+primary action, product state, props, visible text, audio function, emotion, attention,
+audience psychology, narrative function, viral mechanism, and conversion function. Every
+non-`UNAVAILABLE` observation cites an in-segment real frame.
+
+Only adjacent fine segments with the same available narrative, psychology, mechanism, action,
+and product-state purpose are merged. Each core beat preserves `source_segment_ids`,
+`source_frame_ids`, exact interval, `representative_frame_id`, and `merge_reason`. The bottom
+formula is derived from the ordered confirmed core-beat titles and evidence; it is not an
+independent free-form claim.
+
+The draft additionally publishes `fine_segments.json`, `keyframes/index.json`,
+`segment_analysis.json`, `draft_core_beats.json`, and an `analyze_storyboard_request.json`
+directly consumable by the publication seam.
+
+### Replication profiles and blueprint
+
+`local_fine_segments_v1` exposes `analysis_profile` with three supported values:
+`MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION`. The default is
+`HYBRID_REPLICATION`; callers may select a profile on the preparation request, and the same
+value is propagated into the publication request and every replication artifact. Motion and
+narrative profiles use different semantic keyframe criteria. A physical source frame is stored
+once per `(segment_id, timestamp_ms)` even when it carries both action and narrative roles.
+
+The offline analyzer may supply exact `segment_contexts`, evidenced `motion_actions`,
+`narrative_facts`, and `scene_annotations`. Fine segmentation and semantic frame counts remain
+content-driven: the review fixture's 10 fine segments, 30 base frames, and 5 core beats are an
+example, not a fixed ratio or quota. Motion analysis preserves evidenced state chains from
+action start through contact, control, apex, release/end, and final hold as applicable. Narrative
+analysis proceeds from facts to events, causal edges, global story roles, and repeated product
+proof loops. Each coverage mode performs at most one bounded source-evidence supplementation
+pass and never invents a missing frame or story event.
+
+The bounded coverage pass reuses the same locally decoded RGB transition scan that informs fine
+segmentation. When caller annotations omit an intermediate motion state, a non-zero source-video
+change between evidenced endpoints may add one conservative onset, contact, release, apex, or end
+state; the state records its local scan method, timestamp, and score. A narrative discontinuity
+also triggers an interval rescan, but a visual probe never becomes a fabricated fact: unresolved
+semantic continuity remains explicit in `coverage_report.json`.
+
+Global story roles are derived from event text, verified state changes, revelations, and explicit
+stage cues rather than event position. Stable supporting fact frames may remain role-free while
+retaining event ownership; a role-bearing event needs at least one—not every—source frame carrying
+one of its roles. Repeated product-proof detection compares retained ordered action subsequences,
+so scene, product/style, and added or omitted action-step variations can share one structure ID.
+
+The publication seam validates profile/source consistency, shot and scene ownership, semantic
+roles, duplicate timestamp storage, action-state and transition endpoints, narrative event
+evidence, scene blocking references, coverage-added frames, and blueprint component equality.
+It then re-decodes every keyframe from the selected SHA-verified local video before atomically
+publishing. `ReferenceBlueprint` remains an owner-local payload with
+`formal_contract_identity=null`; no formal Contract identity is added.
 
 
 ## Invariants and outputs
@@ -52,12 +118,36 @@ Inputs pin version `1.0.0`, identify the selected reference, carry source digest
 
 The legacy analyze/compare modes write one canonical JSON artifact below an existing task workspace. Storyboard analysis atomically publishes its fixed output directory only after all media, timeline, identity, evidence, and role checks pass. Absolute paths, traversal, link/reparse-point paths, and conflicting output are rejected; identical output replays idempotently.
 
+For a fine-segment request, the final `reference_analysis/` output includes
+`fine_segments.json`, real `keyframes/`, `segment_analysis.json`,
+`reference_storyboard_analysis.json`, `reference_storyboard_analysis.md`,
+`reference_storyboard_analysis_board.png`, and `analysis_provenance.json`. Existing shot-evidence
+and replication boards remain supporting owner-local analysis assets. The main board uses a
+black/orange horizontal core-beat layout headed `分镜故事板 / Storyboard`; each card uses only
+its source-video representative frame and concise stage, action, audience, and function copy.
+The first generated board is a review candidate, not a final visual approval.
+
+When a complete replication package is supplied, the same output also includes
+`motion_keyframes.json`, `motion_transitions.json`, `motion_keyframe_atlas.png`,
+`narrative_event_graph.json`, `scene_blocking_map.json`, `replication_constraints.json`,
+`coverage_report.json`, and `reference_blueprint.json`. The motion atlas groups source-video
+frames by action in timestamp order and labels action state, timestamp, and direction. Detailed
+motion evidence stays in these dedicated artifacts while the human storyboard remains a finite
+set of merged core beats.
+
+Fine publication rejects gaps, overlaps, bad adjacency links, cross-segment frames or evidence,
+partial analysis packages, non-adjacent or incomplete beat partitions, representative-frame
+mismatches, and formulas not derived from the ordered beats. Provenance records
+`network_calls=0`, `provider_calls=0`, and `external_upload=false`. Reference blueprints and
+boards are analysis evidence only: they are not production storyboard plans, first frames, or
+Provider execution inputs.
+
 Legacy analyze/compare read scope is limited to the JSON request supplied by the caller; `source_uri` is provenance only and is never opened. Storyboard analysis reads only the explicitly named workspace-relative selected video and keyframe PNGs, verifies every supplied hash, and never dereferences the source URL. Absolute paths, link paths, and traversal are rejected. Unsupported/missing versions, malformed/tampered analysis, source identity or digest mismatch, missing evidence, forbidden nested discovery/Provider/download/Library directives, bad timelines, unsafe paths, and output collision are blockers.
 
 ## Errors, retries, and operation
 
 Stable errors cover validation, missing evidence, invalid media, forbidden artifact roles, forbidden discovery/Provider/download/Library scope, unsupported version, reference mismatch, forbidden path, output conflict, cancellation, and atomic-write failure. Errors recursively redact bearer and secret-like strings. There is no external retryable operation; callers may replay the same deterministic request/output idempotently.
 
-Run `python -m unittest discover -s tests/skills/reference_analysis -p "test_*.py"`, then `python tools\run_offline_tests.py`. Rollback is the owning branch commit revert. Provenance is `CLEAN_ROOM_ONLY`; Provider smoke is not applicable; maintainer `codex-02`; authorization `FTG-0-20260720-001`.
+Run `$env:PYTHONPATH='src'; python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py"`, then `python tools\run_offline_tests.py`. Rollback is the owning branch commit revert. Provenance is `CLEAN_ROOM_ONLY`; Provider smoke is not applicable; maintainer `codex-02`; authorization `FTG-0-20260720-001`.
 
 Cancellation is checked before segment analysis and again immediately before publication. One Windows-only symlink regression may skip where the OS denies test symlink creation; code inspection still covers symlink, junction, ancestor, target, and last-moment path changes. Status is an offline release candidate only after the shared placeholder-transition test is updated by its owner.
