@@ -7,7 +7,7 @@
 - Branch: `ft/codex-00-integration`
 - Implementation baseline: `dc6865a`
 - Schema/algorithm version: `1.0.0`
-- Skill version: `0.4.0-rc.offline`
+- Skill version: `0.4.1-rc.offline`
 - Status: `OFFLINE_VERIFIED`
 - Visual final: **not claimed**
 - Provenance: `CLEAN_ROOM_ONLY`; no Legacy source, Provider, upload, or network service was used
@@ -19,6 +19,8 @@ and leaves all formal Contract identities unchanged.
 ## Implemented offline behavior
 
 - mandatory user-supplied Analysis Brief; no silent focus or Hybrid selection;
+- fixed two-question Agent interaction that asks replication target before inference policy and forbids precomposed bundles;
+- deterministic mappings for motion-only, narrative-only, hybrid, and quick-overview user choices;
 - Brief objective/focus/depth routing that requires complete fine/replication evidence for detailed or replication-oriented work;
 - compact preparation limited to explicit overview mechanism extraction; result comparison stays on `compare-result`;
 - explicit `MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION` profiles derived from the Brief;
@@ -46,6 +48,8 @@ and leaves all formal Contract identities unchanged.
 | Command | Result |
 |---|---|
 | `python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 72 tests, 1 host-capability skip, 0 failures, 552.355s |
+| Two-question Analysis Brief interface file | PASS - 11 tests, 0 failures, 115.635s |
+| Original combined-choice regression | PASS - 1 test, 0 failures, 0.001s |
 | Analysis Brief / image-observation / incomplete-publication regressions | PASS - included in the 72-test owner run |
 | Three-profile prepare/finalize flow | PASS - Motion, Narrative, and Hybrid included in the owner run |
 | `python -m compileall -q src/ai_video_platform/skills/reference_analysis tests/skills/reference_analysis` | PASS |

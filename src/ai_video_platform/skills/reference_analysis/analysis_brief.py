@@ -29,7 +29,43 @@ ANALYSIS_FOCUSES = frozenset({
 })
 ANALYSIS_DEPTHS = frozenset({"OVERVIEW", "DETAILED"})
 HYPOTHESIS_POLICIES = frozenset({"OBSERVED_ONLY", "LABEL_UNVERIFIED"})
+REPLICATION_TARGETS = frozenset({
+    "MOTION_1_TO_1",
+    "NARRATIVE_1_TO_1",
+    "HYBRID_1_TO_1",
+    "QUICK_OVERVIEW",
+})
+INFERENCE_CHOICES = frozenset({"FACTS_ONLY", "LABELED_HYPOTHESES"})
 _BRIEF_KEYS = {"objective", "focus", "depth", "hypothesis_policy"}
+_TARGET_BRIEFS: dict[str, dict[str, object]] = {
+    "MOTION_1_TO_1": {
+        "objective": "REPLICATION_REFERENCE",
+        "focus": ["MOTION", "SCENE_BLOCKING"],
+        "depth": "DETAILED",
+    },
+    "NARRATIVE_1_TO_1": {
+        "objective": "REPLICATION_REFERENCE",
+        "focus": ["NARRATIVE", "EDITING_RHYTHM", "AUDIO_VISUAL"],
+        "depth": "DETAILED",
+    },
+    "HYBRID_1_TO_1": {
+        "objective": "REPLICATION_REFERENCE",
+        "focus": [
+            "MOTION",
+            "NARRATIVE",
+            "PRODUCT_PROOF",
+            "SCENE_BLOCKING",
+            "EDITING_RHYTHM",
+            "AUDIO_VISUAL",
+        ],
+        "depth": "DETAILED",
+    },
+    "QUICK_OVERVIEW": {
+        "objective": "MECHANISM_EXTRACTION",
+        "focus": ["EDITING_RHYTHM", "AUDIO_VISUAL"],
+        "depth": "OVERVIEW",
+    },
+}
 
 
 def _validate_enum_value(value: object, allowed: frozenset[str], field: str) -> str:
@@ -101,6 +137,29 @@ def derive_analysis_profile(brief: Mapping[str, object]) -> str:
     if motion:
         return "MOTION_REPLICATION"
     return "NARRATIVE_REPLICATION"
+
+
+def build_analysis_brief_from_choices(
+    replication_target: object,
+    inference_choice: object,
+) -> dict[str, object]:
+    """Map the two user-facing questions to the internal Analysis Brief."""
+    target = _validate_enum_value(
+        replication_target,
+        REPLICATION_TARGETS,
+        "replication_target",
+    )
+    inference = _validate_enum_value(
+        inference_choice,
+        INFERENCE_CHOICES,
+        "inference_choice",
+    )
+    return validate_analysis_brief({
+        **_TARGET_BRIEFS[target],
+        "hypothesis_policy": (
+            "OBSERVED_ONLY" if inference == "FACTS_ONLY" else "LABEL_UNVERIFIED"
+        ),
+    })
 
 
 def requires_replication_package(brief: Mapping[str, object]) -> bool:

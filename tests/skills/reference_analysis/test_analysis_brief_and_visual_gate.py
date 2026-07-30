@@ -9,7 +9,12 @@ from ai_video_platform.skills.reference_analysis import (
     ErrorCode,
     SkillError,
     analyze_storyboard,
+    build_analysis_brief_from_choices,
     prepare_reference_breakdown,
+)
+from ai_video_platform.skills.reference_analysis.analysis_brief import (
+    derive_analysis_profile,
+    requires_replication_package,
 )
 
 from tests.skills.reference_analysis.fine_segment_fixture import (
@@ -21,6 +26,77 @@ from tests.skills.reference_analysis.test_storyboard_analysis import materialize
 
 
 class AnalysisBriefAndVisualGateTests(unittest.TestCase):
+    def test_skill_requires_replication_target_and_inference_policy_as_separate_questions(self) -> None:
+        skill = (
+            Path(__file__).parents[3]
+            / "src"
+            / "ai_video_platform"
+            / "skills"
+            / "reference_analysis"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        target_question = "Question 1 - replication target"
+        inference_question = "Question 2 - inference policy"
+        self.assertIn(target_question, skill)
+        self.assertIn(inference_question, skill)
+        self.assertLess(skill.index(target_question), skill.index(inference_question))
+        for label in (
+            "1:1 motion replication",
+            "story/narrative replication",
+            "motion + story replication",
+            "quick structural overview",
+            "observed facts only",
+            "labeled hypotheses allowed",
+            "Never combine the two questions into precomposed bundles",
+        ):
+            self.assertIn(label, skill)
+
+    def test_two_user_choices_map_to_distinct_replication_targets(self) -> None:
+        cases = {
+            "MOTION_1_TO_1": (
+                ["MOTION", "SCENE_BLOCKING"],
+                "MOTION_REPLICATION",
+                "DETAILED",
+            ),
+            "NARRATIVE_1_TO_1": (
+                ["NARRATIVE", "EDITING_RHYTHM", "AUDIO_VISUAL"],
+                "NARRATIVE_REPLICATION",
+                "DETAILED",
+            ),
+            "HYBRID_1_TO_1": (
+                [
+                    "MOTION",
+                    "NARRATIVE",
+                    "PRODUCT_PROOF",
+                    "SCENE_BLOCKING",
+                    "EDITING_RHYTHM",
+                    "AUDIO_VISUAL",
+                ],
+                "HYBRID_REPLICATION",
+                "DETAILED",
+            ),
+            "QUICK_OVERVIEW": (
+                ["EDITING_RHYTHM", "AUDIO_VISUAL"],
+                "NARRATIVE_REPLICATION",
+                "OVERVIEW",
+            ),
+        }
+        for target, (focus, profile, depth) in cases.items():
+            with self.subTest(target=target):
+                brief = build_analysis_brief_from_choices(target, "FACTS_ONLY")
+                self.assertEqual(brief["focus"], focus)
+                self.assertEqual(brief["depth"], depth)
+                self.assertEqual(brief["hypothesis_policy"], "OBSERVED_ONLY")
+                self.assertEqual(derive_analysis_profile(brief), profile)
+                self.assertEqual(requires_replication_package(brief), target != "QUICK_OVERVIEW")
+
+        hypothesis_brief = build_analysis_brief_from_choices(
+            "HYBRID_1_TO_1",
+            "LABELED_HYPOTHESES",
+        )
+        self.assertEqual(hypothesis_brief["hypothesis_policy"], "LABEL_UNVERIFIED")
+
     def test_fine_analysis_requires_an_explicit_analysis_brief(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

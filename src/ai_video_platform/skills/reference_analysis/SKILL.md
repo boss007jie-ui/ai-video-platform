@@ -1,6 +1,6 @@
 # Reference Analysis
 
-Version: `0.4.0-rc.offline`; schema and algorithm: `1.0.0`.
+Version: `0.4.1-rc.offline`; schema and algorithm: `1.0.0`.
 
 Reference Analysis deterministically analyzes one explicitly selected reference, publishes source-bound observations and reusable reference mechanisms, and compares a produced result with a compatible analysis. It does not discover references, download remote media, call a Provider, traverse Research Library, write Product Library, adapt mechanisms to a current product, create production Storyboards, trigger QA, or import another Skill's implementation. Product transfer belongs to Storyboard and product facts belong to Product Knowledge.
 
@@ -20,7 +20,29 @@ Hermes examples: `python -m ai_video_platform.skills.reference_analysis analyze-
 
 ### Mandatory analysis brief and visual observation gate
 
-Before either local preparation mode, the execution Agent must obtain an explicit `analysis_brief` with exactly `objective`, non-empty `focus`, `depth`, and `hypothesis_policy`. If the user has not explicitly supplied these choices, the Agent must pause and ask; it may not select a focus on the user's behalf. Supported focus values are `EDITING_RHYTHM`, `MOTION`, `NARRATIVE`, `PRODUCT_PROOF`, `SCENE_BLOCKING`, and `AUDIO_VISUAL`. Reference Analysis derives the technical replication profile from this brief; there is no silent Hybrid default, and a caller-supplied conflicting profile is rejected. `DETAILED`, `REPLICATION_REFERENCE`, `STORYBOARD_TRANSFER`, or a motion/narrative/product-proof/scene focus requires the complete fine-segment and replication package. Only an explicit `OVERVIEW` mechanism-extraction brief limited to editing rhythm and/or audiovisual structure may use the compact timeline path; compact preparation rejects a stronger brief immediately instead of producing an unusable draft. `RESULT_COMPARISON` is rejected by preparation/finalization and must use `compare-result`.
+Before either local preparation mode, the execution Agent must obtain an explicit `analysis_brief` with exactly `objective`, non-empty `focus`, `depth`, and `hypothesis_policy`. The user does not need to understand those internal fields. If intent is not already explicit, the Agent must use the following two questions in order and map the answers deterministically with `build_analysis_brief_from_choices`; it may not select a target on the user's behalf.
+
+#### Required two-question interaction
+
+**Question 1 - replication target**
+
+Present these as separate, intuitive choices:
+
+1. `MOTION_1_TO_1` — **1:1 动作复刻** / 1:1 motion replication: inspect body/hand movement, contact state, object trajectory, timing, camera position, and scene blocking.
+2. `NARRATIVE_1_TO_1` — **故事剧情复刻** / story/narrative replication: inspect facts, events, causal continuity, turns, reveals, product-proof story function, pacing, subtitles, and audiovisual structure.
+3. `HYBRID_1_TO_1` — **动作 + 剧情完整复刻** / motion + story replication: perform both detailed analyses with a shared source timeline.
+4. `QUICK_OVERVIEW` — **快速了解视频结构** / quick structural overview: inspect only the main stages, editing rhythm, and audiovisual structure; do not claim 1:1 replication.
+
+**Question 2 - inference policy**
+
+Ask this only after the replication target is known:
+
+1. `FACTS_ONLY` — **只写画面可确认的事实** / observed facts only: inference fields remain `UNAVAILABLE`.
+2. `LABELED_HYPOTHESES` — **允许补充为什么有效，但标记为待验证假设** / labeled hypotheses allowed: every inference uses the `HYPOTHESIS:` prefix and remains separate from observed facts.
+
+**Never combine the two questions into precomposed bundles.** In particular, do not offer choices such as “detailed + facts only” or “overview + hypotheses” before the user has selected motion, narrative, hybrid, or overview. Every mode still requires real-frame viewing; image grounding is not an inference-policy option.
+
+The mapping is fixed: Motion → `REPLICATION_REFERENCE` + `MOTION,SCENE_BLOCKING` + `DETAILED`; Narrative → `REPLICATION_REFERENCE` + `NARRATIVE,EDITING_RHYTHM,AUDIO_VISUAL` + `DETAILED`; Hybrid → all replication focuses + `DETAILED`; Overview → `MECHANISM_EXTRACTION` + `EDITING_RHYTHM,AUDIO_VISUAL` + `OVERVIEW`. Question 2 maps only to `OBSERVED_ONLY` or `LABEL_UNVERIFIED`. Supported focus values remain `EDITING_RHYTHM`, `MOTION`, `NARRATIVE`, `PRODUCT_PROOF`, `SCENE_BLOCKING`, and `AUDIO_VISUAL`. Reference Analysis derives the technical replication profile from this brief; there is no silent Hybrid default, and a caller-supplied conflicting profile is rejected. Detailed or replication-oriented work requires the complete fine-segment and replication package. Compact preparation accepts only the explicit quick overview. `RESULT_COMPARISON` is rejected by preparation/finalization and must use `compare-result`.
 
 The execution Agent **must look at every extracted keyframe with image-understanding before publication**. Preparation writes `analysis_configuration.visual_observation` as a `REQUIRED` checklist bound to the selected media SHA-256 and every keyframe ID/SHA-256. After actually opening and inspecting each image, the Agent must record one or more concrete `visual_facts` for that exact frame. Each fact has `category` (`SCENE`, `SUBJECT`, `ACTION`, `OBJECT_STATE`, `VISIBLE_TEXT`, `CAMERA`, or `FRAME_QUALITY`) and a concrete `description`; `UNAVAILABLE`, `DRAFT:`, and generic “viewed/inspected” attestations are rejected. Only then may the Agent set the checklist to `COMPLETED`, identify itself, set `method=agent_image_understanding`, and mark the frame observed. The Agent must never auto-complete this receipt with a script or test helper. Copying the checklist without viewing the images, or inferring content from filenames, scripts, metadata, prior reports, subtitles alone, or other text is forbidden. If image understanding is unavailable, any image cannot be opened, or any digest/observation/fact is missing, the Agent must stop and report `REFERENCE_ANALYSIS_VISUAL_OBSERVATION_REQUIRED`; it must not invent an analysis.
 
