@@ -1,6 +1,6 @@
 # Reference Analysis
 
-Version: `0.4.3-rc.offline`; schema and algorithm: `1.0.0`.
+Version: `0.4.4-rc.offline`; schema and algorithm: `1.0.0`.
 
 Reference Analysis deterministically analyzes one explicitly selected reference, publishes source-bound observations and reusable reference mechanisms, and compares a produced result with a compatible analysis. It does not discover references, download remote media, call a Provider, traverse Research Library, write Product Library, adapt mechanisms to a current product, create production Storyboards, trigger QA, or import another Skill's implementation. Product transfer belongs to Storyboard and product facts belong to Product Knowledge.
 
@@ -46,7 +46,9 @@ The mapping is fixed: Motion → `REPLICATION_REFERENCE` + `MOTION,SCENE_BLOCKIN
 
 The execution Agent **must look at every extracted keyframe with image-understanding before publication**. Preparation writes `analysis_configuration.visual_observation` as a `REQUIRED` checklist bound to the selected media SHA-256 and every keyframe ID/SHA-256. It also writes aspect-ratio-preserving `inspection_atlases`, each containing at most 12 labelled source frames, so an image-capable Agent may inspect a large checklist in bounded batches. Batch inspection does not weaken the rule: the Agent must visually resolve every labelled cell and record facts for each exact frame ID; if any cell is too small, ambiguous, or unreadable, it must open that individual PNG. After actually opening and inspecting each image, the Agent must record one or more concrete `visual_facts` for that exact frame. Each fact has `category` (`SCENE`, `SUBJECT`, `ACTION`, `OBJECT_STATE`, `VISIBLE_TEXT`, `CAMERA`, or `FRAME_QUALITY`) and a concrete `description`; `UNAVAILABLE`, `DRAFT:`, and generic “viewed/inspected” attestations are rejected. Only then may the Agent set the checklist to `COMPLETED`, identify itself, set `method=agent_image_understanding`, and mark the frame observed. The Agent must never auto-complete this receipt with a script or test helper. Copying the checklist without viewing the images, or inferring content from filenames, scripts, metadata, prior reports, subtitles alone, or other text is forbidden. If image understanding is unavailable, any image cannot be opened, or any digest/observation/fact is missing, the Agent must stop and report `REFERENCE_ANALYSIS_VISUAL_OBSERVATION_REQUIRED`; it must not invent an analysis.
 
-An all-frame receipt is necessary but not sufficient. Every supplied keyframe is re-decoded from the SHA-verified selected source video at publication time. Every fine-segment publication request also carries `analysis_configuration.preparation_binding`, which must match the current `reference_breakdown_draft/draft_manifest.json` and exact keyframe set. Running preparation again invalidates every older request and observation receipt; the Agent must discard the old finalize file, reload the new request, and inspect the new checklist. Any `DRAFT:` placeholder produced during extraction, including `DRAFT: UNAVAILABLE`, is rejected even after the checklist is marked complete. The Agent must replace it with image-grounded observations or exact `UNAVAILABLE`. Audience psychology, conversion function, and viral mechanism are inference fields: `OBSERVED_ONLY` makes them unavailable, while `LABEL_UNVERIFIED` requires the `HYPOTHESIS:` prefix. Target-product transfer suggestions must remain `UNAVAILABLE` because Storyboard owns that work.
+A differing caller-supplied `shot_id` makes an inter-event state jump only a montage candidate. Each such candidate creates a `transition_observations` item that remains `REQUIRED` until the Agent views both exact boundary frames. To confirm `MONTAGE_CUT`, the receipt must cite one distinct concrete `SCENE`, `SUBJECT`, `ACTION`, or `OBJECT_STATE` fact from each endpoint and describe the visible discontinuity. Camera/framing facts alone do not prove a semantic montage jump. If the two viewed frames instead show an ordinary continuity edit or do not establish the claimed jump, the Agent must not complete the montage receipt; it must correct the offline facts or report incomplete coverage. Finalization fails closed when any candidate is unconfirmed.
+
+An all-frame receipt is necessary but not sufficient. Every supplied keyframe is re-decoded from the SHA-verified selected source video at publication time. Every prepared publication request carries `analysis_configuration.preparation_binding`, which must match the current `reference_breakdown_draft/draft_manifest.json` and exact keyframe set. Running either preparation mode again invalidates every older request and observation receipt; the Agent must discard the old finalize file, reload the new request, and inspect the new checklist. Any `DRAFT:` placeholder produced during extraction, including `DRAFT: UNAVAILABLE`, is rejected even after the checklist is marked complete. The Agent must replace it with image-grounded observations or exact `UNAVAILABLE`. Audience psychology, conversion function, and viral mechanism are inference fields: `OBSERVED_ONLY` makes them unavailable, while `LABEL_UNVERIFIED` requires the `HYPOTHESIS:` prefix. Target-product transfer suggestions must remain `UNAVAILABLE` because Storyboard owns that work.
 
 ### Local draft preparation
 
@@ -134,8 +136,10 @@ The bounded coverage pass reuses the same locally decoded RGB transition scan th
 segmentation. When caller annotations omit an intermediate motion state, a non-zero source-video
 change between evidenced endpoints may add one conservative onset, contact, release, apex, or end
 state; the state records its local scan method, timestamp, and score. A narrative discontinuity
-at a real shot boundary is recorded as a non-causal `MONTAGE_CUT`; it does not require a fabricated
-bridge fact and does not become a causal edge. A state discontinuity inside the same shot may use
+across different declared shots becomes a non-causal montage candidate; it does not require a fabricated
+bridge fact and does not become a causal edge. Publication records `MONTAGE_CUT` only after the Agent's
+boundary-specific visual receipt establishes a visible scene, subject, action, or object-state discontinuity
+on the two source frames. A state discontinuity inside the same shot may use
 the RGB scan only as a diagnostic candidate locator. Pixel difference never establishes a semantic
 narrative fact, so the same-shot discontinuity remains explicit and blocks publication until a
 viewed source frame supports the missing fact.
@@ -164,7 +168,7 @@ Inputs pin version `1.0.0`, identify the selected reference, carry source digest
 The legacy analyze/compare modes write one canonical JSON artifact below an existing task workspace. Storyboard analysis atomically publishes its fixed output directory only after all media, timeline, identity, evidence, and role checks pass. Absolute paths, traversal, link/reparse-point paths, and conflicting output are rejected; identical output replays idempotently.
 
 For a fine-segment request, the final `reference_analysis/` output includes
-`fine_segments.json`, real `keyframes/`, labelled `visual_observation_atlases/`, `segment_analysis.json`,
+`fine_segments.json`, real `keyframes/`, `segment_analysis.json`,
 `reference_storyboard_analysis.json`, `reference_storyboard_analysis.md`,
 `reference_storyboard_analysis_board.png`, and `analysis_provenance.json`. Existing shot-evidence
 and replication boards remain supporting owner-local analysis assets. The main board uses a

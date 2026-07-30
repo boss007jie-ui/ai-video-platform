@@ -18,6 +18,7 @@ from .analysis_brief import (
     validate_analysis_brief,
 )
 from .errors import ErrorCode, SkillError
+from .evidence_binding import keyframe_set_digest
 from .fine_segments import build_fine_segments, detect_boundary_signals, scan_visual_change_evidence
 from .local_media import (
     extract_local_png_frame,
@@ -211,6 +212,7 @@ def _visual_observation_request(
     *,
     source_media_sha256: str,
     inspection_atlases: Sequence[Mapping[str, object]] = (),
+    montage_transitions: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, object]:
     """Describe the exact images an execution Agent must inspect before publication."""
     return {
@@ -219,6 +221,20 @@ def _visual_observation_request(
         "method": "UNAVAILABLE",
         "source_media_sha256": source_media_sha256,
         "inspection_atlases": [dict(atlas) for atlas in inspection_atlases],
+        "transition_observations": [
+            {
+                "from_event_id": str(transition["from_event_id"]),
+                "to_event_id": str(transition["to_event_id"]),
+                "from_keyframe_id": str(transition["evidence_frames"][0]),  # type: ignore[index]
+                "to_keyframe_id": str(transition["evidence_frames"][1]),  # type: ignore[index]
+                "status": "REQUIRED",
+                "relation": "UNAVAILABLE",
+                "visual_evidence": [],
+                "boundary_basis": "UNAVAILABLE",
+            }
+            for transition in montage_transitions
+            if transition.get("relation") == "MONTAGE_CUT"
+        ],
         "frames": [
             {
                 "keyframe_id": str(frame.get("frame_id", frame.get("keyframe_id"))),
@@ -263,21 +279,6 @@ def _build_visual_observation_atlases(
             "frame_ids": [str(frame["frame_id"]) for frame in normalized_frames],
         })
     return records
-
-
-def _keyframe_set_digest(keyframes: Sequence[Mapping[str, object]]) -> str:
-    binding = [
-        {
-            "keyframe_id": str(frame.get("frame_id", frame.get("keyframe_id"))),
-            "sha256": str(frame["sha256"]),
-            "timestamp_ms": int(frame["timestamp_ms"]),
-        }
-        for frame in sorted(
-            keyframes,
-            key=lambda item: str(item.get("frame_id", item.get("keyframe_id"))),
-        )
-    ]
-    return _digest(_canonical(binding))
 
 
 def _digest(payload: bytes) -> str:
@@ -711,7 +712,7 @@ def _prepare_fine_breakdown(
     preparation_binding = {
         "draft_version": _FINE_MODE,
         "preparation_request_digest": request_digest,
-        "keyframe_set_sha256": _keyframe_set_digest(keyframes),
+        "keyframe_set_sha256": keyframe_set_digest(keyframes),
     }
     analyze_request = {
         "analysis_version": _VERSION,
@@ -726,6 +727,7 @@ def _prepare_fine_breakdown(
                 keyframes,
                 source_media_sha256=str(source["sha256"]),
                 inspection_atlases=inspection_atlases,
+                montage_transitions=narrative_graph["event_transitions"],  # type: ignore[arg-type]
             ),
             "keyframes": [
                 {
@@ -918,6 +920,11 @@ def prepare_reference_breakdown(
                 "sha256": _digest(payload),
             })
         inspection_atlases = _build_visual_observation_atlases(stage, keyframe_dir, keyframes)
+        preparation_binding = {
+            "draft_version": _MODE,
+            "preparation_request_digest": request_digest,
+            "keyframe_set_sha256": keyframe_set_digest(keyframes),
+        }
         formula = {
             "value": "DRAFT: sequence template only; bottom-line formula requires human visual review.",
             "evidence_refs": ["media:selected-reference", *(f"keyframe:{item['keyframe_id']}" for item in keyframes)],
@@ -929,6 +936,7 @@ def prepare_reference_breakdown(
             "video_metadata": metadata,
             "analysis_configuration": {
                 "current_product": current_product,
+                "preparation_binding": preparation_binding,
                 "visual_observation": _visual_observation_request(
                     keyframes,
                     source_media_sha256=str(source["sha256"]),
@@ -945,6 +953,7 @@ def prepare_reference_breakdown(
             "analysis_version": _VERSION,
             "analysis_brief": normalized["analysis_brief"],
             "request_digest": request_digest,
+            "preparation_binding": preparation_binding,
             "method_provenance": {
                 "mode": _MODE,
                 "metadata_strategy": metadata_source,

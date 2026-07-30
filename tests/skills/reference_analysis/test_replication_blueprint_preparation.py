@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ai_video_platform.skills.reference_analysis import analyze_storyboard, prepare_reference_breakdown
+from ai_video_platform.skills.reference_analysis import ErrorCode, SkillError, analyze_storyboard, prepare_reference_breakdown
 
 from tests.skills.reference_analysis.fine_segment_fixture import complete_visual_observation, replication_request
 
@@ -224,11 +224,72 @@ class ReplicationBlueprintPreparationTests(unittest.TestCase):
             publication_request = json.loads(
                 (workspace / result.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
             )
+            transition_receipts = publication_request["analysis_configuration"]["visual_observation"]["transition_observations"]
+            self.assertEqual(len(transition_receipts), 1)
+            self.assertEqual(transition_receipts[0]["status"], "REQUIRED")
+            self.assertEqual(transition_receipts[0]["relation"], "UNAVAILABLE")
+            self.assertEqual(
+                [transition_receipts[0]["from_keyframe_id"], transition_receipts[0]["to_keyframe_id"]],
+                montage["evidence_frames"],
+            )
             complete_visual_observation(publication_request)
 
             published = analyze_storyboard(publication_request, workspace=workspace)
 
             self.assertEqual(published.status, "COMPLETED")
+
+    def test_cross_shot_state_gap_without_grounded_boundary_observation_cannot_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
+            annotations = request["offline_analysis"]["segment_annotations"]  # type: ignore[index]
+            for index, annotation in enumerate(annotations):
+                annotation["stage_title"] = "Product Proof Before" if index < 5 else "Product Proof After"
+            facts = request["offline_analysis"]["narrative_facts"]  # type: ignore[index]
+            facts[4]["end_state"] = "state-before-gap"
+            facts[5]["start_state"] = "state-after-gap"
+            result = prepare_reference_breakdown(request, workspace=workspace)
+            publication_request = json.loads(
+                (workspace / result.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+            complete_visual_observation(publication_request)
+            transition = publication_request["analysis_configuration"]["visual_observation"]["transition_observations"][0]
+            transition["status"] = "REQUIRED"
+            transition["relation"] = "UNAVAILABLE"
+            transition["visual_evidence"] = []
+            transition["boundary_basis"] = "UNAVAILABLE"
+
+            with self.assertRaises(SkillError) as captured:
+                analyze_storyboard(publication_request, workspace=workspace)
+
+            self.assertEqual(captured.exception.code, ErrorCode.VISUAL_OBSERVATION_REQUIRED)
+
+    def test_camera_only_boundary_facts_do_not_prove_a_montage_state_jump(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
+            annotations = request["offline_analysis"]["segment_annotations"]  # type: ignore[index]
+            for index, annotation in enumerate(annotations):
+                annotation["stage_title"] = "Product Proof Before" if index < 5 else "Product Proof After"
+            facts = request["offline_analysis"]["narrative_facts"]  # type: ignore[index]
+            facts[4]["end_state"] = "state-before-gap"
+            facts[5]["start_state"] = "state-after-gap"
+            result = prepare_reference_breakdown(request, workspace=workspace)
+            publication_request = json.loads(
+                (workspace / result.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+            complete_visual_observation(publication_request)
+            receipt = publication_request["analysis_configuration"]["visual_observation"]
+            transition = receipt["transition_observations"][0]
+            endpoint_ids = {transition["from_keyframe_id"], transition["to_keyframe_id"]}
+            for frame in receipt["frames"]:
+                if frame["keyframe_id"] in endpoint_ids:
+                    frame["visual_facts"][0]["category"] = "CAMERA"
+
+            with self.assertRaises(SkillError) as captured:
+                analyze_storyboard(publication_request, workspace=workspace)
+
+            self.assertEqual(captured.exception.code, ErrorCode.VISUAL_OBSERVATION_REQUIRED)
 
     def test_same_shot_inter_event_state_gap_still_blocks_publication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

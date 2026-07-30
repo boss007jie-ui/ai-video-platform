@@ -158,6 +158,7 @@ class AnalysisBriefAndVisualGateTests(unittest.TestCase):
             self.assertEqual(result.status, "COMPLETED")
             self.assertEqual(result.artifact["visual_observation"]["status"], "COMPLETED")
             self.assertEqual(result.artifact["visual_observation"]["observer_id"], "codex-vision-test")
+            self.assertNotIn("inspection_atlases", result.artifact["visual_observation"])
 
     def test_new_preparation_invalidates_an_older_completed_visual_request(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -171,6 +172,30 @@ class AnalysisBriefAndVisualGateTests(unittest.TestCase):
             shutil.rmtree(workspace / first.output_root)
             revised = replication_request(workspace)
             revised["offline_analysis"]["narrative_facts"][0]["result"] = "revised visible result"  # type: ignore[index]
+            prepare_reference_breakdown(revised, workspace=workspace)
+
+            with self.assertRaises(SkillError) as captured:
+                analyze_storyboard(stale_request, workspace=workspace)
+
+            self.assertEqual(captured.exception.code, ErrorCode.REFERENCE_MISMATCH)
+            self.assertIn("analysis_configuration.preparation_binding", captured.exception.field_paths)
+
+    def test_new_compact_preparation_invalidates_an_older_visual_request(self) -> None:
+        from tests.skills.reference_analysis.test_prepare_reference_breakdown import prepare_request
+        from tests.skills.reference_analysis.fine_segment_fixture import materialize_video
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _, media_sha256 = materialize_video(workspace)
+            first = prepare_reference_breakdown(prepare_request(media_sha256), workspace=workspace)
+            stale_request = json.loads(
+                (workspace / first.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+            complete_visual_observation(stale_request, observer_id="stale-overview-agent")
+
+            shutil.rmtree(workspace / first.output_root)
+            revised = prepare_request(media_sha256)
+            revised["policy"] = {"interval_ms": 1000, "max_keyframes": 5}
             prepare_reference_breakdown(revised, workspace=workspace)
 
             with self.assertRaises(SkillError) as captured:

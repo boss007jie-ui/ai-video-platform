@@ -18,9 +18,15 @@ from .analysis_brief import (
     validate_analysis_brief,
 )
 from .errors import ErrorCode, SkillError
+from .evidence_binding import keyframe_set_digest
 from .local_media import extract_local_png_frame, probe_local_audio_available
 from .models import StoryboardAnalysisResult
-from .replication_blueprint import ACTION_STATES, ANALYSIS_PROFILES, NARRATIVE_ROLES
+from .replication_blueprint import (
+    ACTION_STATES,
+    ANALYSIS_PROFILES,
+    NARRATIVE_ROLES,
+    classify_narrative_transition,
+)
 from .segment_storyboard import OBSERVATION_FIELDS as _FINE_OBSERVATION_FIELDS
 from .storyboard_boards import (
     decode_png,
@@ -75,6 +81,7 @@ _VISUAL_FACT_CATEGORIES = {
     "CAMERA",
     "FRAME_QUALITY",
 }
+_MONTAGE_EVIDENCE_CATEGORIES = {"SCENE", "SUBJECT", "ACTION", "OBJECT_STATE"}
 _NON_FACT_DESCRIPTIONS = {
     "UNAVAILABLE",
     "UNKNOWN",
@@ -113,26 +120,11 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _keyframe_set_digest(keyframes: Sequence[Mapping[str, object]]) -> str:
-    binding = [
-        {
-            "keyframe_id": str(frame.get("frame_id", frame.get("keyframe_id"))),
-            "sha256": str(frame["sha256"]),
-            "timestamp_ms": int(frame["timestamp_ms"]),
-        }
-        for frame in sorted(
-            keyframes,
-            key=lambda item: str(item.get("frame_id", item.get("keyframe_id"))),
-        )
-    ]
-    return _digest(_canonical(binding))
-
-
 def _validate_preparation_binding(
     value: object,
     *,
     workspace: Path,
-    keyframes: Mapping[str, Mapping[str, object]],
+    declared_keyframes: object,
 ) -> dict[str, str]:
     field = "analysis_configuration.preparation_binding"
     binding = _mapping(value, field)
@@ -144,7 +136,7 @@ def _validate_preparation_binding(
         f"{field}.preparation_request_digest",
     )
     keyframe_digest = _text(binding.get("keyframe_set_sha256"), f"{field}.keyframe_set_sha256")
-    if draft_version != "local_fine_segments_v1" or not _SHA256.fullmatch(request_digest) or not _SHA256.fullmatch(keyframe_digest):
+    if draft_version not in {"local_draft_v1", "local_fine_segments_v1"} or not _SHA256.fullmatch(request_digest) or not _SHA256.fullmatch(keyframe_digest):
         raise SkillError(
             ErrorCode.REFERENCE_MISMATCH,
             "Preparation binding identity is invalid",
@@ -173,11 +165,20 @@ def _validate_preparation_binding(
             "The current Reference Analysis draft has no keyframe binding",
             field_paths=(field,),
         )
-    supplied_frames = list(keyframes.values())
+    if not isinstance(declared_keyframes, list) or any(
+        not isinstance(frame, Mapping) for frame in declared_keyframes
+    ):
+        raise SkillError(
+            ErrorCode.REFERENCE_MISMATCH,
+            "The publication request has no valid prepared keyframe binding",
+            field_paths=(field,),
+        )
+    supplied_frames = list(declared_keyframes)
     if (
-        manifest.get("request_digest") != request_digest
-        or _keyframe_set_digest(manifest_keyframes) != keyframe_digest
-        or _keyframe_set_digest(supplied_frames) != keyframe_digest
+        manifest.get("draft_version") != draft_version
+        or manifest.get("request_digest") != request_digest
+        or keyframe_set_digest(manifest_keyframes) != keyframe_digest
+        or keyframe_set_digest(supplied_frames) != keyframe_digest
     ):
         raise SkillError(
             ErrorCode.REFERENCE_MISMATCH,
@@ -443,17 +444,47 @@ def _validate_keyframes(
     return records, payloads, images
 
 
+def _montage_transition_requirements(config: Mapping[str, object]) -> list[dict[str, str]]:
+    """Read draft montage candidates so the visual gate can require boundary-specific receipts."""
+    narrative = config.get("narrative_event_graph")
+    if not isinstance(narrative, Mapping):
+        return []
+    transitions = narrative.get("event_transitions")
+    if not isinstance(transitions, list):
+        return []
+    requirements: list[dict[str, str]] = []
+    for transition in transitions:
+        if not isinstance(transition, Mapping) or transition.get("relation") != "MONTAGE_CUT":
+            continue
+        evidence_frames = transition.get("evidence_frames")
+        if not isinstance(evidence_frames, list) or len(evidence_frames) != 2:
+            continue
+        requirements.append({
+            "from_event_id": str(transition.get("from_event_id")),
+            "to_event_id": str(transition.get("to_event_id")),
+            "from_keyframe_id": str(evidence_frames[0]),
+            "to_keyframe_id": str(evidence_frames[1]),
+        })
+    return requirements
+
+
 def _validate_visual_observation(
     value: object,
     *,
     workspace: Path,
     keyframes: Mapping[str, Mapping[str, object]],
     source_media_sha256: str,
+    montage_requirements: Sequence[Mapping[str, str]] = (),
 ) -> dict[str, object]:
     field = "analysis_configuration.visual_observation"
     observation = _mapping(value, field)
     required = {"status", "observer_id", "method", "source_media_sha256", "frames"}
-    _strict_keys(observation, required, required | {"inspection_atlases"}, field)
+    _strict_keys(
+        observation,
+        required,
+        required | {"inspection_atlases", "transition_observations"},
+        field,
+    )
     if observation.get("source_media_sha256") != source_media_sha256:
         raise SkillError(
             ErrorCode.REFERENCE_MISMATCH,
@@ -587,6 +618,102 @@ def _validate_visual_observation(
         for frame in normalized_frames
         if frame["observed"] is not True or not frame["visual_facts"]
     ]
+    raw_transition_observations = observation.get("transition_observations", [])
+    if not isinstance(raw_transition_observations, list):
+        raise SkillError(
+            ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+            "Montage transition observations must be an array",
+            field_paths=(f"{field}.transition_observations",),
+        )
+    if len(raw_transition_observations) != len(montage_requirements):
+        raise SkillError(
+            ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+            "Every montage candidate requires an explicit image-grounded boundary observation",
+            field_paths=(f"{field}.transition_observations",),
+        )
+    frames_by_id = {str(frame["keyframe_id"]): frame for frame in normalized_frames}
+    normalized_transition_observations: list[dict[str, object]] = []
+    for index, (raw_transition, requirement) in enumerate(
+        zip(raw_transition_observations, montage_requirements)
+    ):
+        transition_field = f"{field}.transition_observations[{index}]"
+        transition = _mapping(raw_transition, transition_field)
+        keys = {
+            "from_event_id",
+            "to_event_id",
+            "from_keyframe_id",
+            "to_keyframe_id",
+            "status",
+            "relation",
+            "visual_evidence",
+            "boundary_basis",
+        }
+        _strict_keys(transition, keys, keys, transition_field)
+        identity_keys = ("from_event_id", "to_event_id", "from_keyframe_id", "to_keyframe_id")
+        if any(str(transition.get(name)) != str(requirement[name]) for name in identity_keys):
+            raise SkillError(
+                ErrorCode.REFERENCE_MISMATCH,
+                "Montage boundary observation does not match the prepared adjacent events",
+                field_paths=(transition_field,),
+            )
+        raw_evidence = transition.get("visual_evidence")
+        evidence = raw_evidence if isinstance(raw_evidence, list) else []
+        expected_frame_ids = [str(requirement["from_keyframe_id"]), str(requirement["to_keyframe_id"])]
+        normalized_evidence: list[dict[str, object]] = []
+        grounded_descriptions: list[str] = []
+        for evidence_index, (raw_item, expected_frame_id) in enumerate(zip(evidence, expected_frame_ids)):
+            evidence_field = f"{transition_field}.visual_evidence[{evidence_index}]"
+            item = _mapping(raw_item, evidence_field)
+            _strict_keys(item, {"keyframe_id", "visual_fact_index"}, {"keyframe_id", "visual_fact_index"}, evidence_field)
+            fact_index = item.get("visual_fact_index")
+            frame = frames_by_id.get(expected_frame_id)
+            facts = frame.get("visual_facts", []) if frame is not None else []
+            if (
+                item.get("keyframe_id") != expected_frame_id
+                or isinstance(fact_index, bool)
+                or not isinstance(fact_index, int)
+                or fact_index < 0
+                or fact_index >= len(facts)  # type: ignore[arg-type]
+            ):
+                raise SkillError(
+                    ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+                    "Montage evidence must reference a concrete visual fact on each exact boundary frame",
+                    field_paths=(evidence_field,),
+                )
+            fact = facts[fact_index]  # type: ignore[index]
+            if fact["category"] not in _MONTAGE_EVIDENCE_CATEGORIES:
+                raise SkillError(
+                    ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+                    "Montage evidence must show a scene, subject, action, or object-state discontinuity",
+                    field_paths=(evidence_field,),
+                )
+            grounded_descriptions.append(str(fact["description"]))
+            normalized_evidence.append({"keyframe_id": expected_frame_id, "visual_fact_index": fact_index})
+        boundary_basis = str(transition.get("boundary_basis", "")).strip()
+        transition_incomplete = (
+            transition.get("status") != "COMPLETED"
+            or transition.get("relation") != "MONTAGE_CUT"
+            or len(evidence) != 2
+            or len(normalized_evidence) != 2
+            or len(set(grounded_descriptions)) != 2
+            or len(boundary_basis) < 20
+            or boundary_basis.upper() == "UNAVAILABLE"
+            or "DRAFT:" in boundary_basis
+            or any(marker in boundary_basis.casefold() for marker in _ATTESTATION_MARKERS)
+        )
+        if transition_incomplete:
+            raise SkillError(
+                ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+                "A shot-ID change is only a montage candidate until both boundary images visibly establish the discontinuity",
+                field_paths=(transition_field,),
+            )
+        normalized_transition_observations.append({
+            **{name: str(requirement[name]) for name in identity_keys},
+            "status": "COMPLETED",
+            "relation": "MONTAGE_CUT",
+            "visual_evidence": normalized_evidence,
+            "boundary_basis": boundary_basis,
+        })
     if (
         observation.get("status") != "COMPLETED"
         or observation.get("method") != "agent_image_understanding"
@@ -607,7 +734,7 @@ def _validate_visual_observation(
         "observer_id": str(observation["observer_id"]).strip(),
         "method": "agent_image_understanding",
         "source_media_sha256": source_media_sha256,
-        "inspection_atlases": normalized_atlases,
+        "transition_observations": normalized_transition_observations,
         "frames": normalized_frames,
     }
 
@@ -962,6 +1089,7 @@ def _validate_replication_package(
     keyframes: Mapping[str, Mapping[str, object]],
     fine_segments: Sequence[Mapping[str, object]],
     segment_analysis: Sequence[Mapping[str, object]],
+    visual_observation: Mapping[str, object],
 ) -> dict[str, dict[str, object]]:
     field_root = "analysis_configuration"
     frame_ids = set(keyframes)
@@ -1175,6 +1303,10 @@ def _validate_replication_package(
             field_paths=(f"{narrative_field}.event_transitions",),
         )
     verified_transition_pairs: set[tuple[str, str]] = set()
+    grounded_montages = {
+        (str(item["from_event_id"]), str(item["to_event_id"])): item
+        for item in visual_observation.get("transition_observations", [])  # type: ignore[union-attr]
+    }
     transition_keys = {"from_event_id", "to_event_id", "relation", "evidence_frames"}
     for index, transition in enumerate(event_transitions):
         field = f"{narrative_field}.event_transitions[{index}]"
@@ -1183,12 +1315,11 @@ def _validate_replication_package(
         before_frame_id = str(before["source_frames"][-1])  # type: ignore[index]
         after_frame_id = str(after["source_frames"][0])  # type: ignore[index]
         evidence_frames = _string_list(transition.get("evidence_frames"), f"{field}.evidence_frames", allow_empty=False)
-        expected_relation = (
-            "VERIFIED_STATE_CONTINUITY"
-            if before.get("end_state") == after.get("start_state")
-            else "MONTAGE_CUT"
-            if keyframes[before_frame_id].get("shot_id") != keyframes[after_frame_id].get("shot_id")
-            else "UNRESOLVED_STATE_DISCONTINUITY"
+        expected_relation = classify_narrative_transition(
+            before_end_state=before.get("end_state"),
+            after_start_state=after.get("start_state"),
+            before_shot_id=keyframes[before_frame_id].get("shot_id"),
+            after_shot_id=keyframes[after_frame_id].get("shot_id"),
         )
         if (
             transition.get("from_event_id") != before.get("event_id")
@@ -1203,6 +1334,17 @@ def _validate_replication_package(
             )
         if expected_relation == "VERIFIED_STATE_CONTINUITY":
             verified_transition_pairs.add((str(before["event_id"]), str(after["event_id"])))
+        elif expected_relation == "MONTAGE_CUT":
+            grounded = grounded_montages.get((str(before["event_id"]), str(after["event_id"])))
+            if grounded is None or [
+                grounded.get("from_keyframe_id"),
+                grounded.get("to_keyframe_id"),
+            ] != evidence_frames:
+                raise SkillError(
+                    ErrorCode.VISUAL_OBSERVATION_REQUIRED,
+                    "Montage semantics require a completed visual observation of both boundary frames",
+                    field_paths=(field,),
+                )
     causal_edge_pairs: set[tuple[str, str]] = set()
     for index, edge in enumerate(_object_list(narrative.get("causal_edges"), f"{narrative_field}.causal_edges")):
         field = f"{narrative_field}.causal_edges[{index}]"
@@ -1599,21 +1741,22 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
         for field in product_keys:
             _text(supplied_product.get(field), f"analysis_configuration.current_product.{field}")
     current_product = {"product_id": "UNAVAILABLE", "category": "UNAVAILABLE", "display_name": "UNAVAILABLE"}
-    keyframes, keyframe_payloads, keyframe_images = _validate_keyframes(
-        config.get("keyframes"), root, int(metadata["duration_ms"]),
-    )
     preparation_binding: dict[str, str] | None = None
     if present_replication_keys or "preparation_binding" in config:
         preparation_binding = _validate_preparation_binding(
             config.get("preparation_binding"),
             workspace=root,
-            keyframes=keyframes,
+            declared_keyframes=config.get("keyframes"),
         )
+    keyframes, keyframe_payloads, keyframe_images = _validate_keyframes(
+        config.get("keyframes"), root, int(metadata["duration_ms"]),
+    )
     visual_observation = _validate_visual_observation(
         config.get("visual_observation"),
         workspace=root,
         keyframes=keyframes,
         source_media_sha256=str(source["sha256"]),
+        montage_requirements=_montage_transition_requirements(config),
     )
     _verify_keyframes_from_source(root, source, keyframes)
     allowed_refs = {"media:selected-reference", "metadata:video", *(f"keyframe:{key}" for key in keyframes), *(f"comment:{key}" for key in comment_ids)}
@@ -1663,6 +1806,7 @@ def analyze_storyboard(request: Mapping[str, object], *, workspace: Path) -> Sto
             keyframes=keyframes,
             fine_segments=fine_segments,
             segment_analysis=segment_analysis,
+            visual_observation=visual_observation,
         )
     shots = _shot_evidence(beats, keyframes, source, keyframe_images)
     reference_beats = (

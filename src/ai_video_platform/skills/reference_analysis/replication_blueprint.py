@@ -113,6 +113,21 @@ def profile_supports(profile: str, capability: str) -> bool:
     return capability in PROFILE_CAPABILITIES.get(profile, frozenset())
 
 
+def classify_narrative_transition(
+    *,
+    before_end_state: object,
+    after_start_state: object,
+    before_shot_id: object,
+    after_shot_id: object,
+) -> str:
+    """Classify adjacency; montage candidates still require visual confirmation at publication."""
+    if before_end_state == after_start_state:
+        return "VERIFIED_STATE_CONTINUITY"
+    if before_shot_id != after_shot_id:
+        return "MONTAGE_CUT"
+    return "UNRESOLVED_STATE_DISCONTINUITY"
+
+
 def _mapping(value: object, field: str) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise SkillError(ErrorCode.VALIDATION_FAILED, "Replication evidence must be an object", field_paths=(field,))
@@ -253,7 +268,7 @@ def apply_segment_contexts(
         context = by_interval.get(interval)
         enriched.append({
             **dict(segment),
-            "shot_id": str(context["shot_id"]) if context is not None else f"shot-{index + 1:03d}",
+            "shot_id": str(context["shot_id"]) if context is not None else "shot-unavailable",
             "scene_id": str(context["scene_id"]) if context is not None else "scene-unavailable",
         })
     if contexts and len(by_interval) != len(segments):
@@ -619,13 +634,11 @@ def plan_coverage_keyframe_requests(
             after_timestamp = int(after["start_ms"]) + ((int(after["end_ms"]) - int(after["start_ms"])) // 2)
             before_segment = _owning_segment(segments, before_timestamp)
             after_segment = _owning_segment(segments, after_timestamp)
-            shot_boundary = before_segment["shot_id"] != after_segment["shot_id"]
-            transition_relation = (
-                "VERIFIED_STATE_CONTINUITY"
-                if state_continuity
-                else "MONTAGE_CUT"
-                if shot_boundary
-                else "UNRESOLVED_STATE_DISCONTINUITY"
+            transition_relation = classify_narrative_transition(
+                before_end_state=before["end_state"],
+                after_start_state=after["start_state"],
+                before_shot_id=before_segment["shot_id"],
+                after_shot_id=after_segment["shot_id"],
             )
             source_probe = (
                 _best_source_probe(
@@ -963,12 +976,11 @@ def build_narrative_artifacts(
     for before, after in zip(events, events[1:]):
         before_frame_id = str(before["source_frames"][-1])  # type: ignore[index]
         after_frame_id = str(after["source_frames"][0])  # type: ignore[index]
-        relation = (
-            "VERIFIED_STATE_CONTINUITY"
-            if before["end_state"] == after["start_state"]
-            else "MONTAGE_CUT"
-            if frame_by_id[before_frame_id]["shot_id"] != frame_by_id[after_frame_id]["shot_id"]
-            else "UNRESOLVED_STATE_DISCONTINUITY"
+        relation = classify_narrative_transition(
+            before_end_state=before["end_state"],
+            after_start_state=after["start_state"],
+            before_shot_id=frame_by_id[before_frame_id]["shot_id"],
+            after_shot_id=frame_by_id[after_frame_id]["shot_id"],
         )
         transition = {
             "from_event_id": before["event_id"],

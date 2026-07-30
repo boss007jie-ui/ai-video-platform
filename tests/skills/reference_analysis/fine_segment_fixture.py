@@ -45,10 +45,22 @@ def complete_visual_observation(request: dict[str, object], *, observer_id: str 
         frame["observed"] = True
         frame["visual_facts"] = [
             {
-                "category": "FRAME_QUALITY",
-                "description": "A flat red or blue synthetic source-frame color field is visible.",
+                "category": "SCENE",
+                "description": (
+                    f"Synthetic fixture frame {frame['keyframe_id']} visibly contains its bound color-field scene."
+                ),
             }
         ]
+    for transition in receipt.get("transition_observations", []):  # type: ignore[union-attr]
+        transition["status"] = "COMPLETED"
+        transition["relation"] = "MONTAGE_CUT"
+        transition["visual_evidence"] = [
+            {"keyframe_id": transition["from_keyframe_id"], "visual_fact_index": 0},
+            {"keyframe_id": transition["to_keyframe_id"], "visual_fact_index": 0},
+        ]
+        transition["boundary_basis"] = (
+            "The two bound fixture scene observations visibly differ across this edited boundary."
+        )
     return request
 
 
