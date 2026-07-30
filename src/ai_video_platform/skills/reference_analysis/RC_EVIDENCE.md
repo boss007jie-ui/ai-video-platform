@@ -7,7 +7,7 @@
 - Branch: `ft/codex-00-integration`
 - Implementation baseline: `dc6865a`
 - Schema/algorithm version: `1.0.0`
-- Skill version: `0.4.1-rc.offline`
+- Skill version: `0.4.2-rc.offline`
 - Status: `OFFLINE_VERIFIED`
 - Visual final: **not claimed**
 - Provenance: `CLEAN_ROOM_ONLY`; no Legacy source, Provider, upload, or network service was used
@@ -32,6 +32,7 @@ and leaves all formal Contract identities unchanged.
 - bounded review-frame density inside long semantic segments without inventing duration-based semantic cuts or Beats;
 - profile-specific semantic keyframes deduplicated by `(segment_id, timestamp_ms)` with independent action and narrative roles;
 - evidenced motion state chains, contact states, adjacent motion transitions, and one bounded Motion Coverage supplementation pass;
+- one-observable-mechanism-per-action-chain guidance that binds state timing to viewed `ACTION`/`OBJECT_STATE` facts rather than raw RGB candidates;
 - verified facts, grouped events, causal edges, global story roles, repeated product-proof loops, and one bounded Narrative Coverage pass;
 - local RGB transition rescans that can recover an unannotated intermediate motion state while keeping unresolved narrative semantics explicit;
 - evidence-derived narrative roles with stable role-free supporting frames accepted inside traceable events;
@@ -40,6 +41,9 @@ and leaves all formal Contract identities unchanged.
 - owner-local `ReferenceBlueprint` with `formal_contract_identity=null` and a shared keyframe timeline;
 - publication-time validation of profile/source ownership, semantic roles, transition/event references, coverage additions, and blueprint consistency;
 - a finite core-Beat storyboard plus a separate source-frame motion atlas grouped by action;
+- aspect-ratio-preserving source-frame placement across every board, with neutral letterboxing;
+- Unicode CJK board text, rendered-width wrapping, and fail-closed handling when no Unicode renderer is available;
+- encoding-safe ASCII JSON emission from the CLI so GBK terminals remain machine-readable;
 - atomic publication of all replication JSON, PNG, keyframe, storyboard, and provenance files;
 - unchanged production-storyboard and Provider-execution boundaries with zero external counters.
 
@@ -47,10 +51,11 @@ and leaves all formal Contract identities unchanged.
 
 | Command | Result |
 |---|---|
-| `python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py" -v` | PASS - 72 tests, 1 host-capability skip, 0 failures, 552.355s |
+| `python -m unittest discover -s tests/skills/reference_analysis -t . -p "test_*.py"` | PASS - 77 tests, 1 host-capability skip, 0 failures, 692.712s |
 | Two-question Analysis Brief interface file | PASS - 11 tests, 0 failures, 115.635s |
 | Original combined-choice regression | PASS - 1 test, 0 failures, 0.001s |
-| Analysis Brief / image-observation / incomplete-publication regressions | PASS - included in the 72-test owner run |
+| Board aspect-ratio / CJK rendering plus GBK-safe CLI regressions | PASS - 3 tests, 0 failures, 4.337s |
+| Analysis Brief / image-observation / incomplete-publication regressions | PASS - included in the 77-test owner run |
 | Three-profile prepare/finalize flow | PASS - Motion, Narrative, and Hybrid included in the owner run |
 | `python -m compileall -q src/ai_video_platform/skills/reference_analysis tests/skills/reference_analysis` | PASS |
 | `git diff --check` and owner-scope inspection | PASS |
@@ -73,6 +78,13 @@ The user's `run/20260729-viral-breakdown` project was intentionally not overwrit
 reanalyzed. Under the new contract, a real rerun begins only after the user explicitly supplies
 the Analysis Brief, and the execution Agent must then inspect every extracted keyframe. Counters
 remain `network_calls=0`, `provider_calls=0`, and `external_upload=false`.
+
+The real Hybrid run `run/20260730-raulpi025-viral-ra/output/reference_analysis/` was replayed from
+its saved grounded publication request after the board-rendering fix. It completed with a 21/21
+Agent visual receipt and 133 concrete frame facts. All four boards were visually inspected: source
+frames retain their portrait aspect ratio, Chinese copy is readable, and rendered-width wrapping
+stays inside the cards. The pre-fix output remains recoverable at
+`run/20260730-raulpi025-viral-ra/output/reference_analysis_before_board_render_fix/`.
 
 ## Scope and blockers
 

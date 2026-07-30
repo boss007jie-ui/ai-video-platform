@@ -56,7 +56,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             operation = analyze_reference if arguments.command == "analyze-reference" else compare_result
             result = operation(request, workspace=Path(arguments.workspace), output_path=arguments.output)
     except SkillError as exc:
-        print(json.dumps({"status": "ERROR", "error": exc.to_dict()}, ensure_ascii=False, sort_keys=True))
+        print(json.dumps({"status": "ERROR", "error": exc.to_dict()}, ensure_ascii=True, sort_keys=True))
         return 2
     except (OSError, ValueError, json.JSONDecodeError):
         print(json.dumps({
@@ -68,9 +68,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "retryable": False,
                 "details": {},
             },
-        }, ensure_ascii=False, sort_keys=True))
+        }, ensure_ascii=True, sort_keys=True))
         return 2
-    print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
+    print(json.dumps(result.to_dict(), ensure_ascii=True, sort_keys=True))
     return 0
 
 

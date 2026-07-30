@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import struct
+import sys
 import unicodedata
 import zlib
 
@@ -83,7 +84,20 @@ class _Canvas:
             self.pixels[start:start + len(row)] = row
 
     def text(self, x: int, y: int, value: object, color: tuple[int, int, int], *, scale: int = 2) -> None:
-        normalized = unicodedata.normalize("NFKD", str(value)).encode("ascii", "replace").decode("ascii").upper()
+        raw = str(value)
+        if not raw.isascii():
+            width, height, pixels, mask = _render_unicode_text(raw, color, pixel_height=7 * scale)
+            for py in range(height):
+                for px in range(width):
+                    if not mask[py * width + px]:
+                        continue
+                    target_x, target_y = x + px, y + py
+                    if 0 <= target_x < self.width and 0 <= target_y < self.height:
+                        source_start = (py * width + px) * 3
+                        target_start = (target_y * self.width + target_x) * 3
+                        self.pixels[target_start:target_start + 3] = pixels[source_start:source_start + 3]
+            return
+        normalized = unicodedata.normalize("NFKD", raw).encode("ascii", "strict").decode("ascii").upper()
         cursor = x
         for char in normalized:
             glyph = _FONT.get(char, _FONT["?"]).split("/")
@@ -96,38 +110,54 @@ class _Canvas:
     def lines(
         self, x: int, y: int, value: object, color: tuple[int, int, int], *, max_chars: int, scale: int = 2, max_lines: int = 3,
     ) -> int:
-        words = [
-            chunk
-            for word in str(value).split()
-            for chunk in (word[index:index + max_chars] for index in range(0, len(word), max_chars))
-        ]
+        max_width = max_chars * 6 * scale
         lines: list[str] = []
-        line = ""
-        for word in words or [""]:
-            candidate = f"{line} {word}".strip()
-            if len(candidate) <= max_chars:
-                line = candidate
-            else:
-                if line:
-                    lines.append(line)
-                line = word
-            if len(lines) == max_lines:
-                break
+        line: list[str] = []
+        line_width = 0
+        for character in str(value):
+            if character == "\n":
+                lines.append("".join(line).rstrip())
+                line, line_width = [], 0
+                if len(lines) == max_lines:
+                    break
+                continue
+            advance = (7 if not character.isascii() else 6) * scale
+            if line and line_width + advance > max_width:
+                lines.append("".join(line).rstrip())
+                line, line_width = [], 0
+                if len(lines) == max_lines:
+                    break
+                if character.isspace():
+                    continue
+            line.append(character)
+            line_width += advance
         if line and len(lines) < max_lines:
-            lines.append(line)
+            lines.append("".join(line).rstrip())
+        if not lines:
+            lines.append("")
         for index, rendered in enumerate(lines):
             self.text(x, y + index * (9 * scale), rendered, color, scale=scale)
-        return max(1, len(lines)) * 9 * scale
+        return len(lines) * 9 * scale
 
     def blit(self, image: tuple[int, int, bytes], x: int, y: int, width: int, height: int) -> None:
         source_width, source_height, source = image
-        for dy in range(height):
-            sy = min(source_height - 1, dy * source_height // height)
-            for dx in range(width):
-                sx = min(source_width - 1, dx * source_width // width)
+        if source_width <= 0 or source_height <= 0 or width <= 0 or height <= 0:
+            raise ValueError("image and target dimensions must be positive")
+        if source_width * height > source_height * width:
+            rendered_width = width
+            rendered_height = max(1, source_height * width // source_width)
+        else:
+            rendered_height = height
+            rendered_width = max(1, source_width * height // source_height)
+        rendered_x = x + (width - rendered_width) // 2
+        rendered_y = y + (height - rendered_height) // 2
+        for dy in range(rendered_height):
+            sy = min(source_height - 1, dy * source_height // rendered_height)
+            for dx in range(rendered_width):
+                sx = min(source_width - 1, dx * source_width // rendered_width)
                 source_start = (sy * source_width + sx) * 3
-                target_start = ((y + dy) * self.width + x + dx) * 3
-                if 0 <= x + dx < self.width and 0 <= y + dy < self.height:
+                target_start = ((rendered_y + dy) * self.width + rendered_x + dx) * 3
+                if 0 <= rendered_x + dx < self.width and 0 <= rendered_y + dy < self.height:
                     self.pixels[target_start:target_start + 3] = source[source_start:source_start + 3]
 
     def png(self, metadata: dict[str, object]) -> bytes:
@@ -140,6 +170,174 @@ class _Canvas:
             _chunk(b"IDAT", zlib.compress(rows, 9)),
             _chunk(b"IEND", b""),
         ))
+
+
+def _render_unicode_text(
+    value: str,
+    color: tuple[int, int, int],
+    *,
+    pixel_height: int,
+) -> tuple[int, int, bytes, bytes]:
+    """Rasterize Unicode with a native CJK font without adding a runtime package."""
+    if sys.platform != "win32":
+        raise RuntimeError("Unicode board rendering requires the Windows native font renderer")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class _Size(ctypes.Structure):
+        _fields_ = [("cx", wintypes.LONG), ("cy", wintypes.LONG)]
+
+    class _BitmapInfoHeader(ctypes.Structure):
+        _fields_ = [
+            ("biSize", wintypes.DWORD),
+            ("biWidth", wintypes.LONG),
+            ("biHeight", wintypes.LONG),
+            ("biPlanes", wintypes.WORD),
+            ("biBitCount", wintypes.WORD),
+            ("biCompression", wintypes.DWORD),
+            ("biSizeImage", wintypes.DWORD),
+            ("biXPelsPerMeter", wintypes.LONG),
+            ("biYPelsPerMeter", wintypes.LONG),
+            ("biClrUsed", wintypes.DWORD),
+            ("biClrImportant", wintypes.DWORD),
+        ]
+
+    class _RgbQuad(ctypes.Structure):
+        _fields_ = [
+            ("rgbBlue", wintypes.BYTE),
+            ("rgbGreen", wintypes.BYTE),
+            ("rgbRed", wintypes.BYTE),
+            ("rgbReserved", wintypes.BYTE),
+        ]
+
+    class _BitmapInfo(ctypes.Structure):
+        _fields_ = [("bmiHeader", _BitmapInfoHeader), ("bmiColors", _RgbQuad * 1)]
+
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateFontW.restype = wintypes.HANDLE
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HANDLE]
+    gdi32.SelectObject.restype = wintypes.HANDLE
+    gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    gdi32.GetGlyphIndicesW.argtypes = [
+        wintypes.HDC,
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        ctypes.POINTER(wintypes.WORD),
+        wintypes.DWORD,
+    ]
+    gdi32.GetGlyphIndicesW.restype = wintypes.DWORD
+    gdi32.GetTextExtentPoint32W.argtypes = [
+        wintypes.HDC,
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        ctypes.POINTER(_Size),
+    ]
+    gdi32.GetTextExtentPoint32W.restype = wintypes.BOOL
+    gdi32.CreateDIBSection.argtypes = [
+        wintypes.HDC,
+        ctypes.POINTER(_BitmapInfo),
+        wintypes.UINT,
+        ctypes.POINTER(ctypes.c_void_p),
+        wintypes.HANDLE,
+        wintypes.DWORD,
+    ]
+    gdi32.CreateDIBSection.restype = wintypes.HANDLE
+    gdi32.SetBkMode.argtypes = [wintypes.HDC, ctypes.c_int]
+    gdi32.SetTextColor.argtypes = [wintypes.HDC, wintypes.DWORD]
+    gdi32.TextOutW.argtypes = [
+        wintypes.HDC,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+    ]
+    gdi32.TextOutW.restype = wintypes.BOOL
+
+    device_context = gdi32.CreateCompatibleDC(None)
+    if not device_context:
+        raise OSError(ctypes.get_last_error(), "CreateCompatibleDC failed")
+    font = original_font = bitmap = original_bitmap = None
+    try:
+        utf16_units = len(value.encode("utf-16-le")) // 2
+        glyph_indices = (wintypes.WORD * utf16_units)()
+        for face_name in ("Microsoft YaHei UI", "Microsoft YaHei", "SimSun", "Noto Sans SC"):
+            candidate = gdi32.CreateFontW(
+                -max(1, pixel_height),
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                3,
+                0,
+                face_name,
+            )
+            if not candidate:
+                continue
+            previous = gdi32.SelectObject(device_context, candidate)
+            if not original_font:
+                original_font = previous
+            result = gdi32.GetGlyphIndicesW(device_context, value, utf16_units, glyph_indices, 1)
+            if result != 0xFFFFFFFF and all(index != 0xFFFF for index in glyph_indices):
+                font = candidate
+                break
+            gdi32.SelectObject(device_context, original_font)
+            gdi32.DeleteObject(candidate)
+        if not font:
+            raise RuntimeError("No installed CJK font can render all board text")
+
+        size = _Size()
+        if not gdi32.GetTextExtentPoint32W(device_context, value, utf16_units, ctypes.byref(size)):
+            raise OSError(ctypes.get_last_error(), "GetTextExtentPoint32W failed")
+        width = max(1, size.cx)
+        height = max(1, size.cy)
+        info = _BitmapInfo()
+        info.bmiHeader.biSize = ctypes.sizeof(_BitmapInfoHeader)
+        info.bmiHeader.biWidth = width
+        info.bmiHeader.biHeight = -height
+        info.bmiHeader.biPlanes = 1
+        info.bmiHeader.biBitCount = 32
+        bits = ctypes.c_void_p()
+        bitmap = gdi32.CreateDIBSection(device_context, ctypes.byref(info), 0, ctypes.byref(bits), None, 0)
+        if not bitmap or not bits.value:
+            raise OSError(ctypes.get_last_error(), "CreateDIBSection failed")
+        original_bitmap = gdi32.SelectObject(device_context, bitmap)
+        ctypes.memset(bits.value, 1, width * height * 4)
+        gdi32.SetBkMode(device_context, 1)
+        red, green, blue = color
+        gdi32.SetTextColor(device_context, red | (green << 8) | (blue << 16))
+        if not gdi32.TextOutW(device_context, 0, 0, value, utf16_units):
+            raise OSError(ctypes.get_last_error(), "TextOutW failed")
+        dib = ctypes.string_at(bits.value, width * height * 4)
+        pixels = bytearray(width * height * 3)
+        mask = bytearray(width * height)
+        for index in range(width * height):
+            blue_value, green_value, red_value = dib[index * 4:index * 4 + 3]
+            if (blue_value, green_value, red_value) == (1, 1, 1):
+                continue
+            target = index * 3
+            pixels[target:target + 3] = bytes((red_value, green_value, blue_value))
+            mask[index] = 1
+        return width, height, bytes(pixels), bytes(mask)
+    finally:
+        if original_bitmap:
+            gdi32.SelectObject(device_context, original_bitmap)
+        if bitmap:
+            gdi32.DeleteObject(bitmap)
+        if original_font:
+            gdi32.SelectObject(device_context, original_font)
+        if font:
+            gdi32.DeleteObject(font)
+        gdi32.DeleteDC(device_context)
 
 
 def decode_png(payload: bytes) -> tuple[int, int, bytes]:
@@ -328,6 +526,7 @@ def render_analysis_board(
         image_y = card_top + 95
         image_width = card_width - 40
         canvas.rect(image_x - 4, image_y - 4, image_width + 8, 408, _ORANGE)
+        canvas.rect(image_x, image_y, image_width, 400, _BLACK)
         canvas.blit(keyframes[str(beat["representative_frame_id"])], image_x, image_y, image_width, 400)
         text_width = max(12, (card_width - 40) // 18)
         y = card_top + 535

@@ -1,6 +1,6 @@
 # Reference Analysis
 
-Version: `0.4.1-rc.offline`; schema and algorithm: `1.0.0`.
+Version: `0.4.2-rc.offline`; schema and algorithm: `1.0.0`.
 
 Reference Analysis deterministically analyzes one explicitly selected reference, publishes source-bound observations and reusable reference mechanisms, and compares a produced result with a compatible analysis. It does not discover references, download remote media, call a Provider, traverse Research Library, write Product Library, adapt mechanisms to a current product, create production Storyboards, trigger QA, or import another Skill's implementation. Product transfer belongs to Storyboard and product facts belong to Product Knowledge.
 
@@ -120,6 +120,16 @@ analysis proceeds from facts to events, causal edges, global story roles, and re
 proof loops. Each coverage mode performs at most one bounded source-evidence supplementation
 pass and never invents a missing frame or story event.
 
+For 1:1 motion work, one action chain must describe one observable motion mechanism. Distinct
+paths or contact changes such as horizontal stretching, downward pressing, lifting, and release
+must be separate chains unless the chain label and every state explicitly describe the compound
+sequence. Every state and timestamp must agree with that frame's recorded `ACTION` and
+`OBJECT_STATE` visual facts. If an earlier reviewed frame already shows the action or contact
+state, the Agent must move the onset to that evidence or split the chain; it may not keep a later
+RGB-difference candidate as the semantic onset. A local scan is only a candidate locator, never
+proof of what the action is. When no viewed frame supports a state, the Agent must leave the state
+unavailable and report incomplete coverage instead of guessing.
+
 The bounded coverage pass reuses the same locally decoded RGB transition scan that informs fine
 segmentation. When caller annotations omit an intermediate motion state, a non-zero source-video
 change between evidenced endpoints may add one conservative onset, contact, release, apex, or end
@@ -157,6 +167,10 @@ For a fine-segment request, the final `reference_analysis/` output includes
 and replication boards remain supporting owner-local analysis assets. The main board uses a
 black/orange horizontal core-beat layout headed `分镜故事板 / Storyboard`; each card uses only
 its source-video representative frame and concise stage, action, audience, and function copy.
+Every source frame is fitted without changing its aspect ratio; portrait frames use neutral
+letterboxing instead of horizontal stretching. Board copy preserves Unicode through the native
+Windows CJK renderer, wraps by rendered character width, and fails explicitly when a suitable
+Unicode font renderer is unavailable rather than substituting question marks.
 The first generated board is a review candidate, not a final visual approval.
 
 When a complete replication package is supplied, the same output also includes
