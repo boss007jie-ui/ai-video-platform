@@ -40,6 +40,7 @@ from .replication_blueprint import (
 )
 from .segment_storyboard import build_segment_analysis, derive_core_beats, derive_formula
 from .storyboard import _mapping, _strict_keys, _text, _validate_metadata, _validate_source, _workspace
+from .storyboard_boards import decode_png, render_visual_observation_atlas
 
 
 _VERSION = "1.0.0"
@@ -206,7 +207,10 @@ def _pretty(value: object) -> bytes:
 
 
 def _visual_observation_request(
-    keyframes: Sequence[Mapping[str, object]], *, source_media_sha256: str,
+    keyframes: Sequence[Mapping[str, object]],
+    *,
+    source_media_sha256: str,
+    inspection_atlases: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, object]:
     """Describe the exact images an execution Agent must inspect before publication."""
     return {
@@ -214,6 +218,7 @@ def _visual_observation_request(
         "observer_id": "UNAVAILABLE",
         "method": "UNAVAILABLE",
         "source_media_sha256": source_media_sha256,
+        "inspection_atlases": [dict(atlas) for atlas in inspection_atlases],
         "frames": [
             {
                 "keyframe_id": str(frame.get("frame_id", frame.get("keyframe_id"))),
@@ -224,6 +229,55 @@ def _visual_observation_request(
             for frame in keyframes
         ],
     }
+
+
+def _build_visual_observation_atlases(
+    stage: Path,
+    keyframe_dir: Path,
+    keyframes: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    atlas_dir = stage / "visual_observation_atlases"
+    atlas_dir.mkdir()
+    records: list[dict[str, object]] = []
+    for offset in range(0, len(keyframes), 12):
+        batch = list(keyframes[offset:offset + 12])
+        atlas_id = f"visual-observation-atlas-{len(records) + 1:03d}"
+        normalized_frames: list[dict[str, object]] = []
+        images: dict[str, tuple[int, int, bytes]] = {}
+        for frame in batch:
+            frame_id = str(frame.get("frame_id", frame.get("keyframe_id")))
+            payload = (keyframe_dir / f"{frame_id}.png").read_bytes()
+            images[frame_id] = decode_png(payload)
+            normalized_frames.append({
+                **dict(frame),
+                "frame_id": frame_id,
+                "frame_role": str(frame.get("frame_role", "overview")),
+            })
+        payload = render_visual_observation_atlas(normalized_frames, images, atlas_id=atlas_id)
+        filename = f"{atlas_id}.png"
+        (atlas_dir / filename).write_bytes(payload)
+        records.append({
+            "atlas_id": atlas_id,
+            "asset_path": f"{_OUTPUT_ROOT}/visual_observation_atlases/{filename}",
+            "sha256": _digest(payload),
+            "frame_ids": [str(frame["frame_id"]) for frame in normalized_frames],
+        })
+    return records
+
+
+def _keyframe_set_digest(keyframes: Sequence[Mapping[str, object]]) -> str:
+    binding = [
+        {
+            "keyframe_id": str(frame.get("frame_id", frame.get("keyframe_id"))),
+            "sha256": str(frame["sha256"]),
+            "timestamp_ms": int(frame["timestamp_ms"]),
+        }
+        for frame in sorted(
+            keyframes,
+            key=lambda item: str(item.get("frame_id", item.get("keyframe_id"))),
+        )
+    ]
+    return _digest(_canonical(binding))
 
 
 def _digest(payload: bytes) -> str:
@@ -401,16 +455,21 @@ def _published_replay(workspace: Path, request_digest: str) -> ReferenceBreakdow
         raise SkillError(ErrorCode.OUTPUT_CONFLICT, "Draft output root contains different content") from exc
     if manifest.get("request_digest") != request_digest:
         raise SkillError(ErrorCode.OUTPUT_CONFLICT, "Draft output root contains different content")
-    for keyframe in manifest.get("keyframes", []):
-        relative = Path(str(keyframe.get("path") or keyframe.get("asset_path")))
+    bound_assets = [
+        *manifest.get("keyframes", []),
+        *manifest.get("visual_observation_atlases", []),
+    ]
+    for asset in bound_assets:
+        relative = Path(str(asset.get("path") or asset.get("asset_path")))
         path = workspace / relative
         if (
             relative.is_absolute()
             or ".." in relative.parts
+            or path.is_symlink()
             or not path.is_file()
-            or _digest(path.read_bytes()) != keyframe.get("sha256")
+            or _digest(path.read_bytes()) != asset.get("sha256")
         ):
-            raise SkillError(ErrorCode.OUTPUT_CONFLICT, "Draft keyframe content changed")
+            raise SkillError(ErrorCode.OUTPUT_CONFLICT, "Draft visual evidence content changed")
     return ReferenceBreakdownDraftResult(status="COMPLETED", output_root=_OUTPUT_ROOT, artifact=manifest)
 
 
@@ -531,6 +590,7 @@ def _prepare_fine_breakdown(
     for request in coverage_requests:
         store_keyframe(request)
     keyframes.sort(key=lambda item: (int(item["timestamp_ms"]), str(item["segment_id"]), str(item["frame_id"])))
+    inspection_atlases = _build_visual_observation_atlases(stage, keyframe_dir, keyframes)
     motion_artifacts, coverage_report = build_motion_artifacts(
         replication_inputs["motion_actions"],
         segments,
@@ -648,6 +708,11 @@ def _prepare_fine_breakdown(
         "evidence_refs": [f"keyframe:{beat['representative_frame_id']}" for beat in core_beats],
     }
     current_product = _current_product(normalized.get("current_product"))
+    preparation_binding = {
+        "draft_version": _FINE_MODE,
+        "preparation_request_digest": request_digest,
+        "keyframe_set_sha256": _keyframe_set_digest(keyframes),
+    }
     analyze_request = {
         "analysis_version": _VERSION,
         "analysis_brief": normalized["analysis_brief"],
@@ -656,8 +721,11 @@ def _prepare_fine_breakdown(
         "video_metadata": metadata,
         "analysis_configuration": {
             "current_product": current_product,
+            "preparation_binding": preparation_binding,
             "visual_observation": _visual_observation_request(
-                keyframes, source_media_sha256=str(source["sha256"])
+                keyframes,
+                source_media_sha256=str(source["sha256"]),
+                inspection_atlases=inspection_atlases,
             ),
             "keyframes": [
                 {
@@ -696,6 +764,7 @@ def _prepare_fine_breakdown(
         "analysis_brief": normalized["analysis_brief"],
         "analysis_profile": normalized["analysis_profile"],
         "request_digest": request_digest,
+        "preparation_binding": preparation_binding,
         "method_provenance": {
             "mode": _FINE_MODE,
             "metadata_strategy": metadata_source,
@@ -713,10 +782,12 @@ def _prepare_fine_breakdown(
         "segmentation_policy": policy,
         "fine_segment_count": len(segments),
         "keyframes": keyframes,
+        "visual_observation_atlases": inspection_atlases,
         "artifacts": [
             "draft_manifest.json",
             "fine_segments.json",
             "keyframes/index.json",
+            "visual_observation_atlases/",
             "segment_analysis.json",
             "draft_core_beats.json",
             "draft_timeline.json",
@@ -846,6 +917,7 @@ def prepare_reference_breakdown(
                 "path": f"{_OUTPUT_ROOT}/keyframes/{filename}",
                 "sha256": _digest(payload),
             })
+        inspection_atlases = _build_visual_observation_atlases(stage, keyframe_dir, keyframes)
         formula = {
             "value": "DRAFT: sequence template only; bottom-line formula requires human visual review.",
             "evidence_refs": ["media:selected-reference", *(f"keyframe:{item['keyframe_id']}" for item in keyframes)],
@@ -858,7 +930,9 @@ def prepare_reference_breakdown(
             "analysis_configuration": {
                 "current_product": current_product,
                 "visual_observation": _visual_observation_request(
-                    keyframes, source_media_sha256=str(source["sha256"])
+                    keyframes,
+                    source_media_sha256=str(source["sha256"]),
+                    inspection_atlases=inspection_atlases,
                 ),
                 "keyframes": keyframes,
                 "timeline": timeline,
@@ -885,9 +959,11 @@ def prepare_reference_breakdown(
             "source_video": {"media_path": source["media_path"], "sha256": source["sha256"]},
             "policy": policy,
             "keyframes": keyframes,
+            "visual_observation_atlases": inspection_atlases,
             "artifacts": [
                 "draft_manifest.json",
                 "keyframes/index.json",
+                "visual_observation_atlases/",
                 "draft_timeline.json",
                 "draft_bottom_line_formula.json",
                 "analyze_storyboard_request.json",

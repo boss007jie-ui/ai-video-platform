@@ -7,7 +7,7 @@
 - Branch: `ft/codex-00-integration`
 - Implementation baseline: `dc6865a`
 - Schema/algorithm version: `1.0.0`
-- Skill version: `0.4.2-rc.offline`
+- Skill version: `0.4.3-rc.offline`
 - Status: `OFFLINE_VERIFIED`
 - Visual final: **not claimed**
 - Provenance: `CLEAN_ROOM_ONLY`; no Legacy source, Provider, upload, or network service was used
@@ -25,6 +25,8 @@ and leaves all formal Contract identities unchanged.
 - compact preparation limited to explicit overview mechanism extraction; result comparison stays on `compare-result`;
 - explicit `MOTION_REPLICATION`, `NARRATIVE_REPLICATION`, and `HYBRID_REPLICATION` profiles derived from the Brief;
 - publication blocked until every exact keyframe has a completed Agent image-understanding receipt with concrete categorized visual facts;
+- aspect-ratio-preserving visual inspection atlases with at most 12 labelled frames per batch, while retaining exact per-frame facts and fail-closed individual-frame fallback;
+- preparation bindings that invalidate stale publication requests and completed receipts whenever a newer/different fine preparation becomes current;
 - rejection of boolean-only, `UNAVAILABLE`, `DRAFT:`, and generic viewed/inspected visual attestations;
 - publication-time re-decoding of every keyframe from the SHA-verified selected source video in every local publication path;
 - rejection of every remaining `DRAFT:` placeholder, including `DRAFT: UNAVAILABLE` and embedded markers;
@@ -33,8 +35,9 @@ and leaves all formal Contract identities unchanged.
 - profile-specific semantic keyframes deduplicated by `(segment_id, timestamp_ms)` with independent action and narrative roles;
 - evidenced motion state chains, contact states, adjacent motion transitions, and one bounded Motion Coverage supplementation pass;
 - one-observable-mechanism-per-action-chain guidance that binds state timing to viewed `ACTION`/`OBJECT_STATE` facts rather than raw RGB candidates;
-- verified facts, grouped events, causal edges, global story roles, repeated product-proof loops, and one bounded Narrative Coverage pass;
-- local RGB transition rescans that can recover an unannotated intermediate motion state while keeping unresolved narrative semantics explicit;
+- verified facts, grouped events, explicit adjacent-event transitions, causal edges, global story roles, repeated product-proof loops, and one bounded Narrative Coverage pass;
+- source-shot discontinuities represented as non-causal `MONTAGE_CUT` transitions without fabricated bridge facts;
+- local RGB transition rescans that can recover an unannotated intermediate motion state while keeping same-shot unresolved narrative semantics explicit;
 - evidence-derived narrative roles with stable role-free supporting frames accepted inside traceable events;
 - repeated proof-loop matching across scene, product/style, and added or omitted action-step variations;
 - scene/blocking maps plus `MUST_PRESERVE`, `REPLACEABLE`, and `CONDITIONALLY_REPLACEABLE` constraints;
@@ -85,6 +88,16 @@ Agent visual receipt and 133 concrete frame facts. All four boards were visually
 frames retain their portrait aspect ratio, Chinese copy is readable, and rendered-width wrapping
 stays inside the cards. The pre-fix output remains recoverable at
 `run/20260730-raulpi025-viral-ra/output/reference_analysis_before_board_render_fix/`.
+
+The independent real-video preparation at
+`run/20260730-童装爆款拆解-ra-fixed-validation/reference_breakdown_draft/` reuses the user's
+56.233-second children's-clothing reference and its saved offline annotations without modifying
+the original failed run. Motion, Narrative, and overall coverage are `PASS`; the three former
+inter-event gaps are now three evidence-bound, non-causal `MONTAGE_CUT` transitions across
+`shot-001→002`, `shot-002→003`, and `shot-003→004`. The 71 exact keyframes are covered in order by
+6 digest-bound inspection atlases. Atlas 001 was visually inspected at original resolution and
+preserves every portrait frame without stretching. This preparation remains `REQUIRED`, not a
+claimed all-frame visual final, because no synthetic receipt was used for the real sample.
 
 ## Scope and blockers
 

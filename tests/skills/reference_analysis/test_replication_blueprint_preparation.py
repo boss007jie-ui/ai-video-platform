@@ -188,7 +188,7 @@ class ReplicationBlueprintPreparationTests(unittest.TestCase):
 
             self.assertEqual(published.status, "COMPLETED")
 
-    def test_narrative_gap_rescans_source_without_inventing_a_missing_fact(self) -> None:
+    def test_inter_event_shot_boundary_is_recorded_as_montage_without_inventing_a_fact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
@@ -204,12 +204,55 @@ class ReplicationBlueprintPreparationTests(unittest.TestCase):
             coverage = json.loads(
                 (workspace / result.output_root / "coverage_report.json").read_text(encoding="utf-8")
             )["narrative_coverage"]
+            graph = json.loads(
+                (workspace / result.output_root / "narrative_event_graph.json").read_text(encoding="utf-8")
+            )
             inter_event = next(check for check in coverage["checks"] if "from_event_id" in check)
-            self.assertTrue(inter_event["supplemented"])
-            self.assertEqual(inter_event["source_scan"]["timestamp_ms"], 2000)
-            self.assertEqual(inter_event["source_scan"]["method"], "local_rgb_frame_difference")
+            self.assertEqual(coverage["status"], "PASS")
+            self.assertEqual(coverage["unresolved_gaps"], [])
+            self.assertEqual(inter_event["transition_relation"], "MONTAGE_CUT")
+            self.assertFalse(inter_event["supplemented"])
+            self.assertEqual(
+                inter_event["source_scan"],
+                {"status": "NOT_REQUIRED_FOR_MONTAGE_CUT"},
+            )
+            montage = next(item for item in graph["event_transitions"] if item["relation"] == "MONTAGE_CUT")
+            self.assertEqual(montage["from_event_id"], inter_event["from_event_id"])
+            self.assertEqual(montage["to_event_id"], inter_event["to_event_id"])
+            self.assertNotIn(montage, graph["causal_edges"])
+
+            publication_request = json.loads(
+                (workspace / result.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+            complete_visual_observation(publication_request)
+
+            published = analyze_storyboard(publication_request, workspace=workspace)
+
+            self.assertEqual(published.status, "COMPLETED")
+
+    def test_same_shot_inter_event_state_gap_still_blocks_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            request = replication_request(workspace, profile="NARRATIVE_REPLICATION")
+            annotations = request["offline_analysis"]["segment_annotations"]  # type: ignore[index]
+            for index, annotation in enumerate(annotations):
+                annotation["stage_title"] = "Product Proof Before" if index < 5 else "Product Proof After"
+            contexts = request["offline_analysis"]["segment_contexts"]  # type: ignore[index]
+            contexts[5]["shot_id"] = contexts[4]["shot_id"]
+            contexts[5]["scene_id"] = contexts[4]["scene_id"]
+            facts = request["offline_analysis"]["narrative_facts"]  # type: ignore[index]
+            facts[4]["end_state"] = "state-before-gap"
+            facts[5]["start_state"] = "state-after-gap"
+
+            result = prepare_reference_breakdown(request, workspace=workspace)
+
+            coverage = json.loads(
+                (workspace / result.output_root / "coverage_report.json").read_text(encoding="utf-8")
+            )["narrative_coverage"]
+            inter_event = next(check for check in coverage["checks"] if "from_event_id" in check)
+            self.assertEqual(coverage["status"], "INCOMPLETE")
+            self.assertEqual(inter_event["transition_relation"], "UNRESOLVED_STATE_DISCONTINUITY")
             self.assertEqual(len(coverage["unresolved_gaps"]), 1)
-            self.assertEqual(coverage["unresolved_gaps"][0]["source_probe_timestamp_ms"], 2000)
             self.assertEqual(
                 coverage["unresolved_gaps"][0]["reason"],
                 "source_probe_cannot_establish_missing_narrative_fact",

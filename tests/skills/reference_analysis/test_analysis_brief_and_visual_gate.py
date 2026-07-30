@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -123,6 +125,18 @@ class AnalysisBriefAndVisualGateTests(unittest.TestCase):
             self.assertTrue(visual_observation["frames"])
             self.assertTrue(all(frame["observed"] is False for frame in visual_observation["frames"]))
             self.assertTrue(all(frame["visual_facts"] == [] for frame in visual_observation["frames"]))
+            atlases = visual_observation["inspection_atlases"]
+            self.assertGreater(len(atlases), 0)
+            self.assertLess(len(atlases), len(visual_observation["frames"]))
+            self.assertTrue(all(1 <= len(atlas["frame_ids"]) <= 12 for atlas in atlases))
+            self.assertEqual(
+                [frame_id for atlas in atlases for frame_id in atlas["frame_ids"]],
+                [frame["keyframe_id"] for frame in visual_observation["frames"]],
+            )
+            for atlas in atlases:
+                atlas_path = workspace / atlas["asset_path"]
+                self.assertTrue(atlas_path.is_file())
+                self.assertEqual(hashlib.sha256(atlas_path.read_bytes()).hexdigest(), atlas["sha256"])
 
             with self.assertRaises(SkillError) as captured:
                 analyze_storyboard(request, workspace=workspace)
@@ -144,6 +158,42 @@ class AnalysisBriefAndVisualGateTests(unittest.TestCase):
             self.assertEqual(result.status, "COMPLETED")
             self.assertEqual(result.artifact["visual_observation"]["status"], "COMPLETED")
             self.assertEqual(result.artifact["visual_observation"]["observer_id"], "codex-vision-test")
+
+    def test_new_preparation_invalidates_an_older_completed_visual_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            first = prepare_reference_breakdown(replication_request(workspace), workspace=workspace)
+            stale_request = json.loads(
+                (workspace / first.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+            complete_visual_observation(stale_request, observer_id="stale-vision-agent")
+
+            shutil.rmtree(workspace / first.output_root)
+            revised = replication_request(workspace)
+            revised["offline_analysis"]["narrative_facts"][0]["result"] = "revised visible result"  # type: ignore[index]
+            prepare_reference_breakdown(revised, workspace=workspace)
+
+            with self.assertRaises(SkillError) as captured:
+                analyze_storyboard(stale_request, workspace=workspace)
+
+            self.assertEqual(captured.exception.code, ErrorCode.REFERENCE_MISMATCH)
+            self.assertIn("analysis_configuration.preparation_binding", captured.exception.field_paths)
+
+    def test_publication_rejects_a_tampered_visual_inspection_atlas(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            prepared = prepare_reference_breakdown(replication_request(workspace), workspace=workspace)
+            request = json.loads(
+                (workspace / prepared.output_root / "analyze_storyboard_request.json").read_text(encoding="utf-8")
+            )
+            complete_visual_observation(request)
+            atlas = request["analysis_configuration"]["visual_observation"]["inspection_atlases"][0]
+            (workspace / atlas["asset_path"]).write_bytes(b"tampered-atlas")
+
+            with self.assertRaises(SkillError) as captured:
+                analyze_storyboard(request, workspace=workspace)
+
+            self.assertEqual(captured.exception.code, ErrorCode.REFERENCE_MISMATCH)
 
     def test_boolean_attestation_without_per_frame_visual_facts_cannot_publish(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -71,6 +71,13 @@ class ReplicationBlueprintFailureTests(unittest.TestCase):
 
         self.assert_rejected(request, ErrorCode.REFERENCE_MISMATCH)
 
+    def test_rejects_montage_or_continuity_relation_that_disagrees_with_source_shots(self) -> None:
+        request = copy.deepcopy(self.request)
+        transition = request["analysis_configuration"]["narrative_event_graph"]["event_transitions"][0]  # type: ignore[index]
+        transition["relation"] = "MONTAGE_CUT"
+
+        self.assert_rejected(request, ErrorCode.REFERENCE_MISMATCH)
+
     def test_rejects_invalid_coverage_added_frame(self) -> None:
         request = copy.deepcopy(self.request)
         motion_coverage = request["analysis_configuration"]["coverage_report"]["motion_coverage"]  # type: ignore[index]

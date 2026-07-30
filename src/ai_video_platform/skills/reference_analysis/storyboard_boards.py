@@ -151,6 +151,13 @@ class _Canvas:
             rendered_width = max(1, source_width * height // source_height)
         rendered_x = x + (width - rendered_width) // 2
         rendered_y = y + (height - rendered_height) // 2
+        if rendered_width == source_width and rendered_height == source_height:
+            row_bytes = source_width * 3
+            for dy in range(source_height):
+                source_start = dy * row_bytes
+                target_start = ((rendered_y + dy) * self.width + rendered_x) * 3
+                self.pixels[target_start:target_start + row_bytes] = source[source_start:source_start + row_bytes]
+            return
         for dy in range(rendered_height):
             sy = min(source_height - 1, dy * source_height // rendered_height)
             for dx in range(rendered_width):
@@ -653,6 +660,56 @@ def render_motion_keyframe_atlas(
     })
 
 
+def render_visual_observation_atlas(
+    frames: list[dict[str, object]],
+    images: dict[str, tuple[int, int, bytes]],
+    *,
+    atlas_id: str,
+) -> bytes:
+    """Render a bounded, labelled inspection sheet without cropping or stretching source frames."""
+    if not frames or len(frames) > 12:
+        raise ValueError("visual observation atlas requires between one and twelve frames")
+    columns = 3
+    rows = (len(frames) + columns - 1) // columns
+    image_width = min(720, max(images[str(frame["frame_id"])][0] for frame in frames))
+    image_height = min(1280, max(images[str(frame["frame_id"])][1] for frame in frames))
+    card_width = image_width + 24
+    card_height = image_height + 84
+    gap = 12
+    margin = 24
+    canvas_width = margin * 2 + columns * card_width + (columns - 1) * gap
+    canvas_height = 110 + rows * card_height + max(0, rows - 1) * gap + margin
+    canvas = _Canvas(canvas_width, canvas_height, _BLACK)
+    canvas.rect(0, 0, canvas_width, 8, _ORANGE)
+    title_scale = 2 if canvas_width >= 900 else 1
+    label_scale = 2 if image_width >= 360 else 1
+    canvas.text(margin, 24, "VISUAL OBSERVATION ATLAS", _PALE, scale=title_scale)
+    canvas.text(margin, 68, atlas_id, _ORANGE, scale=label_scale)
+    frame_ids: list[str] = []
+    for index, frame in enumerate(frames):
+        frame_id = str(frame["frame_id"])
+        if frame_id not in images:
+            raise ValueError("visual observation frame image is unavailable")
+        frame_ids.append(frame_id)
+        column, row = index % columns, index // columns
+        x = margin + column * (card_width + gap)
+        y = 110 + row * (card_height + gap)
+        canvas.rect(x, y, card_width, card_height, _CARD)
+        canvas.rect(x, y, card_width, 6, _ORANGE)
+        canvas.text(x + 12, y + 14, frame_id, _PALE, scale=label_scale)
+        canvas.blit(images[frame_id], x + 12, y + 42, image_width, image_height)
+        canvas.text(x + 12, y + 54 + image_height, f"{frame['timestamp_ms']} MS", _ORANGE, scale=label_scale)
+    return canvas.png({
+        "board_role": "visual_observation_atlas",
+        "atlas_id": atlas_id,
+        "layout": "three-column-aspect-fit-labelled-source-frames",
+        "frame_ids": frame_ids,
+        "provider_execution_input": False,
+        "first_frame_eligible": False,
+        "product_panel_eligible": False,
+    })
+
+
 def render_shot_evidence_board(shots: list[dict[str, object]], keyframes: dict[str, tuple[int, int, bytes]]) -> bytes:
     columns = 3
     rows = (len(shots) + columns - 1) // columns
@@ -733,6 +790,7 @@ __all__ = [
     "decode_png",
     "render_analysis_board",
     "render_motion_keyframe_atlas",
+    "render_visual_observation_atlas",
     "render_replication_board",
     "render_shot_evidence_board",
 ]

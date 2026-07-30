@@ -617,6 +617,16 @@ def plan_coverage_keyframe_requests(
             state_continuity = before["end_state"] == after["start_state"]
             before_timestamp = int(before["start_ms"]) + ((int(before["end_ms"]) - int(before["start_ms"])) // 2)
             after_timestamp = int(after["start_ms"]) + ((int(after["end_ms"]) - int(after["start_ms"])) // 2)
+            before_segment = _owning_segment(segments, before_timestamp)
+            after_segment = _owning_segment(segments, after_timestamp)
+            shot_boundary = before_segment["shot_id"] != after_segment["shot_id"]
+            transition_relation = (
+                "VERIFIED_STATE_CONTINUITY"
+                if state_continuity
+                else "MONTAGE_CUT"
+                if shot_boundary
+                else "UNRESOLVED_STATE_DISCONTINUITY"
+            )
             source_probe = (
                 _best_source_probe(
                     source_visual_evidence,
@@ -624,33 +634,34 @@ def plan_coverage_keyframe_requests(
                     after_timestamp,
                     excluded_timestamps=(before_timestamp, after_timestamp),
                 )
-                if not state_continuity
+                if transition_relation == "UNRESOLVED_STATE_DISCONTINUITY"
                 else None
             )
-            after_roles = _derived_event_roles(after_group)
-            if source_probe is not None and after_roles:
-                probe_timestamp = int(source_probe["timestamp_ms"])
-                add(probe_timestamp, narrative_roles=after_roles)
-                narrative_added.append({
-                    "event_id": after_group["event_id"],
-                    "fact_id": after["fact_id"],
-                    "narrative_roles": after_roles,
-                    "timestamp_ms": probe_timestamp,
-                    "reason": "local_source_scan_probed_inter_event_narrative_gap",
-                    "derived_from_source_scan": True,
-                    "source_evidence": source_probe,
-                })
             check = {
                 "from_event_id": before_group["event_id"],
                 "to_event_id": after_group["event_id"],
                 "from_fact_id": before["fact_id"],
                 "to_fact_id": after["fact_id"],
+                "from_shot_id": before_segment["shot_id"],
+                "to_shot_id": after_segment["shot_id"],
                 "state_continuity": state_continuity,
-                "supplemented": source_probe is not None,
-                "source_scan": source_probe or {"status": "NO_VISUAL_CHANGE_CANDIDATE"},
+                "transition_relation": transition_relation,
+                "supplemented": False,
+                "source_scan": (
+                    source_probe
+                    or {
+                        "status": (
+                            "NOT_REQUIRED_STATE_CONTINUITY"
+                            if transition_relation == "VERIFIED_STATE_CONTINUITY"
+                            else "NOT_REQUIRED_FOR_MONTAGE_CUT"
+                            if transition_relation == "MONTAGE_CUT"
+                            else "NO_VISUAL_CHANGE_CANDIDATE"
+                        )
+                    }
+                ),
             }
             narrative_checks.append(check)
-            if not state_continuity:
+            if transition_relation == "UNRESOLVED_STATE_DISCONTINUITY":
                 gap = {
                     "from_event_id": before_group["event_id"],
                     "to_event_id": after_group["event_id"],
@@ -874,7 +885,7 @@ def build_narrative_artifacts(
     method = "FACTS_TO_EVENTS_TO_VERIFIED_CAUSAL_GRAPH_TO_GLOBAL_STORY"
     if not profile_supports(profile, "narrative"):
         return (
-            {"analysis_profile": profile, "status": "NOT_REQUESTED", "method": method, "facts": [], "events": [], "causal_edges": [], "global_story": [], "repeated_product_proof_loops": []},
+            {"analysis_profile": profile, "status": "NOT_REQUESTED", "method": method, "facts": [], "events": [], "event_transitions": [], "causal_edges": [], "global_story": [], "repeated_product_proof_loops": []},
             {"narrative_coverage": {"status": "NOT_REQUESTED", "iterations": 0, "initial_keyframe_count": 0, "added_frame_count": 0, "added_frame_ids": [], "checks": [], "unresolved_gaps": []}},
         )
     lookup = _frame_lookup(keyframes)
@@ -946,15 +957,28 @@ def build_narrative_artifacts(
             "audio_evidence": list(dict.fromkeys(ref for item in event_facts for ref in item["audio_evidence"])),
             "subtitle_evidence": list(dict.fromkeys(ref for item in event_facts for ref in item["subtitle_evidence"])),
         })
+    frame_by_id = {str(frame["frame_id"]): frame for frame in keyframes}
+    event_transitions: list[dict[str, object]] = []
     causal_edges: list[dict[str, object]] = []
     for before, after in zip(events, events[1:]):
-        if before["end_state"] == after["start_state"]:
-            causal_edges.append({
-                "from_event_id": before["event_id"],
-                "to_event_id": after["event_id"],
-                "relation": "VERIFIED_STATE_CONTINUITY",
-                "evidence_frames": [before["source_frames"][-1], after["source_frames"][0]],  # type: ignore[index]
-            })
+        before_frame_id = str(before["source_frames"][-1])  # type: ignore[index]
+        after_frame_id = str(after["source_frames"][0])  # type: ignore[index]
+        relation = (
+            "VERIFIED_STATE_CONTINUITY"
+            if before["end_state"] == after["start_state"]
+            else "MONTAGE_CUT"
+            if frame_by_id[before_frame_id]["shot_id"] != frame_by_id[after_frame_id]["shot_id"]
+            else "UNRESOLVED_STATE_DISCONTINUITY"
+        )
+        transition = {
+            "from_event_id": before["event_id"],
+            "to_event_id": after["event_id"],
+            "relation": relation,
+            "evidence_frames": [before_frame_id, after_frame_id],
+        }
+        event_transitions.append(transition)
+        if relation == "VERIFIED_STATE_CONTINUITY":
+            causal_edges.append(dict(transition))
     global_story: list[dict[str, object]] = []
     for event in events:
         for role in event["narrative_roles"]:  # type: ignore[union-attr]
@@ -965,7 +989,6 @@ def build_narrative_artifacts(
                 "source_frames": event["source_frames"],
             })
 
-    frame_by_id = {str(frame["frame_id"]): frame for frame in keyframes}
     proof_groups: list[dict[str, object]] = []
     for fact in sorted(normalized_facts, key=lambda item: int(item["start_ms"])):
         frame_id = str(fact["source_frames"][0])  # type: ignore[index]
@@ -1059,6 +1082,7 @@ def build_narrative_artifacts(
         "method": method,
         "facts": normalized_facts,
         "events": events,
+        "event_transitions": event_transitions,
         "causal_edges": causal_edges,
         "global_story": global_story,
         "repeated_product_proof_loops": proof_loops,
