@@ -19,6 +19,12 @@ Run the owned CLI without the shared root CLI:
 python -m ai_video_platform.skills.product_knowledge.cli identify-product --library C:\approved\product-library --input request.json
 ```
 
+On this workstation the approved production metadata root is
+`C:\Users\boss0\Desktop\05-项目文件夹\AI Video Product Library\_system`.
+Human-readable product asset folders remain beside `_system`; do not point the
+filesystem adapter at the parent directory or recreate its internal folders at
+the Product Library top level.
+
 Input is one bounded UTF-8 JSON object. Output is one JSON object with `ok`, `skill_id`, `skill_version`, a `result` or stable `error`, and a validated `SkillExecutionEvent`.
 
 ## Contracts and invariants

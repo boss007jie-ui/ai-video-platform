@@ -26,3 +26,7 @@ python -m ai_video_platform.orchestration.hermes.project_runner complete --works
 The completion JSON contains exactly `step_id`, `skill_id`, `command`, `status`,
 `artifact_refs`, and `result`. The Runner persists only the result SHA-256 and
 artifact references, not a duplicate copy of the Skill output.
+
+All Agents must follow [REPO_CONTENT_RULES.md](REPO_CONTENT_RULES.md): one project
+under `run/`, reuse `input/work/output`, and prefer descriptive filenames over
+new folders.
