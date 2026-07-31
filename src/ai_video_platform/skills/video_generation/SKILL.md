@@ -76,6 +76,25 @@ the prompt's concrete `@Image N` references from this canonical order. The Sheet
 is a structure reference only, never a first frame, and its borders, labels,
 captions, and arrows must be forbidden in generated video.
 
+When the canonical Master timeline is over 15 seconds, the complete Master Sheet
+is review-only and must not be sent to Seedance. Execute the fewest consecutive
+segments published in `storyboard_master_sheet_manifest.json` as separate tasks.
+Each request must declare `output.metadata.execution_segment` with the exact
+`segment_id`, absolute `start_ms`/`end_ms`, `duration_ms`, ordered `shot_ids`,
+ordered `panel_ids`, and the segment Sheet page digests in `sheet_sha256s`. Its
+content must contain exactly the current segment's ordered production Panels and
+every declared Sheet page. Each Sheet page is a `storyboard_structure_reference` marked
+`storyboard_scope=execution_segment` with the same segment ID and matching digest.
+Product references may remain between those roles under the adapter's canonical
+sort. A complete Master Sheet, missing segment
+metadata, non-consecutive Shots, a cross-segment Panel, or a duration mismatch
+fails before confirmation or transport.
+
+Each segment uses its own `execute-seedance-nz` invocation and live confirmation;
+Agents must not batch-confirm or automatically submit the next segment. The
+platform does not currently own a final video-stitching Skill, so separate segment
+downloads must not be reported as one assembled long-form deliverable.
+
 Reference analysis boards, shot evidence boards, replication boards, and contact
 sheets cannot be first frames or Provider inputs. Unapproved panels, mismatched
 revisions, order divergence, legacy `0.1.0` packages, and the obsolete

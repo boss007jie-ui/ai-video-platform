@@ -195,7 +195,7 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
             )
             self.assertGreater((root / "storyboard_master_sheet_001.png").stat().st_size, 0)
             manifest = json.loads((root / "storyboard_master_sheet_manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["renderer_version"], "1.3.0")
+            self.assertEqual(manifest["renderer_version"], "1.4.0")
             self.assertEqual(manifest["layout_version"], "storyboard-master-strip-v3")
             self.assertEqual(manifest["pages"][0]["row_panel_counts"], [2])
             self.assertEqual(
@@ -208,6 +208,63 @@ class VideoPlanningInterfaceTests(unittest.TestCase):
                 "storyboard_structure_reference",
             )
             self.assertFalse(manifest["execution_policy"]["first_frame_eligible"])
+
+    def test_long_timeline_writes_master_review_sheet_and_segment_execution_sheets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            request = planning_request()
+            for shot in request["production_storyboard_plan"]["shots"]:
+                shot["duration_ms"] = 9000
+            request["output_root"] = temporary
+
+            result = run_cli("build-storyboard-master", request)
+
+            self.assertTrue(result["ok"])
+            root = Path(temporary) / "video_generation_storyboard"
+            manifest = json.loads((root / "storyboard_master_sheet_manifest.json").read_text(encoding="utf-8"))
+            self.assertFalse(manifest["execution_policy"]["provider_execution_input"])
+            self.assertEqual(
+                [segment["segment_id"] for segment in manifest["execution_segments"]],
+                ["SEG-001", "SEG-002"],
+            )
+            self.assertEqual(
+                [segment["shot_ids"] for segment in manifest["execution_segments"]],
+                [["shot-001"], ["shot-002"]],
+            )
+            self.assertEqual(
+                [segment["panel_ids"] for segment in manifest["execution_segments"]],
+                [["panel-001"], ["panel-002"]],
+            )
+            self.assertEqual(
+                [segment["duration_ms"] for segment in manifest["execution_segments"]],
+                [9000, 9000],
+            )
+            segment_paths = [
+                page["relative_path"]
+                for segment in manifest["execution_segments"]
+                for page in segment["pages"]
+            ]
+            self.assertEqual(
+                segment_paths,
+                ["storyboard_segment_001_sheet_001.png", "storyboard_segment_002_sheet_001.png"],
+            )
+            self.assertTrue(all((root / path).is_file() for path in segment_paths))
+            self.assertTrue(all(
+                segment["execution_policy"]["provider_execution_input"]
+                for segment in manifest["execution_segments"]
+            ))
+            self.assertTrue(all(
+                page["execution_policy"]["provider_execution_input"]
+                for segment in manifest["execution_segments"]
+                for page in segment["pages"]
+            ))
+            self.assertTrue(all(
+                segment["source_master_digest"] == manifest["master_digest"]
+                for segment in manifest["execution_segments"]
+            ))
+            self.assertTrue(all(
+                segment["sheet_sha256s"] == [f"sha256:{page['png_sha256']}" for page in segment["pages"]]
+                for segment in manifest["execution_segments"]
+            ))
 
     def test_cli_automatically_plans_arrows_from_agent_visual_observations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

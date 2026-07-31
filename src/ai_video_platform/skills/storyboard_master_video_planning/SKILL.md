@@ -106,9 +106,21 @@ the storyboard grid, borders, arrows, labels, captions, or multiple Panels.
 ```
 
 Split generation only when the full timeline or reference set exceeds Provider
-limits, or when a reviewed section needs targeted replacement. Split into the
-fewest coherent consecutive blocks, preserve Shot order, and keep each block's
-Panels adjacent. The Sheet remains a reference, never a generated-video frame.
+limits, or when a reviewed section needs targeted replacement. For a timeline
+over 15 seconds, Sheet rendering publishes both the complete Master review Sheet
+and Provider-scoped segment Sheets. It greedily packs the fewest consecutive
+whole-Shot blocks of at most 15 seconds, preserves Shot order, and keeps every
+Shot's Panels adjacent. A Shot longer than 15 seconds is a planning error and must
+be divided into coherent Shots before rendering.
+
+The complete Master Sheet remains the human review view and is marked
+`provider_execution_input=false` for a long timeline. Each segment record in
+`storyboard_master_sheet_manifest.json` binds its exact time range, `shot_ids`,
+`panel_ids`, and `storyboard_segment_NNN_sheet_NNN.png` pages. For each Provider
+task, bind only that segment's production Panels first, clean product references
+next, and all pages of that segment's Sheet last. Never attach the complete Master
+Sheet or a different segment's Panels to a segmented task. Every Sheet remains a
+reference, never a generated-video frame.
 
 The first frame is always the first shot's approved clean full-frame production
 Panel at the target ratio. Grids, numbers, labels, captions, other shots, contact

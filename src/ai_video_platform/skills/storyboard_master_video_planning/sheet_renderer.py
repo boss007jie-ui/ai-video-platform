@@ -13,9 +13,10 @@ from typing import Any
 from .models import content_digest, snapshot
 
 
-RENDERER_VERSION = "1.3.0"
+RENDERER_VERSION = "1.4.0"
 LAYOUT_VERSION = "storyboard-master-strip-v3"
 MAX_PANELS_PER_PAGE = 9
+MAX_PROVIDER_DURATION_MS = 15_000
 EXECUTION_POLICY = {
     "role": "human_review_and_multimodal_structure_reference",
     "first_frame_eligible": False,
@@ -23,6 +24,11 @@ EXECUTION_POLICY = {
     "provider_reference_role": "storyboard_structure_reference",
     "semantic_authority": False,
     "ocr_semantic_writeback": False,
+}
+MASTER_REVIEW_POLICY = {
+    **EXECUTION_POLICY,
+    "role": "human_review_full_timeline",
+    "provider_execution_input": False,
 }
 
 INK = (20, 22, 25, 255)
@@ -630,6 +636,104 @@ def _total_duration(entries: Sequence[Mapping[str, Any]]) -> str:
     return f"{_seconds(sum(durations))}S" if durations else "DURATION N/A"
 
 
+def _master_duration_ms(master: Mapping[str, Any]) -> int:
+    shots = master.get("shots")
+    if isinstance(shots, Sequence) and not isinstance(shots, (str, bytes, bytearray)):
+        durations = [shot.get("duration_ms") for shot in shots if isinstance(shot, Mapping)]
+        if len(durations) != len(shots) or any(
+            isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0
+            for duration in durations
+        ):
+            raise ValueError("Master shot durations are invalid")
+        return sum(durations)
+    entries = master.get("master_panel_entries")
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes, bytearray)):
+        raise ValueError("Master requires ordered shots or timed Panels")
+    ends = [
+        entry.get("end_ms")
+        for entry in entries
+        if isinstance(entry, Mapping)
+        and isinstance(entry.get("end_ms"), int)
+        and not isinstance(entry.get("end_ms"), bool)
+    ]
+    if ends:
+        return max(ends)
+    durations = [
+        entry.get("duration_ms")
+        for entry in entries
+        if isinstance(entry, Mapping)
+        and isinstance(entry.get("duration_ms"), int)
+        and not isinstance(entry.get("duration_ms"), bool)
+    ]
+    return sum(durations)
+
+
+def plan_execution_segments(
+    master: Mapping[str, Any],
+    *,
+    max_duration_ms: int = MAX_PROVIDER_DURATION_MS,
+) -> tuple[Mapping[str, Any], ...]:
+    """Plan the fewest ordered whole-Shot blocks that fit one Provider task."""
+
+    if isinstance(max_duration_ms, bool) or not isinstance(max_duration_ms, int) or max_duration_ms <= 0:
+        raise ValueError("max_duration_ms must be positive")
+    shots = master.get("shots")
+    entries = master.get("master_panel_entries")
+    if (
+        not isinstance(shots, Sequence)
+        or isinstance(shots, (str, bytes, bytearray))
+        or not shots
+        or not isinstance(entries, Sequence)
+        or isinstance(entries, (str, bytes, bytearray))
+        or not entries
+    ):
+        raise ValueError("Master requires ordered shots and Panels")
+    typed_shots = [shot for shot in shots if isinstance(shot, Mapping)]
+    typed_entries = [entry for entry in entries if isinstance(entry, Mapping)]
+    if len(typed_shots) != len(shots) or len(typed_entries) != len(entries):
+        raise ValueError("Master shots and Panels must be objects")
+    total_duration_ms = _master_duration_ms(master)
+    if total_duration_ms <= max_duration_ms:
+        return ()
+
+    segments: list[dict[str, Any]] = []
+    current_shots: list[Mapping[str, Any]] = []
+    current_duration = 0
+    timeline_cursor = 0
+
+    def append_segment() -> None:
+        nonlocal timeline_cursor, current_duration, current_shots
+        shot_ids = [str(shot.get("shot_id")) for shot in current_shots]
+        panel_ids = [str(entry.get("panel_id")) for entry in typed_entries if str(entry.get("shot_id")) in shot_ids]
+        if not panel_ids:
+            raise ValueError("Execution segment has no production Panels")
+        segment_index = len(segments) + 1
+        segments.append({
+            "segment_id": f"SEG-{segment_index:03d}",
+            "segment_index": segment_index,
+            "start_ms": timeline_cursor,
+            "end_ms": timeline_cursor + current_duration,
+            "duration_ms": current_duration,
+            "shot_ids": shot_ids,
+            "panel_ids": panel_ids,
+        })
+        timeline_cursor += current_duration
+        current_shots = []
+        current_duration = 0
+
+    for shot in typed_shots:
+        duration = shot.get("duration_ms")
+        if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0 or duration > max_duration_ms:
+            raise ValueError("Every execution Shot must fit one Provider task")
+        if current_shots and current_duration + duration > max_duration_ms:
+            append_segment()
+        current_shots.append(shot)
+        current_duration += duration
+    if current_shots:
+        append_segment()
+    return tuple(snapshot(segment) for segment in segments)
+
+
 def render_storyboard_sheets(
     master: Mapping[str, Any],
     panel_bytes: Mapping[str, bytes],
@@ -655,6 +759,7 @@ def render_storyboard_sheets(
     font_fallback = str(metadata.get("font_fallback", "monospace"))
     locale = str(metadata.get("locale", "en-US"))
     master_digest = content_digest(master)
+    execution_policy = MASTER_REVIEW_POLICY if _master_duration_ms(master) > MAX_PROVIDER_DURATION_MS else EXECUTION_POLICY
     pages: list[bytes] = []
     page_records: list[dict[str, Any]] = []
     paginated = _paginate(typed_entries)
@@ -676,7 +781,9 @@ def render_storyboard_sheets(
         platform = str(metadata.get("platform", "VIDEO"))
         aspect = str(master.get("target_aspect_ratio", metadata.get("aspect_ratio", "N/A")))
         version = str(metadata.get("version", master.get("planning_revision", ""))).strip()
-        subtitle = f"{platform} / {aspect} / {_total_duration(typed_entries)}"
+        configured_timeline = metadata.get("timeline_label")
+        timeline_label = configured_timeline.strip() if isinstance(configured_timeline, str) and configured_timeline.strip() else _total_duration(typed_entries)
+        subtitle = f"{platform} / {aspect} / {timeline_label}"
         if version:
             subtitle += f" / {version if version.upper().startswith('V') else f'V{version}'}"
         _draw_text(canvas, width, margin, max(14, header_height // 7), _ellipsize(title, width - 2 * margin, title_scale), INK, title_scale, width - 2 * margin)
@@ -735,7 +842,7 @@ def render_storyboard_sheets(
             {
                 "Artifact": "VideoGenerationStoryboardMaster Sheet",
                 "Authority": "JSON_ONLY",
-                "ExecutionPolicy": "HUMAN_REVIEW_ONLY",
+                "ExecutionPolicy": "PROVIDER_SEGMENT_REFERENCE" if metadata.get("execution_segment_id") else "HUMAN_REVIEW_ONLY" if not execution_policy["provider_execution_input"] else "PROVIDER_FULL_TIMELINE_REFERENCE",
                 "LayoutVersion": LAYOUT_VERSION,
                 "MasterDigest": master_digest,
                 "Page": str(page_index),
@@ -753,7 +860,7 @@ def render_storyboard_sheets(
                 "panel_count": len(page_entries),
                 "row_panel_counts": list(row_counts),
                 "png_sha256": hashlib.sha256(png).hexdigest(),
-                "execution_policy": EXECUTION_POLICY,
+                "execution_policy": execution_policy,
                 "metadata": {
                     "renderer_version": RENDERER_VERSION,
                     "renderer_code_commit": renderer_code_commit,
@@ -781,8 +888,59 @@ def render_storyboard_sheets(
             "render_height": height,
             "page_count": len(pages),
             "max_panels_per_page": MAX_PANELS_PER_PAGE,
-            "execution_policy": EXECUTION_POLICY,
+            "execution_policy": execution_policy,
             "pages": page_records,
         }
     )
     return SheetRenderResult(manifest=manifest, pages=tuple(pages))
+
+
+def render_execution_segment_sheets(
+    master: Mapping[str, Any],
+    panel_bytes: Mapping[str, bytes],
+    metadata: Mapping[str, Any],
+) -> tuple[SheetRenderResult, ...]:
+    """Render Provider-scoped sheets for long timelines without changing Master semantics."""
+
+    segments = plan_execution_segments(master)
+    if not segments:
+        return ()
+    shots = master["shots"]
+    entries = master["master_panel_entries"]
+    rendered_segments: list[SheetRenderResult] = []
+    base_title = _header_title(master, metadata)
+    for segment in segments:
+        shot_ids = set(segment["shot_ids"])
+        segment_master = snapshot({
+            **master,
+            "shots": [shot for shot in shots if str(shot.get("shot_id")) in shot_ids],
+            "master_panel_entries": [entry for entry in entries if str(entry.get("shot_id")) in shot_ids],
+        })
+        segment_metadata = snapshot({
+            **metadata,
+            "project_name": f"{base_title} / {segment['segment_id']}",
+            "execution_segment_id": segment["segment_id"],
+            "timeline_label": (
+                f"{_seconds(segment['start_ms'])}-{_seconds(segment['end_ms'])}S"
+                f" / {_seconds(segment['duration_ms'])}S"
+            ),
+        })
+        rendered = render_storyboard_sheets(segment_master, panel_bytes, segment_metadata)
+        pages = []
+        for page_index, page in enumerate(rendered.manifest["pages"], 1):
+            pages.append(snapshot({
+                **page,
+                "relative_path": (
+                    f"storyboard_segment_{segment['segment_index']:03d}_sheet_{page_index:03d}.png"
+                ),
+            }))
+        manifest = snapshot({
+            **segment,
+            "source_master_digest": content_digest(master),
+            "sheet_sha256s": [f"sha256:{page['png_sha256']}" for page in pages],
+            "page_count": len(rendered.pages),
+            "execution_policy": EXECUTION_POLICY,
+            "pages": pages,
+        })
+        rendered_segments.append(SheetRenderResult(manifest=manifest, pages=rendered.pages))
+    return tuple(rendered_segments)

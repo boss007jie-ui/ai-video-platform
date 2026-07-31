@@ -30,6 +30,7 @@ from .seedance_nz_adapter import MODEL_ID, SeedanceNzVideoProviderAdapter
 AUTHORIZATION_ID = "FTG-0-20260720-001"
 POLL_INTERVAL_SECONDS = 4.0
 MAX_DEADLINE_SECONDS = 600.0
+MAX_PROVIDER_DURATION_MS = 15_000
 
 
 class _JsonArgumentParser(argparse.ArgumentParser):
@@ -115,6 +116,130 @@ def _seedance_request_fields(inspected: Mapping[str, object]) -> tuple[str, str,
     return MODEL_ID, str(seconds), resolution, float(timeout)
 
 
+def _validate_long_timeline_segment(
+    document: Mapping[str, object],
+    inspected: Mapping[str, object],
+    *,
+    seconds: str,
+) -> None:
+    package = document.get("execution_package")
+    if not isinstance(package, Mapping):
+        raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Execution package is required")
+    master = package.get("video_generation_storyboard_master")
+    if not isinstance(master, Mapping):
+        raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Storyboard master is required")
+    shots = master.get("shots")
+    entries = master.get("master_panel_entries")
+    if not isinstance(shots, list) or not isinstance(entries, list):
+        raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Storyboard timeline is invalid")
+    typed_shots = [shot for shot in shots if isinstance(shot, Mapping)]
+    typed_entries = [entry for entry in entries if isinstance(entry, Mapping)]
+    if len(typed_shots) != len(shots) or len(typed_entries) != len(entries):
+        raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Storyboard timeline is invalid")
+    durations = [shot.get("duration_ms") for shot in typed_shots]
+    if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in durations):
+        raise GenerationError(GenerationErrorCode.INVALID_INPUT, "Storyboard timeline is invalid")
+    total_duration_ms = sum(durations)
+    if total_duration_ms <= MAX_PROVIDER_DURATION_MS:
+        return
+
+    def invalid(message: str, field: str = "output.metadata.execution_segment") -> None:
+        raise GenerationError(GenerationErrorCode.INVALID_INPUT, message, field_paths=(field,))
+
+    output = inspected.get("output")
+    metadata = output.get("metadata") if isinstance(output, Mapping) else None
+    segment = metadata.get("execution_segment") if isinstance(metadata, Mapping) else None
+    content = metadata.get("content") if isinstance(metadata, Mapping) else None
+    if not isinstance(segment, Mapping) or not isinstance(content, list):
+        invalid("Long timelines require one declared execution segment and its scoped references")
+    required = {
+        "segment_id", "start_ms", "end_ms", "duration_ms", "shot_ids", "panel_ids", "sheet_sha256s",
+    }
+    if set(segment) != required:
+        invalid("Execution segment fields are incomplete or unknown")
+    segment_id = segment.get("segment_id")
+    start_ms = segment.get("start_ms")
+    end_ms = segment.get("end_ms")
+    duration_ms = segment.get("duration_ms")
+    shot_ids = segment.get("shot_ids")
+    panel_ids = segment.get("panel_ids")
+    sheet_sha256s = segment.get("sheet_sha256s")
+    if (
+        not isinstance(segment_id, str)
+        or not segment_id.startswith("SEG-")
+        or not segment_id.removeprefix("SEG-").isdigit()
+        or any(isinstance(value, bool) or not isinstance(value, int) for value in (start_ms, end_ms, duration_ms))
+        or not isinstance(shot_ids, list)
+        or not shot_ids
+        or any(not isinstance(value, str) or not value for value in shot_ids)
+        or not isinstance(panel_ids, list)
+        or not panel_ids
+        or any(not isinstance(value, str) or not value for value in panel_ids)
+        or not isinstance(sheet_sha256s, list)
+        or not sheet_sha256s
+        or any(
+            not isinstance(digest, str)
+            or len(digest) != 71
+            or not digest.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in digest.removeprefix("sha256:"))
+            for digest in sheet_sha256s
+        )
+    ):
+        invalid("Execution segment identity, timeline, or Sheet digest is invalid")
+    assert isinstance(start_ms, int) and isinstance(end_ms, int) and isinstance(duration_ms, int)
+    if duration_ms <= 0 or duration_ms > MAX_PROVIDER_DURATION_MS or end_ms - start_ms != duration_ms:
+        invalid("Execution segment must be a positive contiguous block of at most 15 seconds")
+    if duration_ms != int(seconds) * 1000:
+        invalid("Requested Provider duration must equal the execution segment duration", "output.seconds")
+
+    full_shot_order = [str(shot.get("shot_id")) for shot in typed_shots]
+    try:
+        positions = [full_shot_order.index(shot_id) for shot_id in shot_ids]
+    except ValueError:
+        invalid("Execution segment contains an unknown Shot")
+    if positions != list(range(positions[0], positions[-1] + 1)):
+        invalid("Execution segment Shots must be one consecutive block")
+    expected_start = sum(int(durations[index]) for index in range(positions[0]))
+    expected_duration = sum(int(durations[index]) for index in positions)
+    if start_ms != expected_start or duration_ms != expected_duration or end_ms != expected_start + expected_duration:
+        invalid("Execution segment timeline must align with whole consecutive Shots")
+
+    panel_to_shot = {str(entry.get("panel_id")): str(entry.get("shot_id")) for entry in typed_entries}
+    expected_panels = [
+        str(entry.get("panel_id"))
+        for entry in typed_entries
+        if str(entry.get("shot_id")) in shot_ids
+    ]
+    if panel_ids != expected_panels:
+        invalid("Execution segment Panel order must exactly cover its Shots")
+
+    production_panels: list[str] = []
+    structure_sheets: list[Mapping[str, object]] = []
+    for index, raw_item in enumerate(content):
+        if not isinstance(raw_item, Mapping):
+            invalid("Execution references must be objects", f"output.metadata.content[{index}]")
+        role = raw_item.get("reference_role")
+        if role == "production_panel":
+            panel_id = raw_item.get("panel_id")
+            shot_id = raw_item.get("shot_id")
+            if not isinstance(panel_id, str) or panel_to_shot.get(panel_id) != shot_id:
+                invalid("Production Panel reference is not bound to its canonical Shot", f"output.metadata.content[{index}]")
+            production_panels.append(panel_id)
+        elif role == "storyboard_structure_reference":
+            structure_sheets.append(raw_item)
+    if production_panels != expected_panels:
+        invalid("Provider references must contain only the current segment's ordered Panels", "output.metadata.content")
+    if len(structure_sheets) != len(sheet_sha256s):
+        invalid("Long timeline execution must include every declared segment Sheet page", "output.metadata.content")
+    for sheet, expected_digest in zip(structure_sheets, sheet_sha256s, strict=True):
+        if (
+            sheet.get("storyboard_scope") != "execution_segment"
+            or sheet.get("segment_id") != segment_id
+            or sheet.get("sha256") != expected_digest
+        ):
+            invalid("Full Master Sheet cannot be submitted for a segmented Provider task", "output.metadata.content")
+
+
 def _submitted_at(now: datetime | None) -> str:
     value = now or datetime.now(timezone.utc)
     return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -196,6 +321,7 @@ def execute_seedance_nz(
 
     inspected = VideoGenerationInterface().inspect_video_request(document, now=now)
     model, seconds, resolution, deadline_seconds = _seedance_request_fields(inspected)
+    _validate_long_timeline_segment(document, inspected, seconds=seconds)
     resolved_output = resolve_output_directory(input_path, output_dir)
     idempotency_key = str(inspected["idempotency_key"])
     request_hash = str(inspected["request_hash"])

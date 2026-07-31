@@ -22,6 +22,8 @@ from ai_video_platform.skills.video_generation.seedance_nz_adapter import (
     SeedanceNzCredentialResolver,
     SeedanceNzVideoProviderAdapter,
 )
+from ai_video_platform.skills.storyboard_master_video_planning import VideoPlanningInterface
+from tests.skills.storyboard_master_video_planning.test_video_planning_interface import planning_request
 from tests.skills.video_generation.test_video_generation_interface import generation_request
 
 
@@ -43,10 +45,12 @@ class ScriptedAdapter:
         self.poll_calls = 0
         self.download_calls = 0
         self.network_calls = 0
+        self.submitted_request: dict[str, object] | None = None
 
     def submit(self, request: dict[str, object]) -> str:
         self.submit_calls += 1
         self.network_calls += 1
+        self.submitted_request = json.loads(json.dumps(request))
         return "task-offline-12345678"
 
     def poll(self, provider_job_id: str) -> dict[str, object]:
@@ -152,7 +156,106 @@ def seedance_request() -> dict[str, object]:
     return request
 
 
+def long_segment_seedance_request() -> dict[str, object]:
+    plan_request = planning_request()
+    for shot in plan_request["production_storyboard_plan"]["shots"]:
+        shot["duration_ms"] = 9000
+    package = VideoPlanningInterface().build_storyboard_master(plan_request)["artifacts"]["video_execution_package"]
+    request = seedance_request()
+    request["execution_package"] = package
+    request["approval_record"]["subject_ref"]["digest"] = package["artifact_digest"]
+    request["idempotency_key"] = "idem-video-segment-001"
+    sheet_digest = "sha256:" + "c" * 64
+    request["output"] = {
+        "prompt": "Execute only segment one in storyboard order.",
+        "seconds": "9",
+        "resolution": "480p",
+        "metadata": {
+            "execution_segment": {
+                "segment_id": "SEG-001",
+                "start_ms": 0,
+                "end_ms": 9000,
+                "duration_ms": 9000,
+                "shot_ids": ["shot-001"],
+                "panel_ids": ["panel-001"],
+                "sheet_sha256s": [sheet_digest],
+            },
+            "content": [
+                {
+                    "type": "image_url",
+                    "reference_role": "production_panel",
+                    "shot_id": "shot-001",
+                    "panel_id": "panel-001",
+                    "image_url": {"url": "https://assets.example/panel-001.png"},
+                },
+                {
+                    "type": "image_url",
+                    "reference_role": "storyboard_structure_reference",
+                    "storyboard_scope": "execution_segment",
+                    "segment_id": "SEG-001",
+                    "sha256": sheet_digest,
+                    "image_url": {"url": "https://assets.example/storyboard-segment-001.png"},
+                },
+            ],
+        },
+    }
+    return request
+
+
 class VideoGenerationSeedanceCliTests(unittest.TestCase):
+    def test_long_timeline_submits_only_the_declared_segment_sheet_and_panels(self) -> None:
+        adapter = ScriptedAdapter()
+        clock = FakeClock()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            request_path = workspace / "request.json"
+            request = long_segment_seedance_request()
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+
+            execute_seedance_nz(
+                request,
+                input_path=request_path,
+                output_dir=workspace / "output",
+                now=NOW,
+                adapter=adapter,
+                clock=clock,
+                sleep=clock.sleep,
+            )
+
+            self.assertEqual(adapter.submit_calls, 1)
+            assert adapter.submitted_request is not None
+            content = adapter.submitted_request["output"]["metadata"]["content"]
+            self.assertEqual(
+                [item.get("panel_id") for item in content if item.get("reference_role") == "production_panel"],
+                ["panel-001"],
+            )
+            sheets = [item for item in content if item.get("reference_role") == "storyboard_structure_reference"]
+            self.assertEqual(len(sheets), 1)
+            self.assertEqual(sheets[0]["storyboard_scope"], "execution_segment")
+            self.assertEqual(sheets[0]["segment_id"], "SEG-001")
+
+    def test_long_timeline_rejects_full_master_sheet_before_provider_submit(self) -> None:
+        adapter = ScriptedAdapter()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            request_path = workspace / "request.json"
+            request = long_segment_seedance_request()
+            sheet = request["output"]["metadata"]["content"][1]
+            sheet["storyboard_scope"] = "master"
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+
+            with self.assertRaises(GenerationError) as captured:
+                execute_seedance_nz(
+                    request,
+                    input_path=request_path,
+                    output_dir=workspace / "output",
+                    now=NOW,
+                    adapter=adapter,
+                )
+
+            self.assertEqual(captured.exception.code, GenerationErrorCode.INVALID_INPUT)
+            self.assertEqual(adapter.submit_calls, 0)
+
     def test_embedded_approval_cannot_submit_without_live_human_confirmation(self) -> None:
         adapter = ScriptedAdapter()
         clock = FakeClock()

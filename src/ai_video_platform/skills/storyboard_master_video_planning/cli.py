@@ -12,7 +12,7 @@ from .errors import PlanningError, PlanningErrorCode
 from .interface import VideoPlanningInterface
 from .models import canonical_json
 from .motion_planner import plan_motion_annotations
-from .sheet_renderer import render_storyboard_sheets
+from .sheet_renderer import render_execution_segment_sheets, render_storyboard_sheets
 
 
 def _write_outputs(output_root: Path, result: Mapping[str, object], document: Mapping[str, object]) -> None:
@@ -41,6 +41,7 @@ def _write_outputs(output_root: Path, result: Mapping[str, object], document: Ma
     try:
         render_metadata["motion_annotations"] = plan_motion_annotations(master, observations)
         rendered = render_storyboard_sheets(master, panel_bytes, render_metadata)
+        rendered_segments = render_execution_segment_sheets(master, panel_bytes, render_metadata)
     except ValueError as exc:
         raise PlanningError(
             PlanningErrorCode.INVALID_INPUT,
@@ -53,12 +54,16 @@ def _write_outputs(output_root: Path, result: Mapping[str, object], document: Ma
     for key, name in names.items():
         (root / name).write_text(json.dumps(result["artifacts"][key], ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (root / "video_planning_provenance.json").write_text(json.dumps(result["provenance"], ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest = {**rendered.manifest, "execution_segments": [segment.manifest for segment in rendered_segments]}
     (root / "storyboard_master_sheet_manifest.json").write_text(
-        json.dumps(rendered.manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     for page, page_record in zip(rendered.pages, rendered.manifest["pages"], strict=True):
         (root / page_record["relative_path"]).write_bytes(page)
+    for segment in rendered_segments:
+        for page, page_record in zip(segment.pages, segment.manifest["pages"], strict=True):
+            (root / page_record["relative_path"]).write_bytes(page)
 
 
 def run_cli(command: str, document: Mapping[str, object]) -> dict[str, object]:
